@@ -1,0 +1,7 @@
+_sorted/
+_REVIEW/
+*.log
+.DS_Store
+# never commit anything the wallet-finder might surface
+wallets-found.txt
+secrets*
