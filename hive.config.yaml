@@ -1,0 +1,26 @@
+# Consumer override layer for cleanup-tools. Only settings that differ from
+# the plugin's shipped baseline (hive/hive.config.yaml) need to live here.
+# See hive/references/configuration.md for the full settings reference.
+
+metrics:
+  enabled: true
+
+execution:
+  default_methodology: classic  # inferred: no tests exist yet (test_absence: true), no BDD/co-located signals
+
+developer:
+  pr_style: single-commit       # inferred: fresh repo, single commit, no pattern yet
+  commit_granularity: feature-scoped
+  review_depth: standard
+  notes: null
+
+planning:
+  collaborative_review: true
+
+meta_team:
+  github_forwarding: false
+
+# No task tracker configured yet — this is a solo, local project.
+# Set task_tracking.adapter (github | linear | <path>) later if that changes.
+task_tracking:
+  adapter: null

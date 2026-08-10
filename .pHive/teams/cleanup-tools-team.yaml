@@ -1,0 +1,53 @@
+name: cleanup-tools-team
+description: >
+  Solo-scale team for cleanup-tools — hardens the reference bash scripts into a
+  packaged local CLI, and later a local desktop UI with a pluggable AI layer.
+lead: team-lead
+methodology: classic  # from hive.config.yaml → execution.default_methodology
+
+members:
+  - agent: backend-developer
+    role: >
+      Core logic: survey/sort/reclaim/find-wallets/dedupe implementation, the
+      config-driven ext→bucket map, and (later) the pluggable AI-provider layer
+    domain:
+      - path: scripts/**
+        read: true
+        write: true
+        delete: false
+
+  - agent: frontend-developer
+    role: >
+      Future local desktop UI (not started yet — see project-profile.yaml →
+      north_star). No dedicated UI directory exists today.
+    domain:
+      - path: scripts/**
+        read: true
+        write: false
+        delete: false
+
+  - agent: tester
+    role: Test authoring and execution for the hardened CLI (no tests exist yet)
+    domain:
+      - path: "**/*.test.*"
+        read: true
+        write: true
+        delete: false
+
+  - agent: reviewer
+    role: Code review, with extra weight on the dry-run/--go and paths-only-secrets safety rules
+    tool_access: [codex]  # codex CLI detected during kickoff
+
+context:
+  tech_stack:
+    current: bash
+    planned: "Node/TS or Python CLI (per docs/REQUIREMENTS.md), optional local desktop UI later"
+  commit_granularity: feature-scoped
+  pr_style: single-commit
+  review_depth: standard
+  notes: |
+    Local-first, no network/no telemetry — this project touches personal files end-to-end.
+    Every destructive script must default to dry-run and require --go to act.
+    See .pHive/CONTEXT.md for the project's domain glossary (masters, buckets, _REVIEW, etc.).
+
+team_memory_path: .pHive/team-memories/cleanup-tools-team/

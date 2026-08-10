@@ -5,3 +5,12 @@ _REVIEW/
 # never commit anything the wallet-finder might surface
 wallets-found.txt
 secrets*
+
+# Hive: local session/runtime state, not project state
+.pHive/agent-complete/
+.pHive/interrupts/
+.pHive/metrics/
+.pHive/session-effort.txt
+
+# Hive: epics are ignored by default; /plan allowlists each epic dir explicitly
+.pHive/epics/*
