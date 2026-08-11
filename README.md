@@ -10,6 +10,13 @@ screenshots — and getting it **sorted, arranged, and kept clean**. Built from 
 - **Regenerable ≠ precious** — `node_modules`, build caches, Docker layers delete freely.
 - Uncertain files get **staged into buckets/_REVIEW**, never trashed blind.
 
+## Status
+The bash scripts in `scripts/` below are the current, working tool — nothing about how you use them
+has changed. A packaged Python CLI is being built in `src/cleanup_tools/`, following the build-out plan
+in `docs/REQUIREMENTS.md`, but it has no working commands yet — so far it's just the cross-platform
+OS-adapter foundation (macOS + Arch Linux). Keep using the scripts until that CLI has ported
+survey/sort/reclaim and this README says otherwise.
+
 ## Scripts (`scripts/`)
 | Script | What it does | Safety |
 |---|---|---|
