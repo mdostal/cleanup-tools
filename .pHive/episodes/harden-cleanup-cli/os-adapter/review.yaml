@@ -1,0 +1,13 @@
+step_id: review
+status: completed
+timestamp: "2026-08-11"
+review_verdict: needs_revision
+review_findings: >
+  Critical: (1) is_docker_installed test only checks isinstance(bool), not correctness against
+  a monkeypatched true/false state (macos.py/arch_linux.py ~L84-85, test L150-151). (2)
+  find_installed_app's "installed=True" branch has zero coverage on macOS — hardcoded
+  /Applications path gives no injection seam (macos.py:99, test L155-159). Improvements:
+  read_file/write_file entirely untested; no monkeypatch used anywhere (also leaves
+  get_adapter()'s Linux/unsupported branches untested); macos.py/arch_linux.py are
+  byte-for-byte duplicates except find_installed_app (9/10 methods duplicated).
+artifacts: []

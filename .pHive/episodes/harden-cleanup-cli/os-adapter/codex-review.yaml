@@ -1,0 +1,11 @@
+step_id: codex-review
+status: skipped
+timestamp: "2026-08-11"
+notes: >
+  Skipped per the workflow's own skip_when clause: external_models.codex.enabled is not set
+  in hive.config.yaml (absent = not enabled), and the referenced codex-companion script
+  (node "{codex-companion-path}" adversarial-review) does not exist anywhere in the plugin
+  checkout — this is optional, best-effort infrastructure that was never shipped. The codex
+  CLI itself is installed (codex-cli 0.143.0) but the specific companion-script integration
+  point this workflow node expects is absent. Skipping silently per protocol.
+artifacts: []

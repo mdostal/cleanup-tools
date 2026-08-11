@@ -1,0 +1,10 @@
+step_id: write-brief
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Brief produced covering OSAdapter interface shape and implementation watch-outs.
+  Key guidance: prefer Python stdlib (shutil.disk_usage, os.walk, pathlib) over shelling
+  out to find/du/df to sidestep BSD-vs-GNU flag drift; keep dry-run/--go gating at the
+  call site, not inside the adapter; is_docker_installed() must be a clean explicit check
+  separate from the prune call itself.
+artifacts: []

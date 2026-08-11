@@ -1,0 +1,11 @@
+step_id: research
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Fresh independent pass (separate agent instance) over survey.sh, sort-downloads.sh,
+  safe-reclaim.sh confirmed the operation inventory from planning: du/df/find (list_dir +
+  disk_usage), mv (move), rm -rf/-f (delete), docker invoked with no existence check
+  (confirms is_docker_installed is needed), $RECYCLE.BIN existence-check pattern (generic,
+  reusable). New nuance: BSD (macOS) vs GNU (Arch) find/du/df flag/output differences flagged
+  as an adapter-implementation concern, not an interface-shape concern.
+artifacts: []
