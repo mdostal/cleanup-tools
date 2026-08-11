@@ -1,0 +1,144 @@
+id: os-adapter
+epic: harden-cleanup-cli
+title: Build the OS-adapter interface (macOS + Arch Linux) and package skeleton
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Create the Python package skeleton (pyproject.toml + src/cleanup_tools/ layout) and the
+  OS-adapter interface that survey/sort/reclaim will all depend on: file read/write, directory
+  listing, move, delete, home/standard-dir resolution, disk usage, Docker-installed check, and
+  macOS-only orphaned-installer app matching. Implement it for macOS and Arch Linux — no other
+  platform. This is pure foundation: no CLI commands, no config loading, nothing user-facing yet.
+
+acceptance_criteria:
+  - "Given a fresh checkout, when `pip install -e .` is run, then the `cleanup_tools` package
+    installs with no errors on both macOS and Arch Linux."
+  - "Given the adapter's `list_dir`/`disk_usage`/`resolve_home` are called on macOS, when compared
+    to `find`/`df`/`$HOME` output for the same path, then results match."
+  - "Given the adapter's `list_dir`/`disk_usage`/`resolve_home` are called on Arch Linux, when
+    compared to `find`/`df`/`$HOME` output for the same path, then results match (this is the
+    concrete proof the interface abstracts correctly, not just on the platform it was written on)."
+  - "Given `is_docker_installed()` is called, when Docker is and isn't present, then it returns
+    true/false correctly on both platforms."
+  - "Given `find_installed_app(installer_path)` is called on macOS, when the installer's target
+    app is and isn't already in /Applications, then it returns true/false correctly."
+  - "Given `find_installed_app` is called on Arch Linux, then it raises `NotImplementedError` with
+    a clear message — this operation is explicitly macOS-only for v1 (per
+    horizontal-plan.md §2), not silently stubbed."
+  - "Verify via: `pytest tests/test_adapters.py -v` — all tests pass on the machine it's run on."
+
+steps:
+  - id: research
+    description: |
+      Read scripts/survey.sh, scripts/sort-downloads.sh, scripts/safe-reclaim.sh in full to
+      confirm every filesystem/OS operation they call (find, df, du, mv, rm, docker). Cross-check
+      against horizontal-plan.md §2's operation list before writing the interface — the operation
+      list is pre-decided, but confirm nothing was missed.
+    agent: researcher
+  - id: implement
+    description: |
+      Create pyproject.toml (package name cleanup_tools, Python >=3.10, pytest as a dev
+      dependency). Create src/cleanup_tools/adapters/base.py with an abstract OSAdapter class
+      declaring: read_file, write_file, list_dir(path, max_depth=None, pattern=None), move,
+      delete, resolve_home, resolve_standard_dir(kind), disk_usage(path), is_docker_installed(),
+      find_installed_app(installer_path). Create adapters/macos.py and adapters/arch_linux.py
+      implementing it. find_installed_app raises NotImplementedError on Arch (see acceptance
+      criteria). Add a factory function (e.g. get_adapter()) that detects the current OS via
+      `platform.system()`/`platform.freedesktop_os_release()` and returns the right
+      implementation — this factory is what commands will call, not the classes directly.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_adapters.py covering every operation on whichever platform the tests run
+      on (macOS locally, Arch Linux locally — this story doesn't need CI, per kickoff's
+      confirmed absence of CI). Assert find_installed_app raises NotImplementedError on the Arch
+      implementation specifically (not just "on Arch" — instantiate ArchLinuxAdapter directly and
+      call it, so this assertion doesn't depend on which machine runs the test).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review the adapter interface against horizontal-plan.md §2's operation list for
+      completeness, and confirm find_installed_app's macOS-only scoping is documented in the
+      class docstring, not just in this story.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+    test_framework: pytest
+  key_files:
+    - path: scripts/survey.sh
+      purpose: "Ground truth for list_dir/disk_usage's required behavior (du/find/df calls)"
+    - path: scripts/sort-downloads.sh
+      purpose: "Ground truth for list_dir/move's required behavior (find -maxdepth 1, mv)"
+    - path: scripts/safe-reclaim.sh
+      purpose: "Ground truth for list_dir/delete/is_docker_installed's required behavior"
+
+files_to_modify:
+  - file: pyproject.toml
+    change: "Create — package metadata, pytest dev dependency"
+  - file: src/cleanup_tools/__init__.py
+    change: "Create — empty package marker"
+  - file: src/cleanup_tools/adapters/__init__.py
+    change: "Create — exports get_adapter() factory"
+  - file: src/cleanup_tools/adapters/base.py
+    change: "Create — abstract OSAdapter interface"
+  - file: src/cleanup_tools/adapters/macos.py
+    change: "Create — macOS implementation"
+  - file: src/cleanup_tools/adapters/arch_linux.py
+    change: "Create — Arch Linux implementation"
+  - file: tests/test_adapters.py
+    change: "Create — tests for every operation on both implementations"
+
+code_examples:
+  - title: "Dry-run/destructive-action pattern to preserve conceptually (adapter itself stays dry-run-agnostic)"
+    file: scripts/safe-reclaim.sh
+    snippet: |
+      GO=""; [ "$1" = "--go" ] && GO=1
+      say(){ [ -n "$GO" ] && echo "DELETING: $1" || echo "would delete: $1"; }
+      find ~/Documents -type d \( -name node_modules -o -name .next \) -prune 2>/dev/null | \
+        while read -r d; do say "$d"; [ -n "$GO" ] && rm -rf "$d"; done
+  - title: "list_dir must replicate maxdepth-1 file walk"
+    file: scripts/sort-downloads.sh
+    snippet: |
+      find "$DIR" -maxdepth 1 -type f ! -name '.*' | while read -r f; do
+        b=$(basename "$f"); ext="${b##*.}"; ...
+      done
+
+design_decisions:
+  - decision: "find_installed_app is macOS-only for v1; Arch's implementation raises NotImplementedError rather than a no-op or a best-effort guess"
+    rationale: "Team review (architect lens) during H/V planning confirmed Arch's package manager already tracks installed state, so there's no 'orphaned installer file' concept to detect the same way — silently stubbing it would hide that reclaim's orphaned-installer feature is macOS-only, not cross-platform yet"
+  - decision: "OS detection lives in a factory function, not in each command"
+    rationale: "Keeps commands (survey/sort/reclaim, built in later stories) OS-agnostic — they call get_adapter() once and never branch on platform themselves"
+
+risks:
+  - severity: medium
+    description: "Interface could be too narrow once sort/reclaim (later stories) need something not anticipated here"
+    mitigation: "design-discussion.md §6 already flags this as the one genuinely open question; extend the interface additively in later stories rather than redesigning it, per vertical-plan.md §6's moldability note"
+
+references:
+  - path: docs/REQUIREMENTS.md
+    relevant_excerpt: |
+      Harden as a Node/TS or Python CLI (packaged, testable), config file for the ext→bucket +
+      master-paths + search-roots. Optional tiny local UI later. No network, no telemetry.
+  - path: .pHive/epics/harden-cleanup-cli/docs/horizontal-plan.md
+    relevant_excerpt: |
+      list_dir(path, max_depth, pattern) — used by survey (extension histogram, screenshot
+      count, node_modules discovery), sort (maxdepth-1 file walk), reclaim (junk-file/build-cache
+      discovery)... find_installed_app(installer_path)... This operation is macOS-specific in
+      its current form... Arch has no direct analog.
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's script table describes bash scripts directly; once this story lands, README needs a note that the package skeleton exists (even before commands are ported) so a reader isn't confused by pyproject.toml appearing with no working CLI yet. Update in the integrate step."

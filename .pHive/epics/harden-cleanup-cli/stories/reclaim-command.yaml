@@ -1,0 +1,139 @@
+id: reclaim-command
+epic: harden-cleanup-cli
+title: Port `reclaim` with master-paths refusal, orphaned-installer detection, GB reporting, and a gated Docker flag
+status: pending
+complexity: high
+methodology: classic
+depends_on: [config-bucket-rules]
+
+description: |
+  Implement `cleanup reclaim [--go] [--docker]` covering everything scripts/safe-reclaim.sh does
+  today (node_modules/build-cache/OS-junk deletion, dry-run by default) plus three behaviors
+  specified in docs/REQUIREMENTS.md but missing from the current script: refusing to delete
+  configured master paths until manually marked backed-up, detecting orphaned installers
+  (macOS-only, per the os-adapter story), and reporting GB reclaimed. Docker pruning moves behind
+  its own explicit `--docker` flag instead of running automatically on every `--go`.
+
+acceptance_criteria:
+  - "Given `cleanup reclaim` is run with no flags, when it completes, then nothing is deleted and
+    the would-delete plan (with categories) is printed — matching scripts/safe-reclaim.sh's
+    existing dry-run default."
+  - "Given `cleanup reclaim --go` is run, when it completes, then node_modules/.next/.turbo/dist
+    dirs, .DS_Store/~$*/Thumbs.db junk, and $RECYCLE.BIN are deleted exactly as
+    scripts/safe-reclaim.sh does today, AND Docker is NOT pruned (behavior change from today,
+    confirmed intentional)."
+  - "Given `cleanup reclaim --go --docker` is run, when it completes, then Docker is pruned in
+    addition to the above."
+  - "Given a config with a master_path entry where backed_up=false, when reclaim's deletion scan
+    encounters that path, then it is refused and reported separately from what was deleted —
+    reclaim never deletes it regardless of --go."
+  - "Given the same master_path entry with backed_up=true, when reclaim runs with --go, then
+    normal deletion rules apply to it (the refusal is lifted, not that it's now force-deleted
+    unconditionally — it's just no longer specially protected)."
+  - "Given an installer file whose target app is already in /Applications, when reclaim runs on
+    macOS, then it's reported as an orphaned-installer deletion candidate; on Arch Linux, this
+    check is skipped entirely (not attempted and silently empty) per the os-adapter story's
+    NotImplementedError contract."
+  - "Given `cleanup reclaim --go` deletes anything, when it completes, then it reports total GB
+    reclaimed, summed across all deleted categories."
+  - "Verify via: `pytest tests/test_reclaim.py -v` — all tests pass."
+
+steps:
+  - id: research
+    description: |
+      Re-read scripts/safe-reclaim.sh in full (all 12 lines) to confirm exact current categories
+      and the dry-run/--go pattern being preserved (not fixed — this script's polarity was
+      already correct). Re-read docs/REQUIREMENTS.md's reclaim component description for the
+      three net-new behaviors' exact wording.
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/commands/reclaim.py: load config, get adapter, walk the existing
+      junk/regenerable categories via list_dir (same categories as today's bash), check every
+      candidate path against config.master_paths before adding it to the delete plan (skip +
+      report separately if backed_up=false), check installer files via
+      adapter.find_installed_app() wrapped in a try/except NotImplementedError (Arch: skip this
+      check, don't crash), sum bytes-to-be-reclaimed for the GB report, and only call
+      adapter delete() when --go is passed. Gate Docker pruning behind a separate --docker flag
+      checked independently of --go. Register the reclaim subcommand in cli.py.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_reclaim.py: dry-run leaves everything unchanged; --go deletes the
+      unchanged categories from today's bash; --go without --docker does not touch Docker;
+      --go --docker does; a configured master_path with backed_up=false is never deleted even
+      with --go; the same path with backed_up=true is deleted normally; GB-reclaimed sums
+      correctly across categories; find_installed_app's NotImplementedError on the Arch adapter
+      is caught and produces an empty (not crashing) orphaned-installer result.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically that master-paths refusal cannot be bypassed by --go (this is the
+      hard rule from docs/REQUIREMENTS.md — "never delete without a backup of masters" — the
+      single highest-stakes behavior in this story) and that the Docker gate is genuinely
+      independent of --go, not just documented as such.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+  key_files:
+    - path: scripts/safe-reclaim.sh
+      purpose: "Existing categories + dry-run pattern to preserve exactly"
+    - path: src/cleanup_tools/config.py
+      purpose: "MasterPath/backed_up flag this story enforces against — DO NOT modify the schema here"
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "delete()/is_docker_installed()/find_installed_app() consumed here — DO NOT modify the interface here; a gap is a review finding, not a silent edit"
+
+files_to_modify:
+  - file: src/cleanup_tools/commands/reclaim.py
+    change: "Create — reclaim command implementation with all 3 net-new behaviors"
+  - file: src/cleanup_tools/cli.py
+    change: "Add reclaim subcommand registration (--go and --docker flags)"
+  - file: tests/test_reclaim.py
+    change: "Create — dry-run/--go, docker-gating, master-refusal, GB-report, Arch-skip tests"
+
+code_examples:
+  - title: "Existing categories + dry-run pattern (preserve exactly)"
+    file: scripts/safe-reclaim.sh
+    snippet: |
+      GO=""; [ "$1" = "--go" ] && GO=1
+      say(){ [ -n "$GO" ] && echo "DELETING: $1" || echo "would delete: $1"; }
+      find ~/Documents -type d \( -name node_modules -o -name .next -o -name .turbo -o -name dist \) \
+        -prune 2>/dev/null | while read -r d; do say "$d"; [ -n "$GO" ] && rm -rf "$d"; done
+      if [ -n "$GO" ]; then docker system prune -af --volumes 2>/dev/null; else echo "would run: ..."; fi
+
+design_decisions:
+  - decision: "Master-paths refusal is unconditional (not overridable by --go alone) — lifting it requires the user to edit the config's backed_up flag themselves, not pass a stronger CLI flag"
+    rationale: "docs/REQUIREMENTS.md's hard rule + docs/CLEANUP-PLAN.md's 'nothing gets deleted without your say-so' — this is the highest-stakes behavior in the whole epic, so the only way to lift it should be the deliberate, out-of-band act of editing config, not a flag combo typed in the heat of a cleanup session"
+  - decision: "find_installed_app's NotImplementedError on Arch is caught here and produces an empty result, not a crash — this story is the actual caller, so it owns handling the contract the os-adapter story established"
+    rationale: "Keeps reclaim usable on Arch today even though orphaned-installer detection is macOS-only; the alternative (crashing on Arch) would make reclaim unusable on one of the user's two real machines for an unrelated feature gap"
+
+risks:
+  - severity: high
+    description: "This is the only story in the epic with genuinely destructive operations against potentially irreplaceable data (masters) — a bug in the refusal logic has real-world consequences beyond this codebase"
+    mitigation: "The review step explicitly targets this behavior, and the manual verification step (see references) runs a dry-run pass on both real machines before any --go run against real data"
+
+references:
+  - path: docs/REQUIREMENTS.md
+    relevant_excerpt: |
+      Safe reclaim of regenerable junk... Never delete without a backup of masters. The tool
+      should refuse to delete flagged "master" paths until they're marked backed-up... orphaned
+      installers (.dmg/.pkg whose app is already in /Applications). Report GB reclaimed.
+  - path: .pHive/epics/harden-cleanup-cli/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 4... Manual: one dry-run pass on each real machine (macOS + Arch) confirming
+      reported categories match what's actually present, before ever running --go against real
+      data
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's safety principles section and script table both describe scripts/safe-reclaim.sh's current (Docker-included) behavior. Update to describe cleanup reclaim's three new behaviors and the Docker flag split, since this changes what '--go' means for Docker specifically — the single most likely point of user confusion in this epic."

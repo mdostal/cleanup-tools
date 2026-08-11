@@ -1,0 +1,9 @@
+run_id: harden-cleanup-cli-plan
+skill: plan
+timestamp: "2026-08-11"
+gate_lift_fired: false
+methodology: classic
+methodology_source: hive-config
+story_specs_produced: 5
+nonsensical_defaults: []
+warnings_emitted: 0

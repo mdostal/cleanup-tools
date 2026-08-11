@@ -14,3 +14,9 @@ secrets*
 
 # Hive: epics are ignored by default; /plan allowlists each epic dir explicitly
 .pHive/epics/*
+!.pHive/epics/harden-cleanup-cli/
+!.pHive/epics/harden-cleanup-cli/**
+# sidecar_retention=transient: HTML sidecars regenerated on demand
+.pHive/epics/harden-cleanup-cli/docs/*.html
+.pHive/epics/harden-cleanup-cli/index.html
+.pHive/epics/harden-cleanup-cli/docs/*.png
