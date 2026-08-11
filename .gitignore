@@ -2,6 +2,15 @@ _sorted/
 _REVIEW/
 *.log
 .DS_Store
+
+# Python packaging/build artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
 # never commit anything the wallet-finder might surface
 wallets-found.txt
 secrets*
