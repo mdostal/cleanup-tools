@@ -14,6 +14,12 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   `.DS_Store`/`~$*`/`$RECYCLE.BIN`) via `scripts/safe-reclaim.sh`. Dry-run by default; needs `--go`.
 - **Masters** — irreplaceable files (SMS backup, family footage, tax docs, patent app, the
   "desktop back" dump) that must be backed up externally before anything touching them is deleted.
+  This is now actually enforced, not just a convention: `cleanup reclaim` (see
+  `src/cleanup_tools/commands/reclaim.py`) reads `master_paths` from
+  `~/.config/cleanup-tools/config.yaml` and unconditionally refuses to delete any candidate that is,
+  contains, or is contained by a master path not marked `backed_up: true` — even under `--go`. Once a
+  master path's `backed_up` field is flipped to `true`, it gets no special protection and is treated
+  as a normal deletable candidate.
 - **`_REVIEW`** — the staging folder for anything uncertain. Nothing goes straight to trash; unclear
   files land here for a human decision.
 - **Dry-run / `--go`** — the safety convention for every destructive script: default run only prints
