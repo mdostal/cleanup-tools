@@ -96,6 +96,76 @@ def test_list_dir_pattern_is_case_insensitive(adapter, tmp_path):
     assert {p.name for p in matches} == {"SCREENSHOT-upper.png"}
 
 
+# 3b. list_subdirs()
+def test_list_subdirs_returns_only_immediate_child_dirs(adapter, tmp_path):
+    (tmp_path / "file.txt").write_text("data")
+    dir_a = tmp_path / "a"
+    dir_a.mkdir()
+    dir_b = tmp_path / "b"
+    dir_b.mkdir()
+    nested = dir_a / "nested"
+    nested.mkdir()
+
+    subdirs = adapter.list_subdirs(tmp_path)
+
+    assert set(subdirs) == {dir_a, dir_b}
+    assert nested not in subdirs
+
+
+def test_list_subdirs_empty_dir_returns_empty_list(adapter, tmp_path):
+    assert adapter.list_subdirs(tmp_path) == []
+
+
+# 3c. find_dirs()
+def test_find_dirs_finds_nested_matches(adapter, tmp_path):
+    match_a = tmp_path / "project-a" / "node_modules"
+    match_a.mkdir(parents=True)
+    match_b = tmp_path / "project-b" / "sub" / "node_modules"
+    match_b.mkdir(parents=True)
+    (tmp_path / "project-a" / "src").mkdir()
+
+    found = adapter.find_dirs(tmp_path, "node_modules")
+
+    assert set(found) == {match_a, match_b}
+
+
+def test_find_dirs_prunes_nested_matches_inside_matches(adapter, tmp_path):
+    outer = tmp_path / "project" / "node_modules"
+    outer.mkdir(parents=True)
+    # A node_modules nested *inside* the matched node_modules dir (e.g. a
+    # dependency that itself vendors node_modules) must NOT be returned:
+    # -prune semantics mean we never descend into a match.
+    inner = outer / "some-pkg" / "node_modules"
+    inner.mkdir(parents=True)
+
+    found = adapter.find_dirs(tmp_path, "node_modules")
+
+    assert found == [outer]
+    assert inner not in found
+
+
+def test_find_dirs_no_matches_returns_empty_list(adapter, tmp_path):
+    (tmp_path / "src").mkdir()
+
+    assert adapter.find_dirs(tmp_path, "node_modules") == []
+
+
+def test_find_dirs_respects_max_depth(adapter, tmp_path):
+    shallow = tmp_path / "node_modules"
+    shallow.mkdir()
+    deep = tmp_path / "a" / "b" / "node_modules"
+    deep.mkdir(parents=True)
+
+    # depth 0: only the walk root itself is inspected for children, so the
+    # immediate "node_modules" child is found but "a/b/node_modules" (which
+    # requires descending two levels first) is not.
+    found_depth0 = adapter.find_dirs(tmp_path, "node_modules", max_depth=0)
+    assert found_depth0 == [shallow]
+
+    found_unlimited = adapter.find_dirs(tmp_path, "node_modules")
+    assert set(found_unlimited) == {shallow, deep}
+
+
 # 4. move()
 def test_move_creates_destination_parent_dirs_and_moves_file(adapter, tmp_path):
     src = tmp_path / "source.txt"
@@ -148,6 +218,75 @@ def test_disk_usage_returns_ints_greater_than_zero(adapter, tmp_path):
     for key in ("total", "used", "free"):
         assert isinstance(usage[key], int)
         assert usage[key] > 0
+
+
+# 6b. dir_size_bytes() -- shells out to `du -sk` rather than walking every
+# file in Python, so it needs its own coverage (see base.py's docstring for
+# why: on a real home directory, a Python os.walk + per-file stat() loop
+# took over 2 minutes, while `du` finishes in seconds).
+def test_dir_size_bytes_close_to_actual_content_size(adapter, tmp_path):
+    # Sizes are chosen large enough (100s of KB) that per-file block
+    # rounding is a negligible fraction of the total, so a generous
+    # tolerance still catches real regressions (e.g. returning 0, or
+    # double-counting) without depending on the filesystem's exact block
+    # size, which varies across machines/OSes.
+    (tmp_path / "a.bin").write_bytes(b"x" * 100_000)
+    (tmp_path / "b.bin").write_bytes(b"x" * 50_000)
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "c.bin").write_bytes(b"x" * 25_000)
+    actual_bytes = 100_000 + 50_000 + 25_000
+
+    size = adapter.dir_size_bytes(tmp_path)
+
+    # du never reports less than the real content size (it only rounds up),
+    # and shouldn't wildly exceed it either.
+    assert size >= actual_bytes
+    assert size < actual_bytes * 1.5
+
+
+def test_dir_size_bytes_single_file(adapter, tmp_path):
+    target = tmp_path / "solo.bin"
+    target.write_bytes(b"x" * 200_000)
+
+    size = adapter.dir_size_bytes(target)
+
+    assert size >= 200_000
+    assert size < 200_000 * 1.5
+
+
+def test_dir_size_bytes_tolerates_nonzero_return_code_with_parseable_stdout(
+    adapter, tmp_path, monkeypatch
+):
+    # Permission errors on some subdirectories are normal for `du` -- it
+    # still prints a rolled-up total for what it *could* read, even though
+    # it exits non-zero overall. A non-zero return code alone must not raise
+    # as long as stdout has parseable output.
+    import subprocess
+
+    class FakeCompletedProcess:
+        returncode = 1
+        stdout = "4096\t/some/path\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FakeCompletedProcess())
+
+    assert adapter.dir_size_bytes(tmp_path) == 4096 * 1024
+
+
+def test_dir_size_bytes_raises_when_stdout_is_empty(adapter, tmp_path, monkeypatch):
+    # Genuinely empty/unparseable stdout (e.g. `du` failed entirely, missing
+    # binary, or a target that doesn't exist) is the one case that should
+    # raise rather than silently return 0.
+    import subprocess
+
+    class FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FakeCompletedProcess())
+
+    with pytest.raises(RuntimeError):
+        adapter.dir_size_bytes(tmp_path)
 
 
 # 7. is_docker_installed()

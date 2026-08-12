@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -57,6 +58,47 @@ class OSAdapter(ABC):
             for filename in filenames:
                 if pattern_lower is None or matches_pattern(filename.lower(), pattern_lower):
                     results.append(Path(dirpath) / filename)
+
+        return results
+
+    def list_subdirs(self, path: Path) -> list[Path]:
+        """Return the immediate child directories of ``path`` (not recursive).
+
+        Files directly inside ``path`` are excluded; only entries where
+        ``is_dir()`` is true are returned.
+        """
+        root = Path(path)
+        return sorted(p for p in root.iterdir() if p.is_dir())
+
+    def find_dirs(
+        self,
+        root: Path,
+        name: str,
+        max_depth: int | None = None,
+    ) -> list[Path]:
+        """Recursively find directories under ``root`` named exactly ``name``.
+
+        Mirrors ``find <root> -type d -name <name> -prune``: once a matching
+        directory is found, its contents are not walked looking for further
+        (nested) matches. ``max_depth`` limits how far the walk descends
+        (``None`` means unlimited), using the same depth semantics as
+        :meth:`list_dir`.
+        """
+        root = Path(root)
+        results: list[Path] = []
+
+        for dirpath, dirnames, _filenames in os.walk(root):
+            depth = len(Path(dirpath).relative_to(root).parts)
+
+            matched = [d for d in dirnames if d == name]
+            for d in matched:
+                results.append(Path(dirpath) / d)
+            # Prune matches: don't descend into a matched dir looking for
+            # nested matches.
+            dirnames[:] = [d for d in dirnames if d not in matched]
+
+            if max_depth is not None and depth >= max_depth:
+                dirnames[:] = []
 
         return results
 
@@ -104,6 +146,43 @@ class OSAdapter(ABC):
         """Return ``{"total": int, "used": int, "free": int}`` in bytes for ``path``."""
         usage = shutil.disk_usage(path)
         return {"total": usage.total, "used": usage.used, "free": usage.free}
+
+    def dir_size_bytes(self, path: Path) -> int:
+        """Return the recursive size of ``path`` in bytes, via ``du -sk``.
+
+        Shells out to ``du -sk <path>`` rather than walking the tree in
+        Python (``os.walk`` + per-file ``Path.stat()``): on a real home
+        directory with hundreds of thousands of small files, a Python walk
+        can take minutes, while ``du`` uses a fast kernel-level syscall path
+        and finishes in seconds. ``-k`` (kilobytes) is used instead of
+        ``-sh`` because its output is a plain, machine-parseable integer
+        that's consistent across macOS and GNU ``du`` -- ``-h`` applies
+        human-readable unit formatting that differs between BSD (macOS) and
+        GNU (Linux) ``du``.
+
+        Permission errors on individual subdirectories are normal (e.g.
+        under ``~/Library``) and are suppressed via ``stderr=DEVNULL``; ``du``
+        still prints a total for what it *could* read, even when it exits
+        non-zero because of those errors, so a non-zero return code alone
+        doesn't raise. Only an empty/unparseable stdout raises.
+        """
+        result = subprocess.run(
+            ["du", "-sk", str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        first_line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        fields = first_line.split()
+        if not fields:
+            raise RuntimeError(f"du -sk {path!s} produced no parseable output")
+        try:
+            size_kb = int(fields[0])
+        except ValueError as exc:
+            raise RuntimeError(
+                f"du -sk {path!s} produced unparseable output: {first_line!r}"
+            ) from exc
+        return size_kb * 1024
 
     def is_docker_installed(self) -> bool:
         """Return whether a ``docker`` executable is available on PATH."""
