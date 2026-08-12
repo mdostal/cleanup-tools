@@ -1,0 +1,10 @@
+step_id: research
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Mapped all 6 survey.sh sections to OSAdapter calls. Found a real interface gap (consistent
+  with design-discussion's flagged open question): list_dir only enumerates files, not
+  directories, so "biggest immediate subdirs of Documents/work" and "find+prune node_modules
+  dirs by name" have no adapter primitive. Additive extension needed: list_subdirs() and
+  find_dirs(), not a redesign.
+artifacts: []
