@@ -1,0 +1,8 @@
+step_id: platform-verify
+status: skipped
+timestamp: "2026-08-11"
+notes: >
+  Skipped per skip_when — this story adds no new OS-specific code (it only calls
+  read_file/write_file/resolve_home, already platform-verified in the os-adapter story).
+  Pure config/data logic, portable by construction.
+artifacts: []

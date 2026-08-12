@@ -1,0 +1,7 @@
+step_id: preflight
+status: completed
+timestamp: "2026-08-11"
+needs_backend: true
+needs_frontend: false
+notes: "23 existing adapter tests still pass. Target files confirmed absent."
+artifacts: []

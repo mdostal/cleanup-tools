@@ -1,0 +1,12 @@
+step_id: backend-implement
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  config.py created: BucketRule/MasterPath/Config dataclasses, DEFAULT_BUCKET_RULES
+  (screenshot rule first), resolve_bucket(), default_config_path() via adapter.resolve_home(),
+  load_config()/save_config() via adapter read_file/write_file. PyYAML added as runtime dep.
+  Smoke-tested manually (import succeeds, resolve_bucket covers all categories, round-trip,
+  missing-file default, malformed-YAML error) — no pytest yet, that's next step.
+artifacts:
+  - src/cleanup_tools/config.py
+  - pyproject.toml

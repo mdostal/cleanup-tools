@@ -1,0 +1,7 @@
+step_id: test
+status: completed
+timestamp: "2026-08-11"
+test_results: "74 passed, 0 failed (23 pre-existing + 51 new), full suite re-run, no regressions"
+notes: "44 parametrized resolve_bucket cases (every default extension + screenshot override + case-insensitivity + fallthrough), missing-file default, custom-rule priority, malformed-YAML error (2 cases), save/load round-trip (explicit path + default path branch)."
+artifacts:
+  - tests/test_config.py

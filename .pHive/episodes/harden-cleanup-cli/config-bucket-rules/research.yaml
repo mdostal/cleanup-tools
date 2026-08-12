@@ -1,0 +1,5 @@
+step_id: research
+status: completed
+timestamp: "2026-08-11"
+notes: "Confirmed bucket() case statement mapping + screenshot override + case-insensitive matching (both extension and filename lowercased before comparison in bash)."
+artifacts: []
