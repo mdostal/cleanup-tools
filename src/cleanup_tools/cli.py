@@ -1,13 +1,13 @@
 """Command-line entry point for cleanup-tools.
 
 Wires up a single top-level argparse parser with one subparser per command
-(``survey`` and ``sort`` so far; ``reclaim`` lands in a later story).
-``main()`` builds one :class:`~cleanup_tools.adapters.base.OSAdapter` for the
-whole invocation, dispatches to the matching command module's
-``run(adapter, args)`` function -- passing the parsed argparse namespace so
-commands with options (e.g. ``sort``'s ``dir``/``--go``) can read them,
-while options-less commands (e.g. ``survey``) simply ignore ``args`` -- and
-prints the result as pretty-printed JSON.
+(``survey``, ``sort``, and ``reclaim`` so far). ``main()`` builds one
+:class:`~cleanup_tools.adapters.base.OSAdapter` for the whole invocation,
+dispatches to the matching command module's ``run(adapter, args)`` function
+-- passing the parsed argparse namespace so commands with options (e.g.
+``sort``'s ``dir``/``--go``, ``reclaim``'s ``dir``/``--go``/``--docker``) can
+read them, while options-less commands (e.g. ``survey``) simply ignore
+``args`` -- and prints the result as pretty-printed JSON.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import json
 import sys
 
 from . import adapters
-from .commands import sort, survey
+from .commands import reclaim, sort, survey
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,7 +50,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually move files (default: dry-run, plan only).",
     )
 
-    # Future stories add a "reclaim" subparser here.
+    reclaim_parser = subparsers.add_parser(
+        "reclaim",
+        help=(
+            "Reclaim disk space from build caches, OS junk, and (with "
+            "--docker) Docker (dry-run unless --go)."
+        ),
+    )
+    reclaim_parser.add_argument(
+        "dir",
+        nargs="*",
+        default=None,
+        help=(
+            "Root directories to scan (default: configured search_roots, "
+            "else Documents and Desktop)."
+        ),
+    )
+    reclaim_parser.add_argument(
+        "--go",
+        action="store_true",
+        default=False,
+        help="Actually delete/prune (default: dry-run, plan only).",
+    )
+    reclaim_parser.add_argument(
+        "--docker",
+        action="store_true",
+        default=False,
+        help=(
+            "Also allow the Docker prune category to actually run -- only "
+            "takes effect combined with --go."
+        ),
+    )
 
     return parser
 
@@ -58,6 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
 COMMANDS = {
     "survey": survey.run,
     "sort": sort.run,
+    "reclaim": reclaim.run,
 }
 
 
