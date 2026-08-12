@@ -1,0 +1,14 @@
+step_id: backend-implement
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  sort.py created (_plan + run, dotfile exclusion, dry-run by default). cli.py generalized to
+  uniform run(adapter, args) dispatch for all commands; survey.run updated for signature parity.
+  Smoke-tested against /tmp fixture: dry-run left files untouched, --go moved them to correct
+  buckets, dotfile excluded, default-dir fallback resolved to real ~/Downloads correctly
+  (dry-run only, no real files touched). 111/111 existing tests still pass.
+artifacts:
+  - src/cleanup_tools/commands/sort.py
+  - src/cleanup_tools/cli.py
+  - src/cleanup_tools/commands/survey.py
+  - tests/test_cli.py

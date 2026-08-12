@@ -1,0 +1,11 @@
+step_id: test
+status: completed
+timestamp: "2026-08-11"
+test_results: "128 passed, 0 failed (17 new: 13 sort + 4 cli)"
+notes: >
+  All 9 default bucket categories tested individually (photos/screenshots-override/
+  installers/videos/pdfs/archives/data/docs/other). Dotfile exclusion, empty-dir, custom
+  bucket rule from config all covered. Default-Downloads-dir fallback branch intentionally
+  untested (would require touching real Downloads) — same gap pattern as survey's tests.
+artifacts:
+  - tests/test_sort.py
