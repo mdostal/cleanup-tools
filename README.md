@@ -11,13 +11,15 @@ screenshots — and getting it **sorted, arranged, and kept clean**. Built from 
 - Uncertain files get **staged into buckets/_REVIEW**, never trashed blind.
 
 ## Status
-The bash scripts in `scripts/` below are the current, working tool — nothing about how you use them
-has changed. A packaged Python CLI is being built in `src/cleanup_tools/`, following the build-out plan
-in `docs/REQUIREMENTS.md`, but it has no working commands yet — so far it's just the cross-platform
-OS-adapter foundation (macOS + Arch Linux). Keep using the scripts until that CLI has ported
-survey/sort/reclaim and this README says otherwise. The CLI now reads (and creates, if absent) an
-optional config file at `~/.config/cleanup-tools/config.yaml` for bucket rules, search roots, and
-master paths — sensible defaults apply if the file isn't there.
+The bash scripts in `scripts/` below are still the current, working tool for `sort`/`reclaim` —
+nothing about how you use those has changed. A packaged Python CLI is being built in
+`src/cleanup_tools/`, following the build-out plan in `docs/REQUIREMENTS.md`; `cleanup survey`
+(installed via `pip install -e .`, run as `cleanup survey` or `python3 -m cleanup_tools.cli survey`)
+is now a real, working ported command, on top of the cross-platform OS-adapter foundation (macOS +
+Arch Linux). Keep using `sort-downloads.sh`/`safe-reclaim.sh` until the CLI has ported those too and
+this README says otherwise. The CLI now reads (and creates, if absent) an optional config file at
+`~/.config/cleanup-tools/config.yaml` for bucket rules, search roots, and master paths — sensible
+defaults apply if the file isn't there.
 
 ## Scripts (`scripts/`)
 | Script | What it does | Safety |
