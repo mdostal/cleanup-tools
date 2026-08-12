@@ -1,0 +1,15 @@
+step_id: review
+status: completed
+timestamp: "2026-08-11"
+review_verdict: needs_revision
+review_findings: >
+  CRITICAL (highest severity in the whole epic): master-paths refusal compares raw
+  uncanonicalized Path objects with no .resolve() — a relative master path or one containing
+  ".." silently fails to match an absolute candidate, and --go permanently deletes the
+  "protected" directory. Confirmed by direct execution, not hypothesis. SECOND CRITICAL: even
+  with .resolve(), macOS's default case-insensitive APFS means a master path differing only in
+  case from the on-disk candidate is NOT recognized (.resolve() does not correct case,
+  empirically verified) — also results in real deletion. Both directly violate the project's
+  one hard non-negotiable rule. Improvement: symlink protection during rmtree is accidental
+  (relies on undocumented shutil.rmtree behavior), not designed-in or tested.
+artifacts: []

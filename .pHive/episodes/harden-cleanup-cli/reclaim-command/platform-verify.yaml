@@ -1,0 +1,13 @@
+step_id: platform-verify
+status: completed
+timestamp: "2026-08-11"
+platform_results:
+  macos: "pass — 9/9 pytest"
+  arch_linux: >
+    Full suite not run on real Arch hardware (manual follow-up remains). BUT the specific
+    Arch-divergent behavior (orphaned_installers graceful skip on find_installed_app's
+    NotImplementedError) was verified against a REAL, unmocked ArchLinuxAdapter instance in
+    this sandbox: build_caches/os_junk/recycle_bin all executed and deleted correctly under
+    --go while orphaned_installers cleanly skipped with no crash.
+notes: "Ran per enforcement rule 4 given this story's genuine platform divergence (unlike config-bucket-rules/sort-command which were skipped as adapter-agnostic)."
+artifacts: []

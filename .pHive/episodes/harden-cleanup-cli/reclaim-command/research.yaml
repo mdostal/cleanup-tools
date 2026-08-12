@@ -1,0 +1,12 @@
+step_id: research
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Confirmed all 5 category mappings, master-paths refusal design (unconditional, checked in
+  both directions via is_relative_to, distinct outcome string not conflated with OSError),
+  orphaned-installer graceful category-level skip on Arch's NotImplementedError, GB-reclaimed
+  computed pre-deletion (docker's is post-hoc/separate field, can't be pre-computed), --docker
+  gates separately from --go given machine-wide blast radius. Sort-command's per-entry
+  isolation pattern carries forward. cli.py has a placeholder comment for reclaim, no
+  subparser/COMMANDS entry yet.
+artifacts: []
