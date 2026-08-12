@@ -1,10 +1,13 @@
 """Command-line entry point for cleanup-tools.
 
 Wires up a single top-level argparse parser with one subparser per command
-(``survey`` for now; ``sort``/``reclaim`` land in later stories). ``main()``
-builds one :class:`~cleanup_tools.adapters.base.OSAdapter` for the whole
-invocation, dispatches to the matching command module's ``run(adapter)``
-function, and prints the result as pretty-printed JSON.
+(``survey`` and ``sort`` so far; ``reclaim`` lands in a later story).
+``main()`` builds one :class:`~cleanup_tools.adapters.base.OSAdapter` for the
+whole invocation, dispatches to the matching command module's
+``run(adapter, args)`` function -- passing the parsed argparse namespace so
+commands with options (e.g. ``sort``'s ``dir``/``--go``) can read them,
+while options-less commands (e.g. ``survey``) simply ignore ``args`` -- and
+prints the result as pretty-printed JSON.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import json
 import sys
 
 from . import adapters
-from .commands import survey
+from .commands import sort, survey
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,13 +33,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read-only snapshot of disk usage and clutter (no changes made).",
     )
 
-    # Future stories add "sort" and "reclaim" subparsers here.
+    sort_parser = subparsers.add_parser(
+        "sort",
+        help="Sort loose files into _sorted/<bucket>/ (dry-run unless --go).",
+    )
+    sort_parser.add_argument(
+        "dir",
+        nargs="?",
+        default=None,
+        help="Directory to sort (default: the platform Downloads dir).",
+    )
+    sort_parser.add_argument(
+        "--go",
+        action="store_true",
+        default=False,
+        help="Actually move files (default: dry-run, plan only).",
+    )
+
+    # Future stories add a "reclaim" subparser here.
 
     return parser
 
 
 COMMANDS = {
     "survey": survey.run,
+    "sort": sort.run,
 }
 
 
@@ -50,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 
     adapter = adapters.get_adapter()
     command_fn = COMMANDS[args.command]
-    result = command_fn(adapter)
+    result = command_fn(adapter, args)
 
     print(json.dumps(result, indent=2, default=str))
     return 0

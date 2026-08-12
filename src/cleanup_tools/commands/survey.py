@@ -99,8 +99,14 @@ def _screenshot_count(adapter: OSAdapter) -> int:
     )
 
 
-def run(adapter: OSAdapter) -> dict:
-    """Produce all 6 survey sections as a single JSON-serializable dict."""
+def run(adapter: OSAdapter, args=None) -> dict:
+    """Produce all 6 survey sections as a single JSON-serializable dict.
+
+    ``args`` is accepted (and ignored) for signature parity with other
+    commands' ``run(adapter, args)`` -- survey is read-only and needs no
+    CLI-supplied options, but ``cli.main`` dispatches every command
+    uniformly as ``command_fn(adapter, args)``.
+    """
     return {
         "disk": _disk(adapter),
         "home_top_level": _home_top_level(adapter),
