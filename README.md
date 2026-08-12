@@ -15,7 +15,9 @@ The bash scripts in `scripts/` below are the current, working tool — nothing a
 has changed. A packaged Python CLI is being built in `src/cleanup_tools/`, following the build-out plan
 in `docs/REQUIREMENTS.md`, but it has no working commands yet — so far it's just the cross-platform
 OS-adapter foundation (macOS + Arch Linux). Keep using the scripts until that CLI has ported
-survey/sort/reclaim and this README says otherwise.
+survey/sort/reclaim and this README says otherwise. The CLI now reads (and creates, if absent) an
+optional config file at `~/.config/cleanup-tools/config.yaml` for bucket rules, search roots, and
+master paths — sensible defaults apply if the file isn't there.
 
 ## Scripts (`scripts/`)
 | Script | What it does | Safety |

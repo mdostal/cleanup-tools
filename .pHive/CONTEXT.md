@@ -37,6 +37,9 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   testable CLI (Node/TS or Python) with an optional local desktop UI later, plus the hard safety rules.
 - `.pHive/project-profile.yaml` — Hive's discovery profile for this project (tech stack, north star,
   integrations, code quality signals).
+- `~/.config/cleanup-tools/config.yaml` — optional persisted config (loaded/created by
+  `src/cleanup_tools/config.py`) controlling bucket rules, search roots, and master paths; sensible
+  defaults apply if absent.
 
 ## Conventions
 
