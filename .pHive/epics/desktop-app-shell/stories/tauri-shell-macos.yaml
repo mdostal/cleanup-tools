@@ -1,0 +1,230 @@
+id: tauri-shell-macos
+epic: desktop-app-shell
+title: Build the Tauri v2 desktop shell (macOS) - sidecar lifecycle, health-check navigation, port-collision handling, and macOS packaging
+status: pending
+complexity: high
+methodology: classic
+depends_on: [pyinstaller-sidecar-build]
+
+description: |
+  This is the largest, riskiest story in the epic -- the first Rust/Tauri code this project has
+  ever had, with no internal precedent to build on (every prior epic extended an existing Python
+  pattern; this one has none). Builds the actual double-clickable macOS app: `src-tauri/`'s Cargo
+  package, `tauri.conf.json`'s `bundle.externalBin` sidecar config, `src-tauri/capabilities/
+  default.json` scoped to exactly the sidecar-spawn permission, the process-lifecycle code (spawn
+  in the background without blocking `setup()`, show an immediately-available Tauri-bundled static
+  loading screen, poll `/healthz` from the frontend, navigate to the real UI once ready), explicit
+  crash/quit handling with the PyInstaller-bootloader-PID mitigation, port-collision
+  detection-and-navigate-to-existing-instance logic, and macOS packaging (`.app`/`.dmg`, unsigned,
+  app icon -- the one thing Tauri requires to produce any bundle at all).
+
+  `depends_on: [pyinstaller-sidecar-build]` is a deliberate, explained choice, not a default. Full
+  verification of this story's crash/quit acceptance criteria genuinely requires the REAL frozen
+  PyInstaller binary -- the bootloader-PID gotcha (research-brief.md §6: killing a `--onefile`
+  binary's tracked PID may only kill the bootloader process, not the real Python/Flask process it
+  execs, orphaning the port) is specific to how PyInstaller's actual bootloader behaves at runtime
+  and cannot be meaningfully tested against a plain `python -m cleanup_tools.ui` stand-in. However,
+  a meaningful FIRST CHUNK of this story's own work -- window creation, the loading screen asset,
+  the capabilities config, the healthz-poll-then-navigate flow, and even most of the port-collision
+  logic -- does not need the real binary at all; a temporary manual Python stand-in (a thin shell
+  script wrapping `python -m cleanup_tools.ui`) is sufficient for that scaffolding, exactly as
+  design-discussion §6 describes. This story's own steps sequence that reality explicitly (see
+  `steps` below): the `implement` step's early sub-work can and should start against the stand-in
+  in parallel with `pyinstaller-sidecar-build` if both are in flight, but this story's OWN
+  completion -- and specifically its `test`/`review` steps' crash/quit assertions -- is gated on
+  swapping in the real frozen binary once that story lands. Wiring the formal `depends_on` this way
+  (rather than `[]` with only a prose note) keeps the dependency real and checkable rather than a
+  soft aspiration a scheduler could silently ignore.
+
+  This story does NOT need flask-progress-reporting to have landed first: the loading-screen poll
+  only needs a `/healthz` route, a few-line addition that story-1 owns -- if it hasn't landed yet,
+  the temporary manual stand-in used for early scaffolding can serve a bare `/healthz` itself, and
+  once the real binary is swapped in (whether or not story-1 has landed by then), `/healthz`
+  either already exists on it or is a trivial addition to pick up. No `depends_on` entry is added
+  for it.
+
+acceptance_criteria:
+  - "Given `tauri dev` (or the built `.app`) is launched, when the window first appears, then it
+    shows the Tauri-bundled static loading screen (plain HTML/JS shipped with the app, NOT served
+    by Flask) IMMEDIATELY -- verified by confirming the window is visible before the sidecar
+    process has finished starting, i.e. Tauri's `setup()` hook returns without blocking on sidecar
+    readiness."
+  - "Given the sidecar has started and its /healthz endpoint begins responding, when the frontend's
+    poll loop detects this, then the webview navigates from the loading screen to the real Flask
+    UI's root URL, and this transition is never silently stuck (a bounded poll timeout surfaces an
+    explicit error state in the webview rather than polling forever)."
+  - "Given `cleanup approve` is already running from a terminal (bound to 127.0.0.1:5151) when the
+    Tauri app is launched, when the app starts, then it detects the already-bound port via a
+    /healthz request BEFORE attempting to spawn its own sidecar, and navigates its webview straight
+    to the existing instance instead of erroring or spawning a redundant second Flask process --
+    verified by starting `cleanup approve` first, then launching the Tauri app, and confirming
+    (via ps/lsof) only ONE Flask process is running."
+  - "Given the sidecar process is killed externally (e.g. `kill -9 <sidecar-pid>`) while the app is
+    open and navigated to the real UI, when this happens, then the webview surfaces an explicit
+    error state (not a silent hang, not a blank page, not a frozen loading screen) -- verified by
+    manually killing the sidecar process and observing the webview's resulting state."
+  - "Given the app is quit normally (Cmd+Q or the app menu), when the quit completes, then no
+    orphaned sidecar process remains running and the bound port is free -- verified via ps/lsof
+    AFTER quitting, against the REAL frozen PyInstaller binary built by the pyinstaller-sidecar-
+    build story (whichever of --onefile/--onedir that story settled on), applying that story's
+    documented kill/signal mitigation (SIGTERM handling, process-group kill, and/or the onedir
+    choice itself if that's what was decided)."
+  - "Given `src-tauri/capabilities/default.json` is inspected, when reviewed, then it grants
+    exactly the shell:allow-execute (or allow-spawn) permission scoped to the one sidecar binary
+    name -- no broader shell/filesystem/network permission is present that the app doesn't
+    genuinely need."
+  - "Given `tauri build` is run for macOS, when it completes, then it produces both a `.app` bundle
+    and a `.dmg`, unsigned, using an app icon (the only branding change made -- window title is the
+    app name, the existing Flask templates render completely unchanged inside the webview)."
+  - "Given the built, unsigned `.app` is distributed to a fresh copy of it on the same machine (or
+    a second machine) and double-clicked normally, when Gatekeeper blocks it, then right-click ->
+    Open -> confirm bypasses the block as expected, matching the documented workaround
+    (research-brief.md §3) -- this is checked manually, not automated (Gatekeeper's dialog is not
+    scriptable in a way worth building here)."
+  - "Given `Cargo.lock`/`package-lock.json` are inspected once real scaffolding exists, when
+    checked, then neither directly nor transitively pulls in tauri-plugin-updater or any analytics/
+    telemetry/crash-reporting plugin -- verified by grep, not just by confirming none was
+    deliberately added (research-brief.md §7's 're-verify against the actual lockfile, not just
+    docs claims' instruction)."
+  - "Verify via: `cargo test` (Rust-side unit/integration tests for port-collision-detection logic
+    and any pure Rust/TS platform-detection logic) plus a documented manual verification pass on
+    the real macOS machine covering every acceptance criterion above that a native window and a
+    real subprocess make impossible to fully automate."
+
+steps:
+  - id: research
+    description: |
+      Research via research-brief.md §1/§3/§6/§7 and design-discussion.md §2b (already answer the
+      sidecar mechanism, macOS packaging, process-lifecycle pattern, and telemetry-posture
+      questions -- do not re-litigate), plus targeted web lookups of CURRENT Tauri v2 docs
+      (v2.tauri.app/develop/sidecar/, v2.tauri.app/distribute/sign/macos/) to re-verify
+      version-specific API details, since Tauri moves fast and research-brief.md is dated
+      2026-08-13. There is no internal codebase precedent for any of this -- cite the research
+      brief's external prior art (dieharders/example-tauri-v2-python-server-sidecar,
+      zudo-tauri-wisdom's loading-screen and process-lifecycle docs) explicitly, not internal
+      files that don't exist yet. Also read src/cleanup_tools/ui/app.py's DEFAULT_PORT/LOCALHOST
+      constants (app.py:25-26) and run_server's host-guard (app.py:69-72) to confirm the exact
+      port/host contract the sidecar and the Tauri healthz-poll logic must agree on.
+    agent: researcher
+  - id: implement
+    description: |
+      Scaffold src-tauri/ (Cargo.toml, tauri.conf.json with bundle.externalBin pointing at the
+      per-target-triple-named sidecar binary, src-tauri/capabilities/default.json scoped to
+      shell:allow-execute/allow-spawn for exactly that binary), a bundled static loading-screen
+      HTML/JS asset, and the frontend's healthz-poll-then-navigate logic. This first chunk (window
+      creation, loading screen, capabilities config, poll-then-navigate) can and should start
+      against a temporary manual Python stand-in (a thin shell script wrapping `python -m
+      cleanup_tools.ui`) if pyinstaller-sidecar-build hasn't landed yet -- swap in the real frozen
+      binary once it has. Implement setup()'s non-blocking sidecar spawn, the port-collision
+      detection (a /healthz check before spawning, navigating to the existing instance on a hit),
+      and crash/quit handling (listen for the sidecar child's exit event -> webview error state;
+      on app quit, apply pyinstaller-sidecar-build's documented kill/signal mitigation for whichever
+      mode -- onefile or onedir -- that story settled on). Add macOS packaging config
+      (bundle.targets: [app, dmg], unsigned) and an app icon. Do NOT add tauri-plugin-updater or
+      any analytics/telemetry/crash-reporting plugin.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write Rust-side unit/integration tests (cargo test) for the port-collision-detection logic
+      (a mocked /healthz response short-circuits spawning) and any pure Rust/TS logic that doesn't
+      require a real native window. Swap in the REAL frozen PyInstaller binary from
+      pyinstaller-sidecar-build (required for this step, not optional) and run the full manual
+      verification pass on the real macOS machine: loading screen appears immediately; healthz-poll
+      navigates correctly; port-collision detection navigates to an existing `cleanup approve`
+      instance instead of double-spawning; killing the sidecar externally surfaces a webview error
+      state; quitting the app leaves no orphaned process/bound port (ps/lsof check); tauri build
+      produces a working unsigned .app + .dmg; right-click-Open bypasses Gatekeeper. Grep
+      Cargo.lock/package-lock.json for tauri-plugin-updater or any analytics/telemetry plugin,
+      confirming absence.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: is capabilities/default.json scoped to exactly the sidecar binary (no
+      wildcard/broader shell permission)? Does the crash/quit handling actually use the mitigation
+      pyinstaller-sidecar-build's spike settled on (not a generic assumption)? Was the
+      port-collision check genuinely verified against a REAL second `cleanup approve` process (not
+      just a mocked /healthz response in a unit test)? Is the manual verification pass's evidence
+      (ps/lsof output, screenshots/notes) actually recorded, not just asserted as "done"?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: "Rust (src-tauri/) + TypeScript/JS (frontend loading screen) -- first use of either in this project"
+    framework: "Tauri v2 (2.11.x line, per research-brief.md §1 -- re-verify current version before implementation)"
+  key_files:
+    - path: src/cleanup_tools/ui/app.py
+      purpose: "DEFAULT_PORT=5151, LOCALHOST='127.0.0.1' (lines 25-26), and run_server's explicit host!=LOCALHOST guard (lines 69-72) -- the exact contract the Tauri shell's healthz-poll and port-collision logic must target; this file is NOT modified by this story"
+    - path: .pHive/epics/desktop-app-shell/docs/research-brief.md
+      purpose: "The sole source of prior art for this story's Rust/Tauri work (sections 1, 3, 4, 6, 7) -- cited throughout since no internal codebase precedent exists"
+    - path: .pHive/epics/desktop-app-shell/docs/design-discussion.md
+      purpose: "§2b's process-lifecycle synthesis and Open Question 3's port-collision resolution -- the concrete design this story implements"
+
+files_to_modify:
+  - file: src-tauri/Cargo.toml
+    change: "Create -- Rust package manifest, tauri + tauri-plugin-shell dependencies"
+  - file: src-tauri/tauri.conf.json
+    change: "Create -- bundle.externalBin, window title, app icon, bundle.targets=[app, dmg]"
+  - file: src-tauri/capabilities/default.json
+    change: "Create -- shell:allow-execute/allow-spawn scoped to the sidecar binary only"
+  - file: src-tauri/src/main.rs
+    change: "Create -- setup() hook, sidecar spawn, port-collision check, crash/quit handling"
+  - file: src-tauri/icons/icon.icns
+    change: "Create -- macOS app icon (the one Tauri-required branding minimum)"
+  - file: frontend/loading.html
+    change: "Create -- Tauri-bundled static loading screen HTML/JS, healthz-poll-then-navigate logic"
+
+design_decisions:
+  - decision: "depends_on: [pyinstaller-sidecar-build] as a hard story dependency, with explicit prose in this story's description explaining that early scaffolding (window/loading-screen/capabilities) can still start against a manual stand-in"
+    rationale: "Full verification of this story's crash/quit acceptance criteria genuinely needs the real PyInstaller binary's bootloader-PID behavior, which cannot be tested against a stand-in -- making the dependency formal and checkable is more honest than depends_on: [] with only a soft prose note a scheduler could ignore"
+  - decision: "Crash/quit handling is hand-rolled in this story's own Rust code, not borrowed from an official Tauri primitive"
+    rationale: "research-brief.md §6 confirms no polished official Tauri primitive exists yet for this (the relevant plugin proposal, plugins-workspace#3062, is open, not merged) -- this project has to build its own sidecar-exit-event listener and shutdown-signal logic"
+  - decision: "No tauri-plugin-updater, no analytics/telemetry/crash-reporting plugin, verified by grepping the actual lockfiles once they exist"
+    rationale: "Preserves this project's existing 'no ambient network calls / no telemetry' hard rule (.pHive/CONTEXT.md Conventions) into the Tauri layer -- research-brief.md §7 treats Tauri's own telemetry posture as 'not found to be a problem' rather than 'confirmed clean', so this story does the actual lockfile-level verification the research pass flagged as still needed"
+  - decision: "Unsigned macOS build, relying on right-click-Open, per decision 6 -- not re-litigated here"
+    rationale: "This is a personal tool being installed on the owner's own machine(s), not distributed to strangers; signing/notarization stays a clearly-flagged future story (config/secrets problem, not architecture)"
+
+risks:
+  - severity: high
+    description: "First-ever Rust/Tauri code in this project, no internal precedent -- genuinely new toolchain risk that no prior epic's story-writing conventions were built to anticipate"
+    mitigation: "Research step explicitly cites external prior art (dieharders' example repos, zudo-tauri-wisdom docs) rather than pretending internal precedent exists; this is also why this story's complexity is rated high and it is scoped as its own story rather than folded into a smaller one"
+  - severity: high
+    description: "PyInstaller-bootloader-PID kill gotcha causes an orphaned Flask process/bound port after app quit, undiscovered until a real user notices port 5151 is stuck bound"
+    mitigation: "This story's crash/quit acceptance criteria are explicitly gated on testing against the REAL frozen binary (not a stand-in), applying whichever mitigation pyinstaller-sidecar-build's spike determined works (onedir's more-reliable signal forwarding, and/or Flask handling SIGTERM cleanly, and/or a process-group kill from the Rust side)"
+  - severity: medium
+    description: "Port-collision detection races: the Tauri app's /healthz check happens right as a terminal-launched `cleanup approve` is mid-startup, neither cleanly 'not there' nor 'ready'"
+    mitigation: "The healthz check treats any non-2xx/connection-refused response as 'not running yet, safe to spawn' and the manual verification pass explicitly exercises the 'already running' case, though a true simultaneous-startup race is flagged as a known edge case not exhaustively tested at this scope"
+  - severity: medium
+    description: "Capabilities scoped too broadly (e.g. shell:allow-execute without a name-scoped constraint), granting the sidecar more permission than it needs"
+    mitigation: "Explicit review-step check of capabilities/default.json against the research brief's minimal example (research-brief.md §1), not just 'it works so it must be scoped right'"
+
+references:
+  - path: .pHive/epics/desktop-app-shell/docs/research-brief.md
+    relevant_excerpt: |
+      **Do not block Tauri's `setup()` hook waiting for the sidecar to become ready.** Multiple
+      sources independently flag this as *the* common mistake... **Recommended pattern**: create
+      the webview window immediately with a lightweight local loading screen... spawn the sidecar
+      in the background, and have the *frontend* poll/await the sidecar's readiness... If the
+      sidecar binary is a **PyInstaller `--onefile`** executable, Tauri (and `kill()`) only has the
+      PID of the PyInstaller *bootloader* process, not the real Python process it bootstraps and
+      execs -- naively killing the bootloader PID can leave the actual Flask process... alive as an
+      orphan.
+  - path: .pHive/epics/desktop-app-shell/docs/design-discussion.md
+    relevant_excerpt: |
+      Worth deciding at story-write time whether the desktop app should (a) detect the port's
+      already bound and just navigate its webview to the existing instance instead of trying to
+      spawn its own sidecar, (b) fail with a clear "already running" message, or (c) pick a
+      different port for the packaged app -- this is a new failure mode that simply didn't exist
+      when there was only ever one way to start the Flask process. [Resolved: (a), per the epic
+      task brief's decision 3.]
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md needs a new section describing how to build/run the desktop app (tauri dev / tauri build) alongside the existing `cleanup approve` browser-based instructions, explicitly noting both remain independent, coexisting ways to reach the same UI. .pHive/CONTEXT.md's Key paths section should add entries for src-tauri/ and the loading-screen frontend asset, and its Conventions section should note the 'no tauri-plugin-updater / no telemetry plugin' rule alongside the existing no-ambient-network-calls rule."

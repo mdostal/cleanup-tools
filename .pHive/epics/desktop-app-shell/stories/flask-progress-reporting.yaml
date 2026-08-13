@@ -1,0 +1,237 @@
+id: flask-progress-reporting
+epic: desktop-app-shell
+title: Add background-thread job/progress reporting and a health-check endpoint to the Flask UI
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Fixes the concrete, current UX problem behind this epic's performance decision: `/plan/reclaim`
+  calls `reclaim_module.run(adapter, args=None)` synchronously (`routes.py:218-244`), which shells
+  out to `du -sk` per candidate directory via `adapter.dir_size_bytes` (`adapters/base.py:213-239`)
+  and can take ~2 minutes on a real machine. A native window that sits there for 2 minutes with no
+  feedback reads as broken and gets force-quit -- this is a real architectural blocker for shipping
+  the desktop shell, not a cosmetic nice-to-have, per research-brief.md's "Relevant flag" section.
+
+  Adds a new `src/cleanup_tools/ui/jobs.py` module (an in-memory, lock-guarded `dict[job_id,
+  JobState]` registry, deliberately NOT persisted to disk -- a job only matters for the life of one
+  open window/tab, unlike `queue.yaml` which must survive process restarts), wires `/plan/reclaim`
+  to run its work on a background `threading.Thread` and return a `job_id` immediately, adds `GET
+  /status/<job_id>` for polling, adds `GET /healthz` as a new, deliberately cheap readiness route
+  (no existing route qualifies -- even `GET /` does real queue-loading/grouping work via
+  `_load_entries()`/`_group_entries()`, `routes.py:172-182`), and adds `app.run(...,
+  threaded=True)` to `run_server` (`app.py:79`) so `/status` polls don't queue up behind the
+  in-flight job on Werkzeug's dev server.
+
+  This is a plain background-thread + job-id + polling design, NOT Server-Sent Events -- SSE needs
+  a long-lived streaming connection, a meaningfully bigger lift on a single-threaded Werkzeug dev
+  server (real concurrency handling, connection lifecycle, more surface for "GUI app with no
+  browser dev-tools to debug a stuck stream") for a problem plain polling solves adequately at this
+  scale (one user, one job at a time, sub-second acceptable poll interval) -- design-discussion §2c.
+
+  Fully testable via the existing Flask `test_client()`-based suite (see `tests/test_ui_routes.py`
+  for the established fake-home-adapter fixture pattern). Zero Tauri/Rust involvement -- this story
+  has no dependency on anything else in this epic and is independently useful to the CURRENT
+  browser-based `cleanup approve` UI right now, whether or not the desktop shell ever ships.
+
+acceptance_criteria:
+  - "Given `GET /healthz` is requested against a running app, when it responds, then it returns
+    HTTP 200 with a small JSON body in well under the time any other route (including `GET /`)
+    takes, and does NOT call `queue_module.load_queue` or any other queue/filesystem I/O."
+  - "Given `GET /plan/reclaim` is requested, when it responds, then it returns immediately (does
+    NOT block until the reclaim plan finishes) with a JSON body containing a `job_id`, and the
+    actual `_stage_reclaim_plan` work continues running on a background thread."
+  - "Given a `job_id` returned by `/plan/reclaim`, when `GET /status/<job_id>` is polled while the
+    job is still running, then it returns `{\"status\": \"running\", \"current\": <int>, \"total\":
+    <int>}` with `current`/`total` reflecting real progress through the candidate list (not fixed
+    placeholder values)."
+  - "Given the same `job_id`, when polled after the background job completes successfully, then it
+    returns `{\"status\": \"done\", ..., \"result\": {...}}` where `result` is the same shape
+    `_stage_reclaim_plan` would have returned synchronously (the staged `QueueEntry` list/count)."
+  - "Given the background job's underlying `reclaim_module.run` call raises (e.g. a `TimeoutError`
+    from the queue lock, matching the existing `except TimeoutError` handling at
+    `routes.py:291-292`), when the job's status is polled afterward, then it returns
+    `{\"status\": \"error\", \"error\": <message>}` -- the background thread never lets an
+    exception propagate silently and orphan the job in a stuck 'running' state forever."
+  - "Given `GET /status/<job_id>` is called with an unknown `job_id`, when it responds, then it
+    returns HTTP 404 rather than a 500 or a misleading running/done status."
+  - "Given two concurrent requests are made against a running app -- one to `/status/<job_id>` for
+    an in-flight job, one to any other lightweight route -- when both are issued without the
+    server having `threaded=True`, the test demonstrates the pre-fix queuing behavior; when re-run
+    against the fixed `app.run(..., threaded=True)` server, the second request completes without
+    waiting for the first to finish."
+  - "Verify via: `pytest tests/test_ui_routes.py tests/test_jobs.py -v` -- all tests pass, using
+    Flask's `test_client()` (per `test_ui_routes.py`'s existing fake-home-adapter fixture pattern),
+    zero real Tauri/Rust involvement, zero real `du` shell-outs beyond what a fixture directory
+    tree legitimately requires."
+
+steps:
+  - id: research
+    description: |
+      Read src/cleanup_tools/ui/app.py (run_server, the LOCALHOST-only guard, the current bare
+      app.run(host=host, port=port, debug=False, use_reloader=False) call at line 79) and
+      routes.py in full (the _stage_reclaim_plan helper at lines 218-244, the plan_reclaim route
+      at 286-293, the existing QUEUE_BUSY_MESSAGE/TimeoutError handling pattern used across every
+      queue-touching route) to understand exactly what must move onto a background thread and
+      what must stay untouched. Read queue.py's with_queue_lock (queue.py:144) to confirm the job
+      thread still goes through the SAME queue-locking path stage_entries already uses -- this
+      story adds a job wrapper around existing plan-building/staging logic, it does not change how
+      the queue itself is locked or written. Read tests/test_ui_routes.py's fixture pattern
+      (FakeHomeAdapter subclassing MacOSAdapter, tmp_path-scoped home) to follow exactly.
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/ui/jobs.py: a JobState dataclass/dict shape (status, current,
+      total, result, error), a module-level lock-guarded registry, start_job(target_fn,
+      *args) -> job_id spawning a threading.Thread that updates the registry as it progresses and
+      records the final result/exception, and get_job(job_id) -> JobState | None. Modify
+      routes.py's plan_reclaim to accept a progress-callback-aware version of _stage_reclaim_plan
+      (or wrap the existing one, calling the callback per candidate) and return
+      {"job_id": ...} instead of redirecting synchronously. Add GET /status/<job_id> and GET
+      /healthz routes. Modify app.py's run_server to call app.run(host=host, port=port,
+      debug=False, use_reloader=False, threaded=True).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_jobs.py (jobs.py's registry in isolation: create/poll/complete/error
+      transitions, unknown-job-id lookup) and extend tests/test_ui_routes.py with cases for the
+      new /plan/reclaim job-id response shape, /status/<job_id> polling through running->done and
+      running->error transitions (mock reclaim_module.run to raise for the error case), /healthz's
+      cheap 200 response and that it makes no queue/filesystem calls (verify via a mock/spy on
+      queue_module.load_queue asserting zero calls), and a concurrency test demonstrating
+      threaded=True lets a /status poll complete without waiting behind an in-flight job (e.g. via
+      a slow mocked job target and two threads issuing requests against the running test server or
+      test_client()).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: does /healthz genuinely avoid all queue/filesystem I/O (grep the route
+      for any queue_module/config_module call), or does it just happen to be fast today? Does
+      every code path through the background job thread guarantee the registry entry reaches a
+      terminal status (done or error) -- is there any path where an unhandled exception in the
+      thread body leaves a job silently stuck at "running" forever? Is threaded=True's effect
+      actually demonstrated by a test that fails without it (not just asserted to exist in the
+      app.run() call)?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+    web_framework: Flask (synchronous, now threaded=True)
+  key_files:
+    - path: src/cleanup_tools/ui/app.py
+      purpose: "run_server (lines 45-79) is where threaded=True gets added to the app.run() call at line 79; open_browser param (line 50) is unrelated but shows the existing precedent for adding parameters to this function without breaking callers"
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_stage_reclaim_plan (lines 218-244) is the exact synchronous work that must move onto a background thread; plan_reclaim (lines 286-293) is the route that changes shape from redirect to job_id JSON response; QUEUE_BUSY_MESSAGE (line 53) and its TimeoutError handling pattern is the existing error-surfacing convention to preserve inside the job thread"
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "dir_size_bytes (lines 213-239) is the du-shelling call that makes /plan/reclaim slow -- NOT modified by this story, just wrapped with progress reporting around its per-candidate calls"
+    - path: tests/test_ui_routes.py
+      purpose: "Established fake-home-adapter + Flask test_client() fixture pattern (lines 1-59) to follow for every new test in this story"
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/jobs.py
+    change: "Create -- in-memory, lock-guarded job registry: JobState, start_job(), get_job()"
+  - file: src/cleanup_tools/ui/routes.py
+    change: "Modify plan_reclaim to spawn a background job and return job_id JSON; add GET /status/<job_id> and GET /healthz routes"
+  - file: src/cleanup_tools/ui/app.py
+    change: "Add threaded=True to the app.run() call in run_server (line 79)"
+  - file: tests/test_jobs.py
+    change: "Create -- jobs.py registry unit tests"
+  - file: tests/test_ui_routes.py
+    change: "Extend -- /plan/reclaim job-id shape, /status/<job_id> polling, /healthz, threaded=True concurrency test"
+
+code_examples:
+  - title: "Existing synchronous reclaim-plan staging this story wraps in a background job (unchanged internals)"
+    file: src/cleanup_tools/ui/routes.py
+    snippet: |
+      def _stage_reclaim_plan(adapter) -> list[queue_module.QueueEntry]:
+          result = reclaim_module.run(adapter, args=None)
+          new_entries = []
+          for category_name, category in result.get("categories", {}).items():
+              for item in category.get("entries", []):
+                  if item.get("master_path_refused"):
+                      continue
+                  new_entries.append(
+                      queue_module.QueueEntry(
+                          action="delete",
+                          src=str(item["path"]),
+                          ...
+                      )
+                  )
+          return queue_module.stage_entries(adapter, new_entries, _queue_path())
+
+      @bp.route("/plan/reclaim")
+      def plan_reclaim():
+          adapter = _adapter()
+          try:
+              added = _stage_reclaim_plan(adapter)
+          except TimeoutError:
+              return redirect(url_for("ui.dashboard", plan_error=QUEUE_BUSY_MESSAGE))
+          return redirect(url_for("ui.dashboard", staged=len(added)))
+  - title: "The du-shelling call whose per-candidate iteration is the natural progress-reporting hook"
+    file: src/cleanup_tools/adapters/base.py
+    snippet: |
+      def dir_size_bytes(self, path: Path) -> int:
+          """Return the recursive size of ``path`` in bytes, via ``du -sk``."""
+          result = subprocess.run(
+              ["du", "-sk", str(path)],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.DEVNULL,
+              text=True,
+          )
+          ...
+  - title: "run_server's current bare app.run() call -- threaded=True is added here"
+    file: src/cleanup_tools/ui/app.py
+    snippet: |
+      app.run(host=host, port=port, debug=False, use_reloader=False)
+      return {"host": host, "port": port}
+
+design_decisions:
+  - decision: "Background thread + job-id + polling /status/<job_id>, not Server-Sent Events"
+    rationale: "design-discussion §2c: SSE needs a long-lived streaming connection, a meaningfully bigger lift on a single-threaded Werkzeug dev server, for a problem plain polling solves adequately at this scale (one user, one job at a time)"
+  - decision: "jobs.py's registry is in-memory only, deliberately never persisted to disk"
+    rationale: "A job only matters for the life of one open app window/browser tab -- unlike queue.yaml (which must survive process restarts and be safe for concurrent CLI+UI access), a job registry losing state on restart is an acceptable, even correct, tradeoff (design-discussion §2c)"
+  - decision: "/healthz is a brand-new route, not a repurposing of GET /"
+    rationale: "None of the existing routes are cheap enough for a readiness-poll loop -- GET / does real queue-loading/grouping work (routes.py:172-182); the Tauri shell (and any future automated health monitoring) needs a route that is cheap by construction, not by accident"
+  - decision: "Only /plan/reclaim gets the job-runner treatment in this story; /plan/sort and a future survey route do not"
+    rationale: "reclaim.py's dir_size_bytes du-shelling is the concrete, current slow path with a real UI route calling it today; survey has the same shape but no UI route calls it yet, so there is nothing to fix there right now -- the job-runner helper is written reusably (not hardcoded to reclaim specifically) so a future route isn't a second bespoke implementation, but no second route is added in this epic"
+
+risks:
+  - severity: medium
+    description: "A background thread's exception could leave a job registry entry stuck at 'running' forever if not caught"
+    mitigation: "The job runner wraps the target call in try/except and always writes a terminal status (done or error) in a finally-equivalent path; explicitly tested in test_jobs.py/test_ui_routes.py by mocking a raising target"
+  - severity: low
+    description: "threaded=True could interact badly with the existing queue file-locking (queue.py's with_queue_lock/fcntl.flock) if two requests race on the SAME queue mutation"
+    mitigation: "with_queue_lock's existing lock (already designed for concurrent CLI+UI access, per ai-approvals-ui epic) is untouched by this story -- threaded=True only changes how many requests Werkzeug's dev server can be mid-handling of simultaneously, not how the queue file itself is protected"
+  - severity: low
+    description: "/healthz being 'too cheap' could mean it doesn't actually prove the app is ready to serve real requests (e.g. Flask started but a route module failed to import)"
+    mitigation: "/healthz only needs to prove the Flask process is up and its blueprint is registered -- a Tauri shell polling it before navigating to the real UI is checking 'is there a server here to navigate to', not 'is every route fully functional', which is a deliberately narrow and sufficient readiness bar per research-brief.md §6"
+
+references:
+  - path: .pHive/epics/desktop-app-shell/docs/design-discussion.md
+    relevant_excerpt: |
+      Proposed shape: background thread + job-id + polling `/status/<job_id>`, not Server-Sent
+      Events... A new small module (e.g. `src/cleanup_tools/ui/jobs.py`) holding an in-memory,
+      lock-guarded `dict[job_id, JobState]`, deliberately **not** persisted to disk... `app.run(...,
+      threaded=True)` needs to be added alongside this -- today's `run_server` doesn't set it,
+      which is fine for one-request-at-a-time browser use but would make `/status` polls queue up
+      behind whatever else is in flight once a job is running.
+  - path: .pHive/epics/desktop-app-shell/docs/research-brief.md
+    relevant_excerpt: |
+      A native app window that just sits there for 2 minutes with no feedback reads as **broken**...
+      the Flask backend's long-running endpoints (survey, reclaim) need **some** progress-reporting
+      mechanism the Tauri webview can render -- e.g. Server-Sent Events or long-polling from the
+      existing Flask process, or a simple "job started / poll /status" pattern.
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's Status section should note that `cleanup approve`'s reclaim-plan trigger now reports progress instead of hanging silently. .pHive/CONTEXT.md's Key paths section should add a short entry for the new job registry (src/cleanup_tools/ui/jobs.py) alongside its existing approval_queue.yaml entry, noting explicitly that job state is in-memory and does NOT persist like the queue does."

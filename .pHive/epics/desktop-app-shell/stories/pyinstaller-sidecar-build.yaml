@@ -1,0 +1,236 @@
+id: pyinstaller-sidecar-build
+epic: desktop-app-shell
+title: Freeze the Flask UI into a per-platform PyInstaller sidecar binary, with an explicit onefile-vs-onedir spike
+status: pending
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  Freezes `src/cleanup_tools/ui/`'s Flask app -- and its full dependency tree (Flask, Pillow,
+  PyYAML, `anthropic` and its transitive `httpx`/`pydantic` stack, all already declared in
+  `pyproject.toml`'s `dependencies`) -- into a single standalone binary per target platform (macOS,
+  Arch/Linux), matching the research brief's Option A recommendation: this is the dominant
+  real-world pattern for exactly this Tauri+Flask shape (every real prior-art example found uses
+  it, none uses Nuitka or a bundled runtime -- research-brief.md §2).
+
+  This story does NOT decide `--onefile` vs `--onedir` upfront -- that choice is explicitly
+  deferred to a spike within this story's own implementation step, per the epic's stated decision:
+  build both, kill the running process and check whether the bound port actually frees (the
+  PyInstaller-bootloader-PID gotcha research-brief.md §6 names -- `kill()` on a `--onefile` binary
+  only has the bootloader process's PID, not the real Python/Flask process it execs, which can
+  leave the port orphaned), and measure the REAL binary size for this project's actual dependency
+  tree (not the brief's generic, explicitly-unverified 50-150MB estimate).
+
+  The entrypoint calls `run_server(adapter, open_browser=False)` -- `src/cleanup_tools/ui/app.py`'s
+  `run_server` (lines 45-79) already exposes `open_browser: bool = True` as a parameter, so no new
+  CLI flag or forked code path is needed to suppress the "open a system browser tab" behavior; this
+  is real, existing surface area design-discussion.md §2a calls out as "free."
+
+  Three concrete gotchas budgeted real debugging time, all named in research-brief.md §2 and
+  design-discussion.md §2a:
+  1. Hidden-import/import-scanning breakage: `anthropic`/httpx/pydantic's import graph is the most
+     likely source of "works from source, breaks in the frozen binary" bugs -- PyInstaller's static
+     import scanner can miss dynamically-imported modules. Verified here by exercising EVERY route
+     (including `/propose-ai`, which triggers the `anthropic`/httpx/pydantic import path) against
+     the frozen binary directly, not a `pip list` review.
+  2. Pillow's compiled deps (libjpeg/libpng bindings) must be present in the *build* environment
+     per platform, not just importable at dev time -- this is a real per-platform-build-machine
+     constraint, reinforcing why there is no single-machine cross-build for this piece.
+  3. Templates/static files are data, not code: `src/cleanup_tools/ui/templates/*.html` and
+     `static/keyboard.js` need explicit `datas=`/`--add-data` treatment in a spec file (never bare
+     `--onefile`), or the frozen binary 404s/`TemplateNotFound`s on every route -- an easy thing to
+     forget on a first pass, called out explicitly here so it isn't rediscovered by trial and error.
+
+  This story has no hard dependency on flask-progress-reporting and can start immediately in
+  parallel with it -- it freezes whatever `src/cleanup_tools/ui/` looks like at build time, and
+  gets any /healthz route that story adds for free, without needing it to land first.
+
+acceptance_criteria:
+  - "Given a PyInstaller build is run against src/cleanup_tools/ui/ in BOTH --onefile and
+    --onedir modes on the current development machine, when each resulting binary/directory is
+    started as a subprocess, then both successfully bind and serve HTTP requests, and the
+    onefile-vs-onedir DECISION section of this story's implementation records the measured, real
+    binary/directory sizes for each (not a generic estimate)."
+  - "Given the onefile-mode binary is started as a subprocess and its process is killed by its
+    reported PID, when the bound port is checked afterward (via lsof/netstat, not just process-list
+    inspection), then the actual observed behavior (port freed immediately / port stays bound /
+    orphaned child process remains) is recorded as a concrete finding, and the same check is
+    repeated for onedir mode -- this comparison is what the story's --onefile-vs-onedir DECISION is
+    based on, not assumed from the research brief's description of the gotcha alone."
+  - "Given the frozen binary (whichever mode is chosen) is started as a subprocess with
+    open_browser=False behavior (no system browser window should appear), when every existing
+    Flask route is exercised over HTTP against it -- GET /, GET /plan/sort, GET /plan/reclaim,
+    POST /queue/<id>/approve, POST /queue/<id>/reject, POST /queue/<id>/undo, POST
+    /queue/bulk-approve, POST /queue/bulk-reject, GET /queue, GET /thumbnail/<id>, POST
+    /propose-ai (with a mocked/stubbed AI provider so this check needs no real API key) -- then
+    every route responds with the SAME status code and equivalent body shape it returns when run
+    from source (python -m cleanup_tools.ui / pytest's test_client()), with zero TemplateNotFound,
+    zero import errors, zero 404s caused by missing static/template files."
+  - "Given the frozen binary's build log/spec file is inspected, when checked for the templates/
+    and static/ directories, then both are present via explicit datas= entries (or --add-data
+    flags) in the spec, not omitted in reliance on bare --onefile packaging."
+  - "Given the build is attempted on a machine lacking Pillow's compiled libjpeg/libpng
+    dependencies in the BUILD environment (or this is verified by documentation/CI config review
+    if a real second machine isn't available), when documented, then the story's implementation
+    notes explicitly call out that Pillow's compiled deps must be present at BUILD time per
+    platform, separate from the interpreter used to develop the rest of the project."
+  - "Verify via: a smoke-test script (not pytest, since this drives a real subprocess binary, not
+    Flask's test_client()) that starts the frozen binary, polls until it accepts connections,
+    exercises every route above, and asserts on response status/shape -- runnable as
+    `python scripts/smoke_test_sidecar.py <path-to-binary>` or equivalent, with its pass/fail
+    output captured as this story's primary automated verification."
+
+steps:
+  - id: research
+    description: |
+      Research via research-brief.md §2 (already answers the PyInstaller-vs-Nuitka-vs-bundled-
+      runtime question -- do not re-litigate) plus targeted web lookups of CURRENT PyInstaller
+      docs for: spec-file datas= syntax, the --onefile/--onedir CLI flags, and any documented
+      caveats for Flask/anthropic/Pillow-shaped dependency trees specifically (PyInstaller's own
+      hooks system for httpx/pydantic, if any exist, since these are common enough libraries that
+      community hooks may already solve the hidden-import problem). Also read
+      src/cleanup_tools/ui/app.py's run_server signature (lines 45-79) and routes.py's full route
+      list (grep for @bp.route) to build the exact list of routes the smoke test must exercise.
+      There is no internal codebase precedent for this (first PyInstaller build this project has
+      ever had) -- cite research-brief.md and current PyInstaller docs, not internal files.
+    agent: researcher
+  - id: implement
+    description: |
+      Create a PyInstaller spec file (e.g. packaging/pyinstaller/cleanup_ui.spec) with an
+      entrypoint script calling run_server(adapter, open_browser=False) with a fixed or
+      env-var-configurable port, explicit datas= entries for src/cleanup_tools/ui/templates/*.html
+      and src/cleanup_tools/ui/static/*, and hiddenimports entries for anything the research step's
+      hidden-import investigation surfaces as needed. Build BOTH --onefile and --onedir variants.
+      Run the kill+verify-port-freed check for each (start, curl a route, note the PID, kill it,
+      check lsof/netstat for the port). Measure and record real binary/directory sizes (du -sh).
+      Record the onefile-vs-onedir DECISION explicitly in this story's own notes/PR description,
+      with the measured evidence, not just a restated preference.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write scripts/smoke_test_sidecar.py (or tests/test_sidecar_smoke.py gated to run only when a
+      built binary path is supplied, e.g. via an env var or pytest marker, since this cannot run in
+      a plain `pytest` invocation without a pre-built binary): starts the frozen binary as a
+      subprocess, polls a connect-and-respond check until ready (with a timeout), exercises every
+      route named in the acceptance criteria (mocking/stubbing the AI provider for /propose-ai so
+      no real API key or network call is needed), asserts status codes and body shapes match the
+      source-run equivalents, then terminates the subprocess and asserts the port frees within a
+      reasonable timeout for the CHOSEN (onefile or onedir) mode.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: does the spec file's datas= list actually cover every template/static
+      file the app serves (cross-check against a real `find src/cleanup_tools/ui/templates
+      src/cleanup_tools/ui/static` listing, not just trust the spec author's memory)? Was
+      /propose-ai's route genuinely exercised against the frozen binary (not skipped as "too hard
+      to test"), given it's specifically named as the most likely import-scanning breakage point?
+      Is the onefile-vs-onedir DECISION backed by the actual measured kill+port-freed evidence
+      recorded in the implementation step, not just restated from the research brief's description
+      of the general gotcha?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+    packaging: PyInstaller
+  key_files:
+    - path: src/cleanup_tools/ui/app.py
+      purpose: "run_server(adapter, queue_path=None, host=LOCALHOST, port=DEFAULT_PORT, open_browser=True) (lines 45-79) is the exact function the sidecar entrypoint calls, with open_browser=False -- this parameter already exists, no code change needed to app.py itself for this story"
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "Full route list (@bp.route declarations throughout) -- the smoke test must exercise every one of these against the frozen binary, not a subset"
+    - path: pyproject.toml
+      purpose: "dependencies = [\"PyYAML\", \"Flask\", \"Pillow\", \"anthropic\"] -- the exact dependency set PyInstaller must successfully scan and bundle; anthropic pulls in httpx/pydantic transitively, which is the named hidden-import risk"
+    - path: tests/test_ui_routes.py
+      purpose: "Shows the expected response shapes for each route when run via Flask's test_client() -- the smoke test's assertions on the frozen binary's real HTTP responses should match this file's expectations"
+
+files_to_modify:
+  - file: packaging/pyinstaller/cleanup_ui.spec
+    change: "Create -- PyInstaller spec file with datas= for templates/static, hiddenimports as needed"
+  - file: packaging/pyinstaller/entrypoint.py
+    change: "Create -- thin script calling run_server(adapter, open_browser=False), the actual file PyInstaller's Analysis() targets"
+  - file: scripts/smoke_test_sidecar.py
+    change: "Create -- subprocess-driven smoke test exercising every route against a built binary"
+
+code_examples:
+  - title: "run_server's open_browser parameter -- already exists, the sidecar entrypoint uses it as-is"
+    file: src/cleanup_tools/ui/app.py
+    snippet: |
+      def run_server(
+          adapter: OSAdapter,
+          queue_path: Path | None = None,
+          host: str = LOCALHOST,
+          port: int = DEFAULT_PORT,
+          open_browser: bool = True,
+      ) -> dict:
+          ...
+          if open_browser:
+              webbrowser.open(f"http://{host}:{port}/")
+          app.run(host=host, port=port, debug=False, use_reloader=False)
+          return {"host": host, "port": port}
+  - title: "The AI-provider route whose import graph is the named highest-risk hidden-import surface"
+    file: src/cleanup_tools/ui/routes.py
+    snippet: |
+      from ..ai import CredentialsError, get_provider
+      from ..ai.wiring import DEFAULT_CAP as DEFAULT_AI_CAP
+      from ..ai.wiring import propose_for_other_bucket
+
+      @bp.route("/propose-ai", methods=["POST"])
+      def propose_ai():
+          adapter = _adapter()
+          try:
+              provider = get_provider()
+          except CredentialsError as exc:
+              return redirect(url_for("ui.dashboard", plan_error=str(exc)))
+          ...
+
+design_decisions:
+  - decision: "The --onefile vs --onedir choice is decided IN this story, via a real spike, not assumed before it starts"
+    rationale: "Task brief decision 1 / design-discussion.md Open Question 4: the tradeoff (onefile's distribution simplicity vs. its bootloader-PID kill gotcha, onedir's more-reliable signal forwarding vs. shipping a directory of files) genuinely affects downstream Tauri-shell crash/quit design (research-brief.md §6), so it needs real evidence from THIS project's actual build, not a guess carried in from research"
+  - decision: "Verification is a real subprocess-driven smoke test against the frozen binary, not a pip-list/import-review of the spec file"
+    rationale: "research-brief.md §2 and design-discussion.md §2a both explicitly warn that hidden-import breakage is the most likely 'works from source, breaks in the frozen binary' failure mode -- a static review of the spec file cannot catch a route that 500s at runtime because PyInstaller's scanner missed a dynamically-imported module"
+  - decision: "Entrypoint reuses run_server(adapter, open_browser=False) as-is rather than writing a new sidecar-specific server-start function"
+    rationale: "design-discussion.md §2a: this parameter already exists and does exactly what the sidecar needs (suppress the system-browser-open behavior); adding a second code path here would be needless duplication"
+
+risks:
+  - severity: high
+    description: "PyInstaller's import scanner misses a dynamically-imported module in anthropic/httpx/pydantic's dependency graph, causing /propose-ai to 500 only in the frozen binary, never caught by source-run tests"
+    mitigation: "The smoke test explicitly exercises /propose-ai against the real frozen binary (with a stubbed provider to avoid needing a real API key), not just the routes that were already known to work from source"
+  - severity: high
+    description: "Templates/static files omitted from datas=, causing every route to 404/TemplateNotFound in the frozen binary despite the source-run app working fine"
+    mitigation: "The review step explicitly cross-checks the spec's datas= list against a real directory listing of templates/ and static/, and the smoke test's route-by-route check would fail loudly on this -- described as an easy-to-forget, loud-failure risk in design-discussion.md §2a, not a subtle one"
+  - severity: medium
+    description: "Pillow's compiled libjpeg/libpng bindings are missing from a build machine, producing a binary that fails at import time for image-handling routes only"
+    mitigation: "Documented explicitly as a per-platform build-environment requirement (not a runtime requirement), separate from whatever Python environment is used for day-to-day development"
+  - severity: medium
+    description: "Real measured binary size turns out much larger than the research brief's 50-150MB estimate, with downstream implications for .dmg size and the Arch PKGBUILD's local build/fetch time"
+    mitigation: "This story's acceptance criteria require the REAL measured size to be recorded, explicitly not the brief's generic estimate -- surfaces the number early enough for the macOS/Arch packaging stories to plan around it rather than discovering it late"
+
+references:
+  - path: .pHive/epics/desktop-app-shell/docs/research-brief.md
+    relevant_excerpt: |
+      PyInstaller freezes the Python interpreter, the app's code, and all its dependencies (Flask,
+      Pillow, PyYAML, `anthropic`) into one executable... Real tradeoffs to flag explicitly...
+      PyInstaller binaries bundling a full CPython + Flask + Pillow + anthropic/httpx/pydantic stack
+      commonly land in the **50-150MB** range per platform (not verified against this project's
+      actual dependency tree -- worth a quick `pyinstaller --onefile` spike early to get a real
+      number before committing to a distribution story)
+  - path: .pHive/epics/desktop-app-shell/docs/design-discussion.md
+    relevant_excerpt: |
+      **`--onefile` vs `--onedir`** is not fully decided yet -- see Open Questions... One useful
+      finding while reading the actual code: `run_server()` in `src/cleanup_tools/ui/app.py`
+      already takes an `open_browser: bool = True` parameter. The sidecar's entrypoint doesn't need
+      a new CLI flag or a forked code path to suppress the "open a system browser tab" behavior --
+      it can call `run_server(adapter, open_browser=False)` as-is.
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md should note that a per-platform frozen sidecar binary is now buildable from this project's Flask UI (mention packaging/pyinstaller/ and how to build it), including the settled onefile-vs-onedir decision and why. .pHive/CONTEXT.md's Key paths section should add an entry for packaging/pyinstaller/ describing its role as the PyInstaller spec + entrypoint that later gets wired into the Tauri shell's externalBin."

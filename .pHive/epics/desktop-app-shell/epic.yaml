@@ -1,0 +1,61 @@
+name: desktop-app-shell
+title: Package the Flask review UI + Python CLI as a Tauri v2 desktop app (macOS + Arch Linux)
+description: >
+  Wraps the existing Flask approvals UI (src/cleanup_tools/ui/) + Python CLI in a native Tauri v2
+  desktop shell -- something launched from the Dock/app menu, not `cleanup approve` typed into a
+  terminal -- for macOS and Arch Linux, with Windows kept architecturally possible but explicitly
+  not built. Not a rewrite: nothing about sort/reclaim/queue.py/the AI-provider layer changes. The
+  Flask app stays the product; this epic freezes it into a per-platform PyInstaller sidecar binary,
+  fixes the one piece of current behavior that reads fine as a CLI/browser tool but reads as broken
+  inside a native app window (/plan/reclaim's ~2-minute, no-feedback du-shelling wait, fixed via a
+  background-thread job registry + polling, not SSE), and wraps both in a Tauri shell with hand-
+  rolled process-lifecycle/crash-quit handling (no polished official Tauri primitive exists for
+  this yet) and port-collision detection so the CLI's `cleanup approve` and the packaged app's
+  sidecar can coexist safely. Sequenced so the Flask progress-reporting fix and the PyInstaller
+  build spike can land first, in parallel, independent of each other and of the Tauri shell; the
+  Tauri shell is proven on macOS first before the Arch packaging story (which nobody in this
+  process can actually run/test) replicates the pattern.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: none
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main   # All three prior epics (harden-cleanup-cli, ai-approvals-ui,
+                       # port-remaining-scripts) are now merged into main, so this epic branches
+                       # from main directly -- unlike ai-approvals-ui/port-remaining-scripts, which
+                       # had to branch off a not-yet-merged prior epic's branch.
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [new-toolchain-rust-tauri, native-packaging, concurrency-shape-change, unverifiable-target-platform]
+  roster: [researcher, developer, tester, reviewer]
+  per_tag_reasoning:
+    new-toolchain-rust-tauri: "This is the first epic touching a genuinely new toolchain (Rust/Tauri) with zero internal codebase precedent -- every prior epic (harden-cleanup-cli, ai-approvals-ui, port-remaining-scripts) built on an existing Python pattern already established in-repo (the OS-adapter shape, the AI-provider interface shape, the dry-run/--go/--from-queue convention); the two Tauri/Rust-heavy stories in this epic have research/implement steps that explicitly cite external prior art (the dieharders example repos, current Tauri v2 docs) instead of internal files, because there are none to cite"
+    native-packaging: "First epic requiring real per-platform build environments (macOS, Arch/Linux) -- no CI/build-pipeline dependency has existed in this project until now; PyInstaller's per-platform build-machine requirement and Tauri's per-target-triple sidecar naming both reinforce this as a genuinely new kind of infrastructure need, not just new code"
+    concurrency-shape-change: "The Flask progress-reporting story introduces this codebase's first background-thread + lock-guarded in-memory registry, and app.run(..., threaded=True) -- a real concurrency-shape change for a codebase that has been single-threaded-synchronous-request/response throughout every prior epic"
+    unverifiable-target-platform: "The Arch Linux packaging story is written knowing nobody in this planning/execution process has access to real Arch hardware -- its acceptance criteria are deliberately split between what the automated process can verify (PKGBUILD structure/syntax, code review against documented conventions) and what requires the project owner's own manual makepkg -si run and report-back, a distinction none of the three prior epics' stories needed to make"
+  confidence: high
+  gate_decisions:
+    grill: single-pass (loops.grill not configured; baseline default)
+    collaborative_review: "enabled (hive.config.yaml planning.collaborative_review: true)"
+    hv_planning: "ran (Large scope default), no user-facing gate -- design-discussion + H/V summarized directly to the user given their explicit preference for pace over ceremony ('don't have time to nitpick')"
+    structured_outline: "deliberately skipped despite Large scope -- horizontal-plan.md/vertical-plan.md plus the already-thorough research-brief.md/design-discussion.md were judged sufficient; user explicitly prioritized speed over full ceremony for this epic"
+
+stories:
+  - id: flask-progress-reporting
+    title: Add background-thread job/progress reporting and a health-check endpoint to the Flask UI
+    complexity: medium
+    depends_on: []
+  - id: pyinstaller-sidecar-build
+    title: Freeze the Flask UI into a per-platform PyInstaller sidecar binary, with an explicit onefile-vs-onedir spike
+    complexity: high
+    depends_on: []
+  - id: tauri-shell-macos
+    title: Build the Tauri v2 desktop shell (macOS) - sidecar lifecycle, health-check navigation, port-collision handling, and macOS packaging
+    complexity: high
+    depends_on: [pyinstaller-sidecar-build]
+  - id: arch-linux-packaging
+    title: Build a local-only Arch Linux PKGBUILD for the Tauri shell, honest about what can and can't be verified without Arch hardware
+    complexity: medium
+    depends_on: [tauri-shell-macos]
