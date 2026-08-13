@@ -1,0 +1,5 @@
+step_id: platform-verify
+status: skipped
+timestamp: "2026-08-11"
+notes: "Skipped per skip_when — sort.py is adapter-agnostic pure logic (list_dir/move/resolve_bucket), no new platform-specific code."
+artifacts: []

@@ -1,0 +1,14 @@
+step_id: review
+status: completed
+timestamp: "2026-08-11"
+review_verdict: needs_revision
+review_findings: >
+  Critical: (1) --go loop has no per-file error handling — a single missing/failed file
+  crashes the whole batch uncaught, worse than bash's loop-continues-on-mv-failure behavior,
+  and leaves no report of what did/didn't move. (2) move() silently overwrites an existing
+  same-named file already staged in _sorted/ — real data-loss path for recurring camera/
+  screenshot filenames across runs, directly contradicts "reversible staging" hard rule.
+  Improvements: no true end-to-end test of the flag-polarity fix through cli.main() (tested
+  only in two disjoint halves); nonexistent target dir silently returns empty plan instead of
+  erroring.
+artifacts: []

@@ -1,0 +1,10 @@
+step_id: research
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Confirmed sort-downloads.sh's maxdepth-1 + dotfile-exclusion + mkdir-p-then-mv behavior and
+  the flag-polarity bug being fixed. Confirmed list_dir(max_depth=0) matches the depth need but
+  doesn't filter dotfiles (caller must). Confirmed adapter.move() already does mkdir -p
+  internally. Flagged real gap: cli.py's COMMANDS dispatch only calls command_fn(adapter), no
+  args/config threading yet — needs generalizing for sort to receive dir/--go/config.
+artifacts: []

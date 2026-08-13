@@ -1,0 +1,17 @@
+step_id: backend-implement
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  pyproject.toml + src/cleanup_tools/ package skeleton created. OSAdapter ABC (9 abstract
+  methods) + MacOSAdapter + ArchLinuxAdapter implementations, stdlib-first per write-brief
+  guidance. get_adapter() factory. find_installed_app raises NotImplementedError on Arch.
+  pip install -e . succeeded; smoke-tested at REPL (ABC enforcement, factory OS-detection,
+  NotImplementedError on Arch, pattern matching all confirmed working).
+artifacts:
+  - pyproject.toml
+  - src/cleanup_tools/__init__.py
+  - src/cleanup_tools/adapters/__init__.py
+  - src/cleanup_tools/adapters/base.py
+  - src/cleanup_tools/adapters/macos.py
+  - src/cleanup_tools/adapters/arch_linux.py
+  - src/cleanup_tools/adapters/_util.py

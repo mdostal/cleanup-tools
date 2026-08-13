@@ -1,0 +1,8 @@
+step_id: platform-verify
+status: skipped
+timestamp: "2026-08-11"
+notes: >
+  Skipped per skip_when — list_subdirs/find_dirs are concrete/shared (pure os.walk, no
+  per-platform code), and cli.py/commands/survey.py are adapter-agnostic. No new
+  platform-specific code introduced by this story beyond what os-adapter already covers.
+artifacts: []

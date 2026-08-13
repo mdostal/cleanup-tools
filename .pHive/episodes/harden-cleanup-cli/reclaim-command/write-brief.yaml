@@ -1,0 +1,11 @@
+step_id: write-brief
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  5 categories mapped to adapter calls (junk/build-cache via find_dirs, junk-files via
+  list_dir+pattern, RECYCLE.BIN via exists()+delete, docker via is_docker_installed+subprocess,
+  orphaned-installers via find_installed_app). Master-paths check runs before any deletion in
+  any category, both-directions is_relative_to, distinct "refused" outcome. GB-reclaimed summed
+  pre-deletion per-entry, rolled into per-category + grand totals, docker's post-hoc amount kept
+  separate. --go and --docker both required for docker pruning.
+artifacts: []

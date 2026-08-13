@@ -1,0 +1,123 @@
+id: config-bucket-rules
+epic: harden-cleanup-cli
+title: Build the config loader and general bucket-rule mechanism
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [os-adapter]
+
+description: |
+  Build the config schema and loader that `sort` and `reclaim` (later stories) will consume:
+  a general bucket-rule mechanism (ext-set + optional filename-pattern → bucket, generalizing
+  bucket()'s case statement AND the screenshot override as one rule shape), search_roots, and
+  master_paths with a manually-set backed_up flag. Config lives at
+  ~/.config/cleanup-tools/config.yaml, with built-in defaults so commands work with zero config
+  file present. This story has no user-facing command output — it's pure config logic, tested
+  standalone.
+
+acceptance_criteria:
+  - "Given no config file exists, when the loader runs, then it returns built-in defaults that
+    reproduce every extension → bucket mapping from scripts/sort-downloads.sh's bucket()
+    function, including the screenshot filename-pattern override."
+  - "Given a config file exists at ~/.config/cleanup-tools/config.yaml with a custom bucket
+    rule, when the loader runs, then the custom rule is present alongside (or overriding, per
+    the story's chosen merge semantics) the defaults."
+  - "Given a malformed config file (invalid YAML), when the loader runs, then it raises a clear
+    error naming the file and the parse problem — it does not silently fall back to defaults."
+  - "Given a bucket-rule list, when matched against every extension in bucket()'s case statement
+    (png/jpg/jpeg/heic/gif/webp/tiff, dmg/pkg, mp4/mov/m4v/avi/mkv, pdf, zip/tar/gz/7z/rar,
+    csv/json/xlsx/xml/tsv/numbers, doc/docx/ppt/pptx/txt/md/pages/key, and the screenshot*
+    filename override), then every mapping resolves to the same bucket name bash produces today."
+  - "Verify via: `pytest tests/test_config.py -v` — all tests pass."
+
+steps:
+  - id: research
+    description: |
+      Re-read scripts/sort-downloads.sh's bucket() function (lines 5-10) and confirm every
+      extension→bucket mapping and the screenshot override's exact matching logic (image
+      extension AND filename starts with "screenshot", case-insensitive per line 13's
+      `tr A-Z a-z`).
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/config.py with a BucketRule dataclass (extensions: set[str],
+      filename_pattern: str | None, bucket: str), a MasterPath dataclass (path: str,
+      backed_up: bool), a Config dataclass (bucket_rules: list[BucketRule], search_roots:
+      list[str], master_paths: list[MasterPath]), a DEFAULT_CONFIG constant reproducing bash's
+      bucket() as rule data, and a load_config(path=None) function using the OS adapter's
+      read_file + resolve_home to find ~/.config/cleanup-tools/config.yaml (using PyYAML — add
+      as a dependency), returning defaults if absent, raising on malformed YAML.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_config.py: (1) defaults-only load reproduces every bucket() mapping
+      (parametrized over the full extension list), (2) a config file with a custom rule loads
+      correctly, (3) a malformed YAML file raises with a clear message, (4) master_paths'
+      backed_up flag round-trips correctly through load/save.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review that the bucket-rule schema genuinely generalizes both the plain-extension case AND
+      the screenshot filename-pattern case as one shape (not two special-cased code paths
+      pretending to be one schema) — this was the specific ask behind choosing "build a general
+      mechanism" over hardcoding.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+    config_format: yaml (PyYAML)
+  key_files:
+    - path: scripts/sort-downloads.sh
+      purpose: "bucket() (lines 5-10) is the exact logic being generalized into data"
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "read_file/resolve_home used to locate and load the config file"
+
+files_to_modify:
+  - file: src/cleanup_tools/config.py
+    change: "Create — BucketRule/MasterPath/Config dataclasses, DEFAULT_CONFIG, load_config()"
+  - file: tests/test_config.py
+    change: "Create — defaults, custom rules, malformed-file, master_paths round-trip tests"
+  - file: pyproject.toml
+    change: "Add PyYAML as a runtime dependency"
+
+code_examples:
+  - title: "The exact mapping being generalized into rule data"
+    file: scripts/sort-downloads.sh
+    snippet: |
+      bucket(){ case "$1" in
+        png|jpg|jpeg|heic|gif|webp|tiff) [[ "$2" == screenshot* ]] && echo screenshots || echo photos ;;
+        dmg|pkg) echo installers ;; mp4|mov|m4v|avi|mkv) echo videos ;;
+        pdf) echo pdfs ;; zip|tar|gz|7z|rar) echo archives ;;
+        csv|json|xlsx|xml|tsv|numbers) echo data ;; doc|docx|ppt|pptx|txt|md|pages|key) echo docs ;;
+        *) echo other ;; esac; }
+
+design_decisions:
+  - decision: "One rule shape (extensions + optional filename_pattern) covers both the plain case and the screenshot override, rather than a separate 'special cases' list"
+    rationale: "User explicitly chose 'build a small general mechanism now' over hardcoding, partly because this is the natural future plug point for AI-driven rules (later epic, not this one) — a single consistent shape is what makes that extension additive later"
+  - decision: "Config file location is ~/.config/cleanup-tools/config.yaml"
+    rationale: "design-discussion.md §3 step 4 — proceeding on this as the stated default since the tool operates against the user's real home directory, not this repo"
+
+risks:
+  - severity: low
+    description: "YAML round-tripping master_paths' backed_up flag could silently reorder or reformat the file on save, annoying if the user hand-edits it"
+    mitigation: "Test explicitly for round-trip stability (test 4 above), not just correctness of values"
+
+references:
+  - path: docs/REQUIREMENTS.md
+    relevant_excerpt: |
+      Config-driven ext→bucket map (extend the reference bucket()), plus content-aware rules
+      (a screenshot* png → screenshots, not photos)... The tool should refuse to delete flagged
+      "master" paths... until they're marked backed-up.
+
+cross_cutting:
+  - concern: documentation
+    action: "This story introduces the first config file the project has ever had. README.md and .pHive/CONTEXT.md's 'Key paths' section should both gain an entry for ~/.config/cleanup-tools/config.yaml so future readers know it exists and what it controls."

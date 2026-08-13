@@ -1,0 +1,107 @@
+id: sort-command
+epic: harden-cleanup-cli
+title: Port `sort` with fixed flag polarity, wired to the config's bucket rules
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [config-bucket-rules]
+
+description: |
+  Implement `cleanup sort [dir]` matching scripts/sort-downloads.sh's staging behavior, but fixed
+  to be dry-run by default with explicit `--go` to act (today's bash inverts this — it acts by
+  default unless `--dry` is passed). Bucket assignment comes from config-bucket-rules' rule
+  mechanism, not a hardcoded case statement.
+
+acceptance_criteria:
+  - "Given `cleanup sort <dir>` is run with no flags, when it completes, then no files were
+    moved and the would-move plan was printed — dry-run is the default, unlike today's bash."
+  - "Given `cleanup sort <dir> --go` is run, when it completes, then files were moved into
+    `<dir>/_sorted/<bucket>/` exactly as scripts/sort-downloads.sh would, for every extension in
+    the default bucket rules."
+  - "Given a file whose name starts with 'screenshot' and has an image extension, when sorted,
+    then it lands in the screenshots bucket, not photos — matching bash's override exactly."
+  - "Given a synthetic fixture directory mirroring docs/CLEANUP-PLAN.md's shapes (screenshots,
+    installers, pdfs, zips, mixed extensions), when `cleanup sort --go` is run against it, then
+    every file lands in the bucket the default config's rules specify, verified by an automated
+    test — not just eyeballed."
+  - "Verify via: `pytest tests/test_sort.py -v` — all tests pass."
+
+steps:
+  - id: research
+    description: |
+      Re-read scripts/sort-downloads.sh in full (all 16 lines) to confirm the exact staging
+      behavior (mkdir -p + mv, maxdepth 1, hidden-file exclusion via `! -name '.*'`) before
+      porting — this story must be behavior-equivalent except for the flag-polarity fix.
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/commands/sort.py: load config via config.load_config(), get the
+      adapter via adapters.get_adapter(), list_dir(target, max_depth=1) excluding dotfiles,
+      resolve each file's bucket via the config's bucket_rules, and move() into
+      `<dir>/_sorted/<bucket>/` only when --go is passed (default: print the plan, don't move).
+      Register the `sort` subcommand in cli.py with `dir` (positional, default from config's
+      search_roots) and `--go` (flag).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_sort.py: dry-run leaves a fixture directory unchanged; --go moves every
+      file to its correct bucket (parametrized over the full default rule set, including the
+      screenshot override); running against an empty directory does nothing and doesn't error.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm the flag-polarity fix is complete (no code path defaults to acting) and that this is called out explicitly in the story's own commit message, not silently shipped.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+  key_files:
+    - path: scripts/sort-downloads.sh
+      purpose: "Full behavior to port, except flag polarity"
+    - path: src/cleanup_tools/config.py
+      purpose: "load_config()/BucketRule from the completed config-bucket-rules story — DO NOT modify; if the schema doesn't fit, that's a review finding, not a silent edit here"
+
+files_to_modify:
+  - file: src/cleanup_tools/commands/sort.py
+    change: "Create — sort command implementation"
+  - file: src/cleanup_tools/cli.py
+    change: "Add sort subcommand registration (dir positional + --go flag)"
+  - file: tests/test_sort.py
+    change: "Create — dry-run/--go tests against a fixture directory, parametrized over default rules"
+
+code_examples:
+  - title: "Exact staging behavior being ported"
+    file: scripts/sort-downloads.sh
+    snippet: |
+      find "$DIR" -maxdepth 1 -type f ! -name '.*' | while read -r f; do
+        b=$(basename "$f"); ext="${b##*.}"; ext=$(echo "$ext" | tr A-Z a-z)
+        d="$DIR/_sorted/$(bucket "$ext" "$(echo "$b"|tr A-Z a-z)")"
+        if [ -n "$DRY" ]; then echo "$b -> $(basename "$d")/"; else mkdir -p "$d"; mv "$f" "$d/"; fi
+      done
+
+design_decisions:
+  - decision: "Flag polarity flips to dry-run-by-default / --go to act, breaking from today's bash's --dry-to-preview default"
+    rationale: "design-discussion.md §2 — docs/REQUIREMENTS.md's hard rule settles this in safe-reclaim.sh's favor; a user who's typed --go for reclaim should get the same meaning everywhere"
+
+risks:
+  - severity: medium
+    description: "Users of the old bash script (if anyone besides the author) would be surprised by the flag flip"
+    mitigation: "Called out explicitly in this story's commit message and in README.md's update (cross_cutting below), not a silent behavior change"
+
+references:
+  - path: .pHive/epics/harden-cleanup-cli/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 3: `sort`, wired to config... Running `cleanup sort [dir]` stages files into
+      `_sorted/<type>/` using the config's bucket rules, dry-run by default, --go to act
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's script table and workflow section reference scripts/sort-downloads.sh directly, including its --dry flag. Once cleanup sort ships, update both to point at the new command and its (flipped) flag convention, calling out the flip explicitly so a returning reader isn't caught off guard."

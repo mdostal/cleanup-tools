@@ -1,0 +1,20 @@
+run_id: harden-cleanup-cli-execute-os-adapter
+skill: execute
+timestamp: "2026-08-11"
+gate_lift_fired: false
+methodology: classic
+methodology_source: hive-config
+stories_completed: [os-adapter]
+stories_failed: []
+commits: ["4084cd0", "858ee55", "39b1637"]
+nonsensical_defaults: []
+warnings_emitted: 0
+notes: >
+  Full 19-node classic workflow run for story os-adapter (user chose "full 19-node workflow"
+  over lighter options). review verdict was needs_revision on round 1 (real findings: weak
+  is_docker_installed test, uncovered find_installed_app True branch, missing read_file/
+  write_file tests, no monkeypatch usage, code duplication) — fixed in fix-cycle round 1,
+  re-review passed. codex-review skipped (no codex-companion script shipped in this plugin
+  checkout; external_models.codex.enabled unset). Arch Linux platform-verify not executable
+  in this sandbox — flagged as a manual follow-up for the user on real hardware. No push,
+  no PR (partial epic — 1 of 5 stories done).

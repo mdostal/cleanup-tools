@@ -1,0 +1,9 @@
+step_id: write-brief
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  cli.py (argparse, subparsers, [project.scripts] entry point) dispatches to commands/*.py,
+  each taking an adapter param (mirrors config.py's testable pattern). survey command: 6
+  section functions, JSON-serializable dict output, CLI layer formats/prints. Extend OSAdapter
+  additively with list_subdirs() and find_dirs() before implementing survey's sections 3/4.
+artifacts: []

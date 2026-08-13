@@ -1,0 +1,15 @@
+step_id: review
+status: completed
+timestamp: "2026-08-11"
+review_verdict: needs_revision
+review_findings: >
+  Critical: (1) screenshot_count uses list_dir(max_depth=3) but should be max_depth=2 to match
+  find -maxdepth 3's convention (confirmed off-by-one against real find output) —
+  downloads_by_extension got the conversion right, screenshot_count didn't. (2) SEVERE: pure-
+  Python _dir_size (os.walk + per-file stat) took >2 minutes and had to be killed on a real
+  machine with a normal ~/Library — undermines the "quick read-only snapshot" premise entirely,
+  vs bash's du completing in seconds. Not caught by tests since all fixtures are tiny synthetic
+  trees. Improvements: find_dirs doesn't match find -prune's own-root-name-match edge case
+  (currently harmless, no caller hits it); COMMANDS dict vs subparsers dual-maintenance risk
+  for future sort/reclaim additions.
+artifacts: []

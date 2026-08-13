@@ -1,0 +1,22 @@
+run_id: harden-cleanup-cli-epic-close
+skill: execute
+timestamp: "2026-08-11"
+epic_id: harden-cleanup-cli
+stories_completed: [os-adapter, cli-skeleton-and-survey, config-bucket-rules, sort-command, reclaim-command]
+stories_failed: []
+version_bump: none
+gate_lift_fired: false
+methodology: classic
+total_tests: 146
+commits_on_branch: 17
+nonsensical_defaults: []
+warnings_emitted: 0
+notes: >
+  Full epic complete. Every story went through the full 19-node classic workflow with
+  independent adversarial review; 4 of 5 stories had real bugs caught and fixed in a fix-cycle
+  round before passing (os-adapter: weak test coverage x2 + duplication; config-bucket-rules:
+  bash-parity extension bug + non-idempotent round-trip; cli-skeleton-and-survey: depth
+  off-by-one + severe performance regression; sort-command: crash-on-partial-failure +
+  silent-overwrite data loss; reclaim-command: master-paths refusal bypass via relative
+  paths/case-insensitivity — the most serious finding of the epic). No push, no PR opened —
+  awaiting user decision (solo project, task_tracking.adapter unset).

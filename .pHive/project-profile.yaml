@@ -1,0 +1,153 @@
+project_name: "cleanup-tools"
+type: brownfield
+discovered: "2026-08-10"
+source: "README.md + docs/ + codebase scan (no CLAUDE.md present)"
+
+project_type: consumer-app  # framework | consumer-app | service
+has_ui: true  # no UI exists yet (pure bash scripts today) — set per north_star: a desktop UI is the planned direction
+
+ship_target:
+  kind: github-release
+  notes: "Repo has an existing GitHub remote (git@github.com:mdostal/cleanup-tools.git). Shipping = tagging a release there once the tool is packaged for others to download."
+
+# No CLAUDE.md exists yet. Rules below are synthesized from README.md and
+# docs/REQUIREMENTS.md — treat as authoritative until a CLAUDE.md is added.
+claude_md_summary: |
+  No CLAUDE.md present. Hard rules currently live in README.md / docs/REQUIREMENTS.md:
+  - Dry-run by default on anything destructive; explicit `--go` to act. Print exactly what will change.
+  - Never delete without a backup of masters (SMS backup, family footage, tax, patent, "desktop back").
+  - Stage, don't trash — uncertain files move to `_sorted/<type>/` or `_REVIEW/`, reversible.
+  - Secrets/wallet finder is paths-only — never print, log, copy, or transmit key material.
+  - No network, no telemetry — this touches personal files and must stay fully local.
+  No formal build/test/lint commands exist yet (plain bash scripts, run directly: `bash scripts/<name>.sh`).
+
+tech_stack:
+  languages: [bash]
+  frameworks: []
+  build_tools: []
+  package_managers: []
+  versions: {}
+  planned: "REQUIREMENTS.md calls for hardening into a packaged, testable Node/TS or Python CLI, with an optional local desktop UI later. Not yet started — current code is reference-quality bash."
+
+structure:
+  modules:
+    - name: scripts
+      purpose: "Reference-quality bash CLI tools: survey, sort-downloads, corral-screenshots, safe-reclaim, find-wallets, dedupe"
+      source: scripts/
+      tests: null
+    - name: docs
+      purpose: "Planning docs: the grounded cleanup plan (CLEANUP-PLAN.md) and the build-out spec for hardening the scripts (REQUIREMENTS.md)"
+      source: docs/
+      tests: null
+  entry_points:
+    - scripts/survey.sh
+    - scripts/sort-downloads.sh
+    - scripts/corral-screenshots.sh
+    - scripts/safe-reclaim.sh
+    - scripts/find-wallets.sh
+    - scripts/dedupe.sh
+
+architecture:
+  pattern: "Procedural bash scripts, no shared framework yet — each script is a standalone entry point"
+  di_framework: none
+  state_management: "Stateless CLI invocations; filesystem is the only state (buckets under _sorted/, _REVIEW/)"
+  navigation: n/a
+  data_layer: "Local filesystem only — no database, no network calls"
+
+conventions:
+  naming: "kebab-case script filenames matching the verb they perform (sort-downloads.sh, find-wallets.sh)"
+  file_organization: "Flat scripts/ directory, one script per concern; docs/ holds planning specs"
+  branching: "Single branch (main) so far, no branching convention established yet"
+  commit_messages: "One commit so far (\"Scaffold cleanup-tools: ...\"); no established convention yet"
+
+test_infrastructure:
+  unit:
+    framework: none
+    location: null
+    count: "0 files"
+    coverage_tool: none
+  integration:
+    framework: none
+    location: null
+  e2e:
+    framework: none
+    location: null
+    count: "0 flows"
+  mocking: none
+  test_commands: []
+
+ci_cd:
+  platform: none
+  workflows: []
+  gating: "None configured — no .github/workflows"
+
+documentation_found:
+  - path: README.md
+    content_summary: "Overview, safety principles, script table, workflow order, wallet-finding notes"
+  - path: docs/CLEANUP-PLAN.md
+    content_summary: "Grounded survey of the actual mess (disk/dir sizes) and a phased sort/reclaim plan"
+  - path: docs/REQUIREMENTS.md
+    content_summary: "Build-out spec: harden the reference scripts into a real packaged CLI (+ optional local UI), hard rules, wallet-finder signatures"
+
+existing_knowledge:
+  mcp_servers: []  # none declared at the project level (no .mcp.json); user-level global servers (posthog, qdrant-nomic, vibemon) exist but are not project-scoped
+  existing_skills: []  # no .claude/ directory in this project
+  existing_hooks: []   # no project-level hooks; global ~/.claude/settings.json hooks are unrelated to this project
+
+integrations:
+  cli_tools:
+    codex:
+      detected: true
+      path: "/Users/mdostal/.local/bin/codex"
+    linearis:
+      detected: false
+    frame0:
+      detected: false
+    maestro:
+      detected: false
+  mcp_servers:
+    posthog:
+      detected: true
+    firecrawl:
+      detected: false
+    context7:
+      detected: false
+    firebase:
+      detected: false
+    mobile-mcp:
+      detected: false
+  vaults:
+    obsidian:
+      detected: true
+      path: "~/Documents/obsidian"
+
+code_quality:
+  linters: []
+  formatters: []
+  pre_commit:
+    framework: null
+    hooks: []
+  code_snippets:
+    - path: scripts/survey.sh
+      pattern: read-only-snapshot-script
+      annotation: "Sequenced `du`/`find` calls printing labeled sections; no args, no writes — pure reporting."
+      lines: "1-8"
+    - path: scripts/safe-reclaim.sh
+      pattern: dry-run-by-default-destructive-script
+      annotation: "Reference pattern for every destructive script: no-op unless invoked with --go, otherwise only prints what would be deleted."
+      lines: "1-20"
+  test_first_signals:
+    co_located_tests: false
+    test_before_source: inconclusive
+    test_runner_in_precommit: false
+    bdd_keywords: false
+    test_absence: true
+
+project_maturity: "prototype (single-commit scaffold; reference-quality bash, no tests/CI/lint yet — matches REQUIREMENTS.md's framing of the scripts as 'the working reference' to be hardened)"
+
+north_star:
+  goal: "Ship a local-first desktop app anyone can download to clean up their Mac — configurable sort/reclaim rules and heuristics, reusable scripts, and a pluggable AI layer (bring-your-own API key/provider) to help decide what to do with ambiguous files. Near-term priority is making it work reliably as a local tool for the author first; packaging/distribution for other users is secondary."
+  audience: "The author first (personal Mac cleanup). Long-term: any Mac user who wants to declutter with their own custom rules and their own AI key."
+  expected_scale: "Single local user per run — a local desktop app, not a multi-user service. No concurrency concerns."
+  pain_points: "Desktop/Downloads/Documents clutter, 473+ loose screenshots, uncertainty about what's safe to delete, and the lost-wallet recovery need — all while keeping everything local/offline (no network, no telemetry, since this touches personal files)."
+  avoid: "Over-building for distribution/packaging before the local tool works reliably; any network or telemetry calls — the tool must stay fully local since it touches personal files."

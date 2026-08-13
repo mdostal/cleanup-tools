@@ -1,0 +1,19 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Fixed screenshot_count off-by-one (max_depth=2, boundary test added proving 2-deep included /
+  3-deep excluded). Fixed the severe performance bug: added OSAdapter.dir_size_bytes() shelling
+  out to `du -sk` (cross-platform-safe, unlike -sh's human-unit formatting differences),
+  replaced survey.py's per-file Python stat loop with it. Real-machine survey run went from
+  never-completing (killed after 2+ min) to 94.9s, now bounded by genuine disk I/O (bare du on
+  this machine's 212GB ~/Library alone takes ~41s) plus ~57 sequential du subprocess spawns —
+  a real, large improvement though not yet fully optimized (batching du calls across sibling
+  dirs, like the original bash's single multi-arg du invocation, would go further). 111/111
+  tests pass.
+artifacts:
+  - src/cleanup_tools/commands/survey.py
+  - src/cleanup_tools/adapters/base.py
+  - tests/test_survey.py
+  - tests/test_adapters.py

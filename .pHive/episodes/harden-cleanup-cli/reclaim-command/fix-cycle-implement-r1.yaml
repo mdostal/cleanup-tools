@@ -1,0 +1,15 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Added _resolve_loose (non-strict .resolve()), _same_path_ci (samefile primary, lowercase
+  string fallback for non-existent paths), _is_relative_to_ci (case-insensitive containment
+  with separator-boundary guard against /a/bc matching /a/b). Rewrote _master_path_refusal to
+  use resolved + case-insensitive comparison in both directions. 4 new regression tests
+  (relative path, ..-containing path, real on-disk case mismatch via samefile, filesystem-
+  independent unit tests of the helpers). 146/146 tests pass. Both original bypass scenarios
+  independently re-reproduced against the fixed code and confirmed closed.
+artifacts:
+  - src/cleanup_tools/commands/reclaim.py
+  - tests/test_reclaim.py

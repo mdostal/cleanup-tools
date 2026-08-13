@@ -1,0 +1,52 @@
+name: harden-cleanup-cli
+title: Harden cleanup-tools into a packaged local CLI
+description: >
+  Port survey/sort/reclaim from reference bash scripts into a packaged, tested Python CLI
+  running on macOS and Arch Linux, with a config-driven bucket-rule mechanism and a
+  cross-platform OS-adapter layer. find-wallets, dedupe, corral-screenshots, UI, and
+  AI-provider plumbing are explicitly deferred to later epics.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: none
+sidecar_retention: transient
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [cli-hardening, packaging, cross-platform-port, config-schema-design]
+  roster: [researcher, technical-writer, tpm, architect, reviewer]
+  per_tag_reasoning:
+    cli-hardening: "Core ask — port reference bash into a packaged CLI"
+    packaging: "Runtime/packaging choice (Python, pip-installable) is a real decision, not incidental"
+    cross-platform-port: "User-driven expansion mid-review: macOS + Arch Linux via a real OS-adapter, not a macOS-only note"
+    config-schema-design: "New config file + general bucket-rule mechanism, no existing in-repo pattern"
+  confidence: high
+  gate_decisions:
+    grill: single-pass (loops.grill not configured; baseline default)
+    collaborative_review: enabled (hive.config.yaml planning.collaborative_review: true)
+    hv_planning: lightweight (per tpm-lens review — resolving open questions + sequencing, not cross-team layer mapping)
+    gate_hv: not set (Medium scope auto-proceeds to stories after H/V collaborative review)
+
+stories:
+  - id: os-adapter
+    title: Build the OS-adapter interface (macOS + Arch Linux) and package skeleton
+    complexity: medium
+    depends_on: []
+  - id: cli-skeleton-and-survey
+    title: Build the CLI entry point and port `survey` as the first working command
+    complexity: low
+    depends_on: [os-adapter]
+  - id: config-bucket-rules
+    title: Build the config loader and general bucket-rule mechanism
+    complexity: medium
+    depends_on: [os-adapter]
+  - id: sort-command
+    title: Port `sort` with fixed flag polarity, wired to the config's bucket rules
+    complexity: medium
+    depends_on: [config-bucket-rules]
+  - id: reclaim-command
+    title: Port `reclaim` with master-paths refusal, orphaned-installer detection, GB reporting, and a gated Docker flag
+    complexity: high
+    depends_on: [config-bucket-rules]

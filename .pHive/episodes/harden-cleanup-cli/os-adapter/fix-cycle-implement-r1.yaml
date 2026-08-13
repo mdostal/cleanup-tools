@@ -1,0 +1,15 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Fixed both critical findings (is_docker_installed correctness via monkeypatch,
+  find_installed_app True-branch via injectable applications_dir) and all 3 improvements
+  (read_file/write_file tests, get_adapter Linux/unsupported-OS tests via monkeypatch,
+  de-duplicated macos.py/arch_linux.py into base.py — 9/10 methods now single-sourced).
+  23/23 tests pass (up from 15), no behavior change to prior passing tests.
+artifacts:
+  - src/cleanup_tools/adapters/base.py
+  - src/cleanup_tools/adapters/macos.py
+  - src/cleanup_tools/adapters/arch_linux.py
+  - tests/test_adapters.py

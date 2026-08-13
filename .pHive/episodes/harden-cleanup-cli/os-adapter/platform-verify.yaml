@@ -1,0 +1,8 @@
+step_id: platform-verify
+status: completed
+timestamp: "2026-08-11"
+platform_results:
+  macos: "pass — 15/15 pytest, re-run and confirmed independently"
+  arch_linux: "not executed — no Arch machine available in this sandbox; code reviewed only. Manual follow-up required: run `pytest tests/test_adapters.py -v` on real Arch hardware."
+notes: "Cross-platform story per enforcement rule 4 — ran despite skip_when's 'backend-only' heuristic, since this story is genuinely 2-platform."
+artifacts: []

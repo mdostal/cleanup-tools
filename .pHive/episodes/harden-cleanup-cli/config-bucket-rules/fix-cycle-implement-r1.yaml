@@ -1,0 +1,13 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  Fixed extension-less-filename divergence from bash (whole filename used as ext, matching
+  ${b##*.} exactly) and the load/save idempotency bug (strip trailing DEFAULT_BUCKET_RULES
+  block before re-appending, instead of blind prepend). Fixed null-YAML-key crashes (treated
+  as absent) and missing-per-rule-key raw KeyError (now a file-path-naming ValueError). 86/86
+  tests pass (76 + 10 new).
+artifacts:
+  - src/cleanup_tools/config.py
+  - tests/test_config.py

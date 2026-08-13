@@ -1,0 +1,9 @@
+step_id: write-brief
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  run(adapter, config, target_dir, go=False) -> dict pattern, _plan() computes {src,dest,bucket}
+  per file via list_dir(max_depth=0) + manual dotfile filter + config.resolve_bucket(); move()
+  only called when go=True. cli.py needs generalizing to thread dir/--go/config into sort's
+  dispatch (currently only passes adapter).
+artifacts: []

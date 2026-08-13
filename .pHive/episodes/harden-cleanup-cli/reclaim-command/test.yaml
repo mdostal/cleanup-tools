@@ -1,0 +1,14 @@
+step_id: test
+status: completed
+timestamp: "2026-08-11"
+test_results: "142 passed, 0 failed (133 pre-existing + 9 new)"
+notes: >
+  Bug found and fixed during test-writing: matches_pattern()'s no-glob fallback was a prefix
+  match, not exact match — meant ".DS_Storee" would incorrectly match ".DS_Store" and get
+  deleted under --go. Fixed to exact match. Master-paths refusal test (the single most
+  important safety property in the epic) covers 5 scenarios including reverse-nesting
+  direction, and was adversarially verified non-vacuous (disabled the check, confirmed the
+  test catches it, reverted).
+artifacts:
+  - tests/test_reclaim.py
+  - src/cleanup_tools/adapters/_util.py

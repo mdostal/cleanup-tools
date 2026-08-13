@@ -1,0 +1,16 @@
+step_id: backend-implement
+status: completed
+timestamp: "2026-08-11"
+notes: >
+  reclaim.py created: 4 filesystem categories (build_caches, os_junk, recycle_bin,
+  orphaned_installers) + docker (gated on both --go AND --docker), master-paths refusal
+  unconditional across all categories/both dry-run+--go, per-entry OSError isolation carried
+  forward from sort.py, GB-reclaimed summed pre-deletion (docker's post-hoc amount kept
+  separate). cli.py wired (reclaim subparser + COMMANDS entry). Smoke-tested against a real
+  /tmp fixture with a configured unbacked-up master path: --go correctly deleted the
+  unprotected node_modules + .DS_Store while the master-path-protected node_modules survived
+  untouched, confirmed on disk after the run. 133 existing tests still pass; test_reclaim.py
+  not written yet (next step).
+artifacts:
+  - src/cleanup_tools/commands/reclaim.py
+  - src/cleanup_tools/cli.py

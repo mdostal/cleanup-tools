@@ -1,0 +1,113 @@
+id: cli-skeleton-and-survey
+epic: harden-cleanup-cli
+title: Build the CLI entry point and port `survey` as the first working command
+status: pending
+complexity: low
+methodology: classic
+depends_on: [os-adapter]
+
+description: |
+  Create the `cleanup` CLI entry point with subcommand dispatch, and implement `cleanup survey`
+  as the first real command — read-only, no flags, JSON output. This is the end-to-end proof
+  that the OS adapter (prior story) and the packaging both work together on both platforms.
+
+acceptance_criteria:
+  - "Given the package is installed, when `cleanup survey` is run with no arguments, then it
+    prints valid JSON to stdout containing disk usage, home-dir top-level sizes, biggest
+    Documents/work repos, node_modules regenerable-space total, Downloads extension histogram,
+    and screenshot count — matching every section scripts/survey.sh produces today."
+  - "Given `cleanup survey` runs on macOS, when compared against `bash scripts/survey.sh`'s
+    output for the same machine, then the reported disk usage and screenshot count match."
+  - "Given `cleanup survey` runs on Arch Linux, when compared against equivalent manual
+    du/find/df commands, then the reported values match (this is the first real cross-platform
+    proof, since scripts/survey.sh itself never ran on Arch)."
+  - "Given `cleanup` is run with no subcommand, when it executes, then it prints usage help and
+    exits non-zero rather than erroring unhelpfully."
+  - "Verify via: `pytest tests/test_survey.py -v` — all tests pass."
+
+steps:
+  - id: research
+    description: |
+      Re-read scripts/survey.sh's 6 output sections and the os-adapter story's
+      src/cleanup_tools/adapters/base.py interface (from the completed prior story) to confirm
+      which adapter methods each section needs.
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/cli.py using Python's argparse (stdlib, no new dependency) with a
+      `cleanup` entry point registered in pyproject.toml's [project.scripts], dispatching to
+      subcommands. Create src/cleanup_tools/commands/survey.py implementing survey's 6 sections
+      via adapters.get_adapter(), returning a dict, with cli.py json.dumps'ing it to stdout
+      (indent=2, so it's still human-readable per design-discussion.md §3 step 3).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_survey.py asserting the returned dict's shape (all 6 keys present,
+      correct types) using a mocked adapter (don't hit the real filesystem in unit tests — the
+      manual real-machine check is a separate, non-automated step per verification strategy).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review cli.py's subcommand dispatch is extensible for sort/reclaim (later stories) without rework.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+    cli_framework: argparse (stdlib)
+  key_files:
+    - path: scripts/survey.sh
+      purpose: "The exact 6 sections to reproduce, in order"
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "The OS-adapter interface this command consumes (built in the prior story — DO NOT modify it here; if a gap is found, that's a finding for review, not a silent edit)"
+
+files_to_modify:
+  - file: src/cleanup_tools/cli.py
+    change: "Create — entry point + subcommand dispatch"
+  - file: src/cleanup_tools/commands/__init__.py
+    change: "Create — empty package marker"
+  - file: src/cleanup_tools/commands/survey.py
+    change: "Create — survey command implementation"
+  - file: pyproject.toml
+    change: "Add [project.scripts] cleanup = cleanup_tools.cli:main"
+  - file: tests/test_survey.py
+    change: "Create — survey command tests against a mocked adapter"
+
+code_examples:
+  - title: "The 6 sections survey must reproduce"
+    file: scripts/survey.sh
+    snippet: |
+      echo "=== DISK ==="; df -h / | sed -n '1p;/disk/p'
+      echo "=== HOME top-level ==="; du -sh ~/Documents ~/Downloads ~/Desktop ... | sort -rh
+      echo "=== Documents/work (biggest repos) ==="; du -sh ~/Documents/work/*/ | sort -rh | head -15
+      echo "=== node_modules (regenerable) ==="; find ... -exec du -sk {} + | awk '...'
+      echo "=== Downloads by type ==="; find ~/Downloads -maxdepth 1 -type f | sed 's/.*\.//' | ...
+      echo "=== screenshots across home ==="; find ... -iname 'screenshot*' | wc -l
+
+design_decisions:
+  - decision: "JSON output is primary; human-readability comes from indent=2 pretty-printing, not a separate text-output mode"
+    rationale: "design-discussion.md §3 step 3, resolving grill finding H1 — REQUIREMENTS.md's JSON requirement is for 'the UI/other tools', not UI-gated, and a single JSON path avoids maintaining two output formats"
+  - decision: "argparse (stdlib), not a third-party CLI framework"
+    rationale: "Keeps the dependency footprint minimal for a 3-command CLI; revisit only if subcommand complexity grows beyond what argparse handles cleanly"
+
+risks:
+  - severity: low
+    description: "argparse's subcommand ergonomics could get awkward once reclaim's --docker flag (later story) is added alongside --go"
+    mitigation: "Confirm argparse's subparsers handle multiple flags cleanly in this story's implementation, before reclaim's story assumes it just works"
+
+references:
+  - path: .pHive/epics/harden-cleanup-cli/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 1: OS adapter + CLI skeleton + `survey`... Running `cleanup survey` on either macOS
+      or Arch Linux prints real disk/dir-size/screenshot-count JSON for that machine
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's script table currently documents scripts/survey.sh directly. Once cleanup survey works, add a note that it's the first ported command, without removing the bash script table yet (sort/reclaim aren't ported until later stories — the table should stay accurate for what still needs bash vs what's now the CLI)."
