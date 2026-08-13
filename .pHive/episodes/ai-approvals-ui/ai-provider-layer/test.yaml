@@ -1,0 +1,14 @@
+step_id: test
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  33 new tests, zero real network calls (autouse fixture monkeypatches socket.connect to
+  fail loudly). Covers every ProposalResult.kind, exact retry-count assertions (timeout-
+  then-success = 2 calls, timeout-then-timeout = exactly 2, never 3+), env-var-vs-file
+  key resolution order, and live permission-correction behavior against a real chmod'd
+  file. The one-real-API-call acceptance criterion was explicitly SKIPPED -- no live
+  Anthropic API key available in this environment; flagged for the project owner to run
+  manually before trusting this against a real account. 266 -> 299 (implement) -> 301
+  (post-fix-cycle) tests pass.
+artifacts:
+  - tests/test_ai_provider.py

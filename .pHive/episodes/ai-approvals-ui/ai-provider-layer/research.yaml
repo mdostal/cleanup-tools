@@ -1,0 +1,13 @@
+step_id: research
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Investigated the installed anthropic Python SDK source directly (0.121.0, fresh scratch
+  venv) for default telemetry/analytics/update-check behavior per the design-discussion's
+  named high-severity risk. Found none beyond x-stainless-* diagnostic headers riding the
+  one request already made; no atexit hooks, no background threads/tasks outside an
+  unrelated Managed Agents polling module never invoked here. Found and closed a real gap:
+  unparameterized Anthropic() can silently pick up OAuth-profile/WIF credentials -- mitigated
+  by always passing api_key= explicitly. Findings documented in anthropic_provider.py's
+  module docstring, not just asserted clean.
+artifacts: []

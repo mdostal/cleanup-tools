@@ -1,0 +1,8 @@
+step_id: doc-check
+status: completed
+timestamp: "2026-08-12"
+commit_ref: "7507972"
+doc_update_plan: "README.md Status section documents the standalone AI-provider layer, that it's not yet wired into anything, and API key setup. CONTEXT.md Conventions section documents the sole sanctioned exception to the no-network rule and its safeguards."
+artifacts:
+  - README.md
+  - .pHive/CONTEXT.md
