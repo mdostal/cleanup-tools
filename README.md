@@ -28,6 +28,14 @@ bash-only for now, pending future epics. The CLI now reads (and creates, if abse
 config file at `~/.config/cleanup-tools/config.yaml` for bucket rules, search roots, and master
 paths — sensible defaults apply if the file isn't there.
 
+An approval queue store (`src/cleanup_tools/queue.py`) now also exists, persisting proposed
+move/delete actions as YAML at `~/.config/cleanup-tools/approval_queue.yaml`, with file locking and
+atomic writes so it's safe to touch from multiple processes at once. This is foundation only, not
+yet usable end-to-end — nothing writes to it, no command reads from it (no `--from-queue` flag
+yet), and there's no UI to approve/reject entries. It's a separate file from `config.yaml` rather
+than a section within it, so a future UI process and CLI commands can read/write queue entries
+concurrently without contending over the same lock as unrelated config changes.
+
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
 > **previews by default** and needs `--go` to actually move files. If you're used to running the bash

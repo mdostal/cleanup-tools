@@ -46,6 +46,12 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
 - `~/.config/cleanup-tools/config.yaml` — optional persisted config (loaded/created by
   `src/cleanup_tools/config.py`) controlling bucket rules, search roots, and master paths; sensible
   defaults apply if absent.
+- `~/.config/cleanup-tools/approval_queue.yaml` — the approval queue store (`src/cleanup_tools/queue.py`):
+  proposed move/delete actions awaiting human approval, with file locking and atomic writes for safe
+  concurrent access. Kept as a separate file from `config.yaml` (not a section within it) so a future
+  UI and CLI commands can read/write queue entries concurrently without contending over the same file
+  lock as unrelated config changes. Foundation only as of this writing — nothing populates or consumes
+  it yet: no `--from-queue` flag, no UI.
 
 ## Conventions
 
