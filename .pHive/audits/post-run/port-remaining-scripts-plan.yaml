@@ -1,0 +1,9 @@
+run_id: port-remaining-scripts-plan
+skill: plan
+timestamp: "2026-08-13"
+gate_lift_fired: false
+methodology: classic
+methodology_source: epic-yaml
+story_specs_produced: 3
+nonsensical_defaults: []
+warnings_emitted: 0

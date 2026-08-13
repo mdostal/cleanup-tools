@@ -1,0 +1,21 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Created src/cleanup_tools/commands/corral_screenshots.py (_resolve_roots, _plan,
+  _run_from_queue, run() with three independent gates: go/from_queue/set_default_location).
+  Added OSAdapter.set_screenshot_save_location (macOS: real defaults-write + killall
+  SystemUIServer via subprocess.run; Arch: NotImplementedError). Added
+  _stage_corral_screenshots_plan + /plan/corral-screenshots to routes.py. Added the new
+  dashboard/nav link in all three template locations per the ui-design step's finding.
+  Registered corral-screenshots subcommand in cli.py.
+artifacts:
+  - src/cleanup_tools/commands/corral_screenshots.py
+  - src/cleanup_tools/adapters/base.py
+  - src/cleanup_tools/adapters/macos.py
+  - src/cleanup_tools/adapters/arch_linux.py
+  - src/cleanup_tools/ui/routes.py
+  - src/cleanup_tools/ui/templates/base.html
+  - src/cleanup_tools/ui/templates/dashboard.html
+  - src/cleanup_tools/ui/templates/queue.html
+  - src/cleanup_tools/cli.py

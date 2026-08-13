@@ -1,0 +1,317 @@
+id: corral-screenshots-command
+epic: port-remaining-scripts
+title: Port `corral-screenshots` (move + queue/UI staging) plus a gated screenshot-save-location OS capability
+status: pending
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  Implement `cleanup corral-screenshots [dir...] [--go] [--from-queue] [--set-default-location]`,
+  a port of scripts/corral-screenshots.sh (8 lines): move every `screenshot*` file (depth-limited
+  to 2) from Desktop/Downloads/Documents into `~/Pictures/Screenshots`, dry-run by default,
+  following `sort.py`'s dry-run/`--go`/`--from-queue` shape (not `reclaim.py`'s -- there is no
+  master-path check for moves today, per decision 7, and this story does not add one). Default
+  search roots are config-driven, reusing the existing `search_roots` setting `reclaim.py` already
+  reads (decision 3), not a hardcoded list. Adds a new UI plan-staging route so screenshot moves
+  get the same human-review path sort/reclaim moves already get. Separately, adds a new
+  `OSAdapter.set_screenshot_save_location` capability (macOS: the real `defaults write`/`killall
+  SystemUIServer` sequence; Arch Linux: `NotImplementedError`) gated behind its own explicit CLI
+  flag, `--set-default-location`, independent of `--go` (decision 1) -- this is a categorically
+  more invasive side effect (a live system-process restart) than anything else this tool does, and
+  never runs implicitly.
+
+acceptance_criteria:
+  - "Given `cleanup corral-screenshots` is run with no flags, when it completes, then nothing is
+    moved and the would-move plan is printed -- dry-run by default, matching sort.py's polarity."
+  - "Given `cleanup corral-screenshots --go` is run against a fixture tree with screenshot* files
+    under Desktop/Downloads/Documents (depth <= 2), when it completes, then every matched file is
+    moved into `~/Pictures/Screenshots/`, and the reported moved-count is exact (each entry's own
+    `moved: true/false` result), not bash's pre-move `~$n` approximation."
+  - "Given a fixture where a same-named file already exists at the destination, when
+    `corral-screenshots --go` runs, then that entry is skipped (not overwritten) and reported with
+    `dest_exists: true` / `moved: false` -- this IS bash's `mv -n` no-clobber behavior, made exact
+    instead of approximated, mirroring sort.py's dest_exists guard (sort.py:44-51,197-202)."
+  - "Given a config file with `search_roots` set, when `corral-screenshots` runs with no directory
+    arguments, then it scans exactly those configured roots (decision 3), not the hardcoded
+    Desktop/Downloads/Documents bash default; given no `search_roots` configured, it falls back to
+    Desktop/Downloads/Documents, matching bash exactly."
+  - "Given `cleanup corral-screenshots --go` is run WITHOUT `--set-default-location`, when it
+    completes, then no macOS system preference is touched and no process is restarted -- the
+    screenshot-location change never happens as a side effect of `--go` alone (decision 1)."
+  - "Given `cleanup corral-screenshots --set-default-location` is run on macOS (with or without
+    `--go`), when it completes, then `adapter.set_screenshot_save_location` is called with the
+    Pictures/Screenshots destination, and on the real adapter this writes the
+    `com.apple.screencapture` `location` preference and restarts `SystemUIServer`."
+  - "Given `cleanup corral-screenshots --set-default-location` is run against the Arch Linux
+    adapter, when it completes, then the resulting `NotImplementedError` is caught and reported as
+    `{\"skipped\": True, \"reason\": \"not supported on this OS\"}` rather than crashing the whole
+    command -- mirroring reclaim.py's `_orphaned_installers_category` fallback shape exactly."
+  - "Given `cleanup corral-screenshots --go` is used to move a set of screenshots, when
+    `cleanup approve` is started afterward and `/plan/corral-screenshots` is visited, then the same
+    plan entries are staged as `move` QueueEntry proposals into the approval queue, reviewable via
+    the existing single/bulk approve/reject/undo flow, and the dashboard shows a working 'Plan:
+    Corral Screenshots' link alongside the existing 'Plan: Sort' / 'Plan: Reclaim' links."
+  - "Given `/plan/corral-screenshots` is hit twice in a row, when the second hit completes, then no
+    duplicate pending entries are created for files already staged by the first hit (dedup via
+    `queue.stage_entries`, identical to `plan_sort`/`plan_reclaim`'s existing behavior)."
+  - "Given `cleanup corral-screenshots --from-queue` is run, when it completes, then only
+    already-approved `move` entries whose `src` falls under the resolved roots are executed, with
+    staleness re-checked immediately before acting, mirroring sort.py's `_run_from_queue`."
+  - "Verify via: `pytest tests/test_corral_screenshots.py tests/test_adapters.py tests/test_cli.py
+    tests/test_ui_routes.py -v` -- all tests pass."
+
+steps:
+  - id: research
+    description: |
+      Re-read scripts/corral-screenshots.sh in full (all 8 lines) to confirm the exact move
+      behavior (mkdir -p, maxdepth-2 find across 3 hardcoded roots, mv -n no-clobber, the
+      pre-move-count bug being deliberately NOT ported) and the exact screenshot-location side
+      effect (`defaults write com.apple.screencapture location ...` then `killall
+      SystemUIServer`). Re-read sort.py's full _plan/run/_run_from_queue shape (sort.py:23-212) --
+      this is the closer structural precedent, not reclaim.py's master-path-refusal machinery,
+      which is delete-specific and does not apply here (decision 7). Re-read survey.py's
+      _screenshot_count (survey.py:90-99) for the existing adapter.list_dir(d, max_depth=2,
+      pattern="screenshot*") precedent to reuse verbatim (minus Pictures, the destination not a
+      source). Re-read reclaim.py's _resolve_roots (reclaim.py:418-431) for the
+      CLI-dirs-win-else-config.search_roots-else-hardcoded-fallback precedent this story mirrors.
+      Re-read reclaim.py's _orphaned_installers_category (reclaim.py:262-299) for the
+      NotImplementedError-catch-and-skip fallback shape the screenshot-location capability reuses.
+      Re-read routes.py's _stage_sort_plan/plan_sort pair (routes.py:194-256) for the UI
+      plan-staging shape to mirror exactly.
+    agent: researcher
+  - id: ui-design
+    description: |
+      Delegate to /design for wireframes (atomic external call; see skills/design/SKILL.md).
+      Scope is deliberately narrow: (1) the one new dashboard link -- "Plan: Corral Screenshots"
+      alongside the existing "Plan: Sort" / "Plan: Reclaim" links in dashboard.html's empty-queue
+      state (dashboard.html:38) -- placement, label, and visual grouping with the existing two
+      links; (2) confirm the existing review-card rendering in queue.html (thumbnail + approve/
+      reject/undo, plus the AI-proposed badge convention) needs NO changes to correctly display a
+      `move` QueueEntry whose `group_key="corral-screenshots"` and `source="ui-plan-corral-
+      screenshots"` -- this is a verification step, not new design work, since corral-screenshots
+      entries are structurally identical `move` entries to sort's, just a different group_key/
+      source tag. No new page, no new interaction model -- this is the smallest possible wireframe
+      scope for a UI-touching story.
+    agent: ui-designer
+    delegates_to: design
+    depends_on: [research]
+  - id: implement
+    description: |
+      Create src/cleanup_tools/commands/corral_screenshots.py: _resolve_roots(adapter, config,
+      raw_dirs) mirroring reclaim.py's _resolve_roots exactly (CLI dirs win, else
+      config.search_roots, else Desktop/Downloads/Documents bash-parity fallback). _plan(adapter,
+      target_dirs) -> list[dict]: for each root, adapter.list_dir(d, max_depth=2,
+      pattern="screenshot*") (survey.py's _screenshot_count precedent), each match ->
+      {"src", "dest": pictures_screenshots_dir / name, "dest_exists"}, sort.py:39-51-shaped.
+      run(adapter, args=None): always computes the full plan; --go gates adapter.move() per entry
+      (dest_exists entries skipped, per-entry try/except OSError isolation, sort.py:197-210-
+      shaped); --from-queue executes approved move entries via a _run_from_queue helper
+      structurally identical to sort.py:65-149; --set-default-location (independent of --go and
+      --from-queue) calls adapter.set_screenshot_save_location(pictures_screenshots_dir) wrapped
+      in try/except NotImplementedError, returning {"skipped": True, "reason": "not supported on
+      this OS"} on Arch (reclaim.py:262-299-shaped). Add set_screenshot_save_location(path) -> None
+      as a new @abstractmethod on OSAdapter (adapters/base.py), following find_installed_app's
+      precedent (base.py:254-264) exactly. Implement it in MacOSAdapter (adapters/macos.py) via
+      subprocess.run for `defaults write com.apple.screencapture location <path>` then `killall
+      SystemUIServer` (mirroring reclaim.py's existing docker subprocess.run precedent). Implement
+      it in ArchLinuxAdapter (adapters/arch_linux.py) raising NotImplementedError with a clear
+      message (mirroring find_installed_app's ArchLinuxAdapter stub, arch_linux.py:19-35). Add
+      _stage_corral_screenshots_plan(adapter) to ui/routes.py, structurally identical to
+      _stage_sort_plan (routes.py:194-214): dry-run corral_screenshots.run(), convert each plan
+      entry into QueueEntry(action="move", src=str(item["src"]), dest=str(item["dest"]),
+      source="ui-plan-corral-screenshots", group_key="corral-screenshots",
+      plan_snapshot=queue_module.build_plan_snapshot(item["src"])), stage_entries(). Add
+      @bp.route("/plan/corral-screenshots") mirroring plan_sort/plan_reclaim (routes.py:246-265).
+      Add the one new dashboard.html link per the ui-design step's wireframe (dashboard.html:38).
+      Register the corral-screenshots subcommand in cli.py (dir nargs="*", --go, --from-queue,
+      --set-default-location, mirroring reclaim_parser's shape at cli.py:84-92) and add
+      corral_screenshots.run to COMMANDS.
+    agent: developer
+    depends_on: [ui-design]
+    inputs:
+      - source: step_output
+        step: ui-design
+        key: wireframe_brief
+  - id: test
+    description: |
+      Write tests/test_corral_screenshots.py: dry-run leaves a fixture tree unchanged; --go moves
+      every screenshot* match (depth <= 2) into Pictures/Screenshots with an exact moved count;
+      dest_exists entries are skipped, never overwritten; --from-queue executes only approved
+      move entries under the resolved roots with staleness re-checked; default roots resolve from
+      config.search_roots when configured, else Desktop/Downloads/Documents fallback, with
+      CLI-supplied dirs winning over both; --set-default-location is fully independent of --go
+      (test every combination: --go alone never calls set_screenshot_save_location; --set-
+      default-location alone calls it without moving files unless --go is also passed).
+      Add cases to tests/test_adapters.py: MacOSAdapter.set_screenshot_save_location's subprocess
+      calls are correctly formed (mocked, not touching the real machine's preferences);
+      ArchLinuxAdapter.set_screenshot_save_location raises NotImplementedError when called
+      directly (mirroring find_installed_app's existing direct-instantiation test pattern). Add
+      cases to tests/test_cli.py for the new subparser's dir/--go/--from-queue/--set-default-
+      location argument shapes. Add cases to tests/test_ui_routes.py: /plan/corral-screenshots
+      stages move entries with the right group_key/source tags, and hitting it twice creates no
+      duplicate pending entries (mirroring the existing plan_sort/plan_reclaim dedup test
+      coverage).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: is --set-default-location genuinely independent of --go in every code
+      path (no combination silently triggers the screenshot-location OS call without the flag
+      being explicitly passed) -- this is the single highest-stakes behavior in this story per
+      decision 1/Risk 7, since a live SystemUIServer restart is real and visible on the actual
+      machine. Does corral_screenshots.py correctly avoid reclaim.py's master-path-refusal
+      machinery entirely (per decision 7, this is intentional parity with sort.py's existing gap,
+      not a missed import)? Does the moved-count reporting genuinely fix bash's pre-move
+      approximation bug (verify via a dest_exists-skip test case, not just a happy-path count)?
+      Does the new /plan/corral-screenshots route follow _stage_sort_plan's shape exactly, with no
+      re-implemented scanning logic? Confirm find_installed_app's NotImplementedError-catch
+      pattern is followed correctly for set_screenshot_save_location on Arch.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+    web_framework: Flask (synchronous)
+  key_files:
+    - path: scripts/corral-screenshots.sh
+      purpose: "Full behavior to port, except the pre-move-count approximation (deliberately fixed, not preserved) and the screenshot-location side effect's gating (moved behind its own explicit flag, decision 1)"
+    - path: src/cleanup_tools/commands/sort.py
+      purpose: "The closer structural precedent for _plan/run/_run_from_queue -- reclaim.py's master-path-refusal machinery does NOT apply (decision 7); DO NOT import or adapt _master_path_refusal here"
+    - path: src/cleanup_tools/commands/reclaim.py
+      purpose: "_resolve_roots (418-431) for the config.search_roots-driven default-roots precedent; _orphaned_installers_category (262-299) for the NotImplementedError-catch-and-skip fallback shape"
+    - path: src/cleanup_tools/commands/survey.py
+      purpose: "_screenshot_count (90-99) is the existing adapter.list_dir(d, max_depth=2, pattern='screenshot*') precedent to reuse verbatim for the scan"
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "find_installed_app (254-264) is the abstract-method-with-one-real-implementation precedent set_screenshot_save_location follows exactly -- DO NOT modify any other existing method's interface here"
+    - path: src/cleanup_tools/queue.py
+      purpose: "QueueEntry/stage_entries/build_plan_snapshot consumed by the new UI route -- DO NOT modify its schema here; action='move' already fits without any change"
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_stage_sort_plan/plan_sort (194-256) is the exact shape _stage_corral_screenshots_plan/plan_corral_screenshots mirrors"
+    - path: src/cleanup_tools/ui/templates/dashboard.html
+      purpose: "Line 38's existing 'Plan: Sort / Plan: Reclaim' links get a third sibling link here -- no new template file"
+    - path: src/cleanup_tools/config.py
+      purpose: "Config.search_roots (already-existing field, no schema change) is read as this command's default roots per decision 3"
+
+files_to_modify:
+  - file: src/cleanup_tools/commands/corral_screenshots.py
+    change: "Create -- corral-screenshots command implementation: plan/move/--go/--from-queue/--set-default-location"
+  - file: src/cleanup_tools/adapters/base.py
+    change: "Add set_screenshot_save_location(path) -> None as a new abstract method"
+  - file: src/cleanup_tools/adapters/macos.py
+    change: "Implement set_screenshot_save_location: defaults write com.apple.screencapture location + killall SystemUIServer"
+  - file: src/cleanup_tools/adapters/arch_linux.py
+    change: "Implement set_screenshot_save_location: raise NotImplementedError with a clear message"
+  - file: src/cleanup_tools/ui/routes.py
+    change: "Add _stage_corral_screenshots_plan helper and /plan/corral-screenshots route"
+  - file: src/cleanup_tools/ui/templates/dashboard.html
+    change: "Add a third 'Plan: Corral Screenshots' link alongside the existing Plan: Sort / Plan: Reclaim links"
+  - file: src/cleanup_tools/cli.py
+    change: "Add corral-screenshots subcommand registration (dir/--go/--from-queue/--set-default-location) and COMMANDS entry"
+  - file: tests/test_corral_screenshots.py
+    change: "Create -- dry-run/--go/--from-queue/--set-default-location and config.search_roots default-resolution tests"
+  - file: tests/test_adapters.py
+    change: "Add set_screenshot_save_location tests for both MacOSAdapter (mocked subprocess) and ArchLinuxAdapter (NotImplementedError)"
+  - file: tests/test_cli.py
+    change: "Add corral-screenshots subparser argument-shape tests"
+  - file: tests/test_ui_routes.py
+    change: "Add /plan/corral-screenshots staging/dedup tests"
+
+code_examples:
+  - title: "Exact move behavior + screenshot-location side effect being ported"
+    file: scripts/corral-screenshots.sh
+    snippet: |
+      mkdir -p ~/Pictures/Screenshots
+      n=$(find ~/Desktop ~/Downloads ~/Documents -maxdepth 2 -iname 'screenshot*' 2>/dev/null | wc -l | tr -d ' ')
+      find ~/Desktop ~/Downloads ~/Documents -maxdepth 2 -iname 'screenshot*' -exec mv -n {} ~/Pictures/Screenshots/ \; 2>/dev/null
+      echo "moved ~$n screenshots -> ~/Pictures/Screenshots"
+      defaults write com.apple.screencapture location ~/Pictures/Screenshots && killall SystemUIServer 2>/dev/null
+  - title: "sort.py's dry-run/--go/dest_exists shape this command mirrors (NOT reclaim.py's master-path machinery)"
+    file: src/cleanup_tools/commands/sort.py
+    snippet: |
+      if go:
+          for entry in plan:
+              if entry["dest_exists"]:
+                  entry["moved"] = False
+                  entry["error"] = "destination already exists, skipped to avoid overwrite"
+                  continue
+              try:
+                  adapter.move(entry["src"], entry["dest"])
+              except OSError as exc:
+                  entry["moved"] = False
+                  entry["error"] = str(exc)
+              else:
+                  entry["moved"] = True
+                  entry["error"] = None
+  - title: "reclaim.py's NotImplementedError-catch-and-skip fallback shape, reused for the screenshot-location capability"
+    file: src/cleanup_tools/commands/reclaim.py
+    snippet: |
+      try:
+          ...
+          orphaned = [c for c in candidates if adapter.find_installed_app(c)]
+          ...
+          return {"entries": entries}, refusals
+      except NotImplementedError:
+          return {"skipped": True, "reason": "not supported on this OS"}, []
+  - title: "reclaim.py's config-driven default-roots precedent this command reuses (decision 3)"
+    file: src/cleanup_tools/commands/reclaim.py
+    snippet: |
+      def _resolve_roots(adapter, config, raw_dirs):
+          if raw_dirs:
+              return [Path(d) for d in raw_dirs]
+          if config.search_roots:
+              return [Path(r) for r in config.search_roots]
+          return [adapter.resolve_standard_dir("documents"), adapter.resolve_standard_dir("desktop")]
+
+design_decisions:
+  - decision: "The screenshot-save-location change is gated behind its own explicit CLI flag (--set-default-location), never bundled into --go"
+    rationale: "decision 1 (task brief) / research-brief.md Risk 7 / design-discussion Open Question 5: killall SystemUIServer restarts a running system process (Dock/menu-bar briefly disappear/relaunch) -- a categorically more invasive side effect than any file move/delete this tool has ever performed. Bundling it into every --go would be a bigger unannounced behavior change than any prior epic ever made; a separate flag makes the invasive act a deliberate, individually-chosen one."
+  - decision: "corral_screenshots.py follows sort.py's structure, not reclaim.py's -- no master-path-refusal check is added for screenshot moves"
+    rationale: "decision 7 (task brief) / research-brief.md Risk 6: reclaim.py's _master_path_refusal machinery is delete-specific and is never consulted by sort.py's move logic today either -- this is a pre-existing gap in sort, not a new one introduced by this story. Adding master-path awareness only to corral-screenshots (and not sort) would be an inconsistent, half-fix; out of scope for this epic per explicit decision."
+  - decision: "Default search roots are read from Config.search_roots (already-existing field, reclaim.py's precedent), not hardcoded to Desktop/Downloads/Documents"
+    rationale: "decision 3 (task brief) / design-discussion Open Question 4: reusing search_roots avoids inventing a screenshot-specific config key for what is conceptually the same 'where do I look for clutter' setting reclaim already uses -- accepting that one config edit now silently affects two commands, which is the explicitly signed-off tradeoff."
+  - decision: "The moved-count is exact (per-entry moved:true/false), not bash's pre-move ~n approximation"
+    rationale: "research-brief.md: because bash's n is counted before the move and mv -n can silently skip destination-collision files, the printed count is only an upper bound. sort.py's plan already has the right shape (entry['moved'] per-file) to report an exact post-move count -- reusing it here is a deliberate improvement over bash, not a behavior preserved for its own sake."
+  - decision: "UI integration reuses _stage_sort_plan's exact shape and a single flat group_key='corral-screenshots' (not a per-bucket key like sort's)"
+    rationale: "design-discussion §2 Story C: there is only one kind of action here (move to Pictures/Screenshots), so a per-bucket key would be over-engineering; open to revisiting if bulk-approving all N moves at once turns out too coarse in practice, but not a concern this story needs to solve preemptively"
+
+risks:
+  - severity: high
+    description: "killall SystemUIServer is a new category of invasiveness for this codebase -- every existing destructive action is scoped to file moves/deletes; a wrong gate here has the most direct blast radius (a live Dock/menu-bar restart on the real machine) of anything in this epic"
+    mitigation: "Gated behind its own explicit, independent flag (decision 1); the review step specifically verifies no code path triggers it without that flag; manual verification exercises it once deliberately before any unattended use (see vertical-plan.md §2 Slice C)"
+  - severity: medium
+    description: "corral-screenshots has no master-path awareness, because sort.py (its closest precedent) has none either -- a screenshot inside a configured, not-yet-backed-up master path would move with zero refusal check"
+    mitigation: "Explicitly signed off as matching sort's existing behavior today (decision 7) -- not a new gap this epic introduces, and out of scope to fix here; a future epic hardening sort's master-path awareness would fix this command too, once it exists"
+  - severity: low
+    description: "Reusing search_roots for corral-screenshots' defaults means a user editing that config value for reclaim's sake now silently also changes where screenshots are found, and vice versa"
+    mitigation: "Explicitly signed off (decision 3) as the accepted tradeoff vs. inventing a screenshot-specific config key; documented in the cross_cutting README/CONTEXT update below so it isn't a surprise to a returning reader"
+
+references:
+  - path: .pHive/epics/port-remaining-scripts/docs/research-brief.md
+    relevant_excerpt: |
+      This entire mechanism is macOS-only and has no Arch Linux equivalent... This is the exact
+      shape find_installed_app already establishes a precedent for: an OSAdapter-abstract,
+      macOS-only capability, with ArchLinuxAdapter raising NotImplementedError... the exact
+      fallback shape a ported corral-screenshots should reuse for this side effect on non-macOS.
+  - path: .pHive/epics/port-remaining-scripts/docs/design-discussion.md
+    relevant_excerpt: |
+      Lean: (b) [its own explicit flag] -- dropping it (c) leaves "stop new screenshots recurring"
+      half-solved, but bundling a Dock/menu-bar restart silently into every --go (a) is a bigger
+      behavior change than either prior epic ever made. This is the single most consequential
+      open question here.
+  - path: .pHive/epics/port-remaining-scripts/docs/horizontal-plan.md
+    relevant_excerpt: |
+      corral_screenshots (move + OS pref)... the only slice with real filesystem side effects
+      (moves) and the single most invasive OS-level side effect in the whole codebase (killall
+      SystemUIServer), gated behind its own explicit flag specifically because of that
+      invasiveness.
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's Status section (README.md:26) currently lists corral-screenshots as remaining bash-only, the Scripts table (README.md:98) describes scripts/corral-screenshots.sh directly, and the Workflow section (README.md:110) references it as step 4. Update all three once cleanup corral-screenshots ships: note it as a real ported command, add a `cleanup corral-screenshots [dir...] [--go] [--from-queue] [--set-default-location]` row to the Scripts table calling out the exact-count fix and the --set-default-location gating explicitly (a returning reader should not assume --go alone changes their screenshot save location), and update the Workflow section's step 4 reference. Also update .pHive/CONTEXT.md's Key paths section to note the new /plan/corral-screenshots UI route alongside the existing /plan/sort and /plan/reclaim description (CONTEXT.md:49-56)."

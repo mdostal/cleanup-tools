@@ -1,0 +1,10 @@
+step_id: research
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Re-read scripts/corral-screenshots.sh's exact move behavior and screenshot-location side
+  effect. Re-read sort.py's _plan/run/_run_from_queue shape (the closer precedent, not
+  reclaim.py's master-path machinery). Re-read survey.py's _screenshot_count precedent,
+  reclaim.py's _resolve_roots and _orphaned_installers_category fallback shapes, and
+  routes.py's _stage_sort_plan/plan_sort pair.
+artifacts: []

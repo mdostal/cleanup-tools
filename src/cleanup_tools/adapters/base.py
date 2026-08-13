@@ -261,3 +261,18 @@ class OSAdapter(ABC):
         interface, but not every OS has an equivalent notion of "orphaned
         installer file" (see ``ArchLinuxAdapter``).
         """
+
+    @abstractmethod
+    def set_screenshot_save_location(self, path: Path) -> None:
+        """Point the OS's built-in screenshot tool at ``path`` going forward.
+
+        This is a macOS-only concept: ``defaults write
+        com.apple.screencapture location <path>`` (plus restarting
+        SystemUIServer so it takes effect immediately) changes where new
+        screenshots are saved system-wide. It is declared here so callers
+        have a single interface, but not every OS has an equivalent
+        system-wide screenshot-location preference (see
+        ``ArchLinuxAdapter``), following ``find_installed_app``'s precedent
+        exactly for this "one real implementation, one NotImplementedError
+        stub" shape.
+        """

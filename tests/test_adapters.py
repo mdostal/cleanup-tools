@@ -340,6 +340,98 @@ def test_arch_linux_find_installed_app_raises_not_implemented(tmp_path):
         arch_adapter.find_installed_app(installer)
 
 
+# ---------------------------------------------------------------------------
+# 9b. set_screenshot_save_location() -- MacOSAdapter's subprocess calls are
+# always MOCKED here (never allowed to touch the real machine's actual
+# screencapture preference), and ArchLinuxAdapter's stub raises
+# NotImplementedError, mirroring find_installed_app's precedent exactly.
+# ---------------------------------------------------------------------------
+
+
+def test_macos_set_screenshot_save_location_calls_defaults_write_then_killall(
+    adapter, tmp_path, monkeypatch
+):
+    import subprocess
+
+    calls = []
+
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(args, **kwargs):
+        calls.append((list(args), kwargs))
+        return FakeCompletedProcess()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    target = tmp_path / "Pictures" / "Screenshots"
+    adapter.set_screenshot_save_location(target)
+
+    assert len(calls) == 2
+
+    first_args, first_kwargs = calls[0]
+    assert first_args == [
+        "defaults",
+        "write",
+        "com.apple.screencapture",
+        "location",
+        str(target),
+    ]
+    assert first_kwargs.get("check") is True
+
+    second_args, _second_kwargs = calls[1]
+    assert second_args == ["killall", "SystemUIServer"]
+
+
+def test_macos_set_screenshot_save_location_defaults_write_failure_propagates(
+    adapter, tmp_path, monkeypatch
+):
+    import subprocess
+
+    def fake_run(args, **kwargs):
+        if args[0] == "defaults":
+            raise subprocess.CalledProcessError(1, args)
+        raise AssertionError("killall must not run when defaults write fails")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        adapter.set_screenshot_save_location(tmp_path / "Pictures" / "Screenshots")
+
+
+def test_macos_set_screenshot_save_location_killall_failure_does_not_raise(
+    adapter, tmp_path, monkeypatch
+):
+    # killall is deliberately NOT check=True -- SystemUIServer might not be
+    # running, and that must be a cosmetic non-issue, not a raised error.
+    import subprocess
+
+    class FakeCompletedProcess:
+        def __init__(self, returncode):
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = ""
+
+    def fake_run(args, **kwargs):
+        if args[0] == "defaults":
+            return FakeCompletedProcess(0)
+        return FakeCompletedProcess(1)  # killall "failing" (nonzero), no check=True
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    # Must not raise.
+    adapter.set_screenshot_save_location(tmp_path / "Pictures" / "Screenshots")
+
+
+def test_arch_linux_set_screenshot_save_location_raises_not_implemented(tmp_path):
+    arch_adapter = ArchLinuxAdapter()
+
+    with pytest.raises(NotImplementedError):
+        arch_adapter.set_screenshot_save_location(tmp_path / "Pictures" / "Screenshots")
+
+
 # 10. get_adapter() returns MacOSAdapter on Darwin
 def test_get_adapter_returns_macos_adapter_on_darwin():
     assert platform.system() == "Darwin"

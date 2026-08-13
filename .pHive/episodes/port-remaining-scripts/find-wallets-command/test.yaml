@@ -1,0 +1,12 @@
+step_id: test
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  45 new tests: pattern-fidelity checks (13 -> corrected to 14 filename patterns, 4 content
+  regex alternatives, positive+negative fixtures for each), the highest-stakes check
+  (json.dumps of run()'s full output against real secret-shaped fixtures, asserting zero
+  leaked substrings), node_modules/Library-Caches exclusion, home-default vs explicit-root,
+  unreadable-directory graceful degradation. 327 -> 372 (implement) -> 373
+  (post-fix-cycle) tests pass.
+artifacts:
+  - tests/test_find_wallets.py

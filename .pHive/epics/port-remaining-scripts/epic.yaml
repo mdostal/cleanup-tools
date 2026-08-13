@@ -1,0 +1,50 @@
+name: port-remaining-scripts
+title: Port the remaining bash scripts (find-wallets, dedupe, corral-screenshots)
+description: >
+  Ports the last three bash-only scripts into the packaged cleanup_tools CLI: find-wallets (a
+  read-only crypto-wallet-artifact scanner, paths-only by structural design, never matched secret
+  content) and dedupe (a read-only, two-stage size-then-hash duplicate-file finder using full
+  uncapped SHA-256) both land as CLI-only commands with no queue/UI surface; corral-screenshots
+  (moves screenshots into ~/Pictures/Screenshots, plus an opt-in macOS-only screenshot-save-location
+  system-preference change) graduates into the same dry-run/--go/--from-queue/queue-staging/UI-route
+  pattern harden-cleanup-cli's sort/reclaim and ai-approvals-ui's approvals UI already established.
+  Every extension point needed (OSAdapter ABC, QueueEntry/stage_entries, the /plan/* route pattern,
+  the dry-run/--go convention) already exists from the two prior epics and is being followed, not
+  invented — no new subsystem, three independently shippable stories with no dependency between
+  them.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: none
+sidecar_retention: committed
+
+git_flow:
+  base_branch: feat/ai-approvals-ui
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [bash-to-python-port, security-sensitive-scanning, os-adapter-extension]
+  roster: [researcher, developer, tester, reviewer]
+  per_tag_reasoning:
+    bash-to-python-port: "Core ask across all three stories — every pattern needed (survey.py's read-only shape, sort.py's dry-run/--go/--from-queue shape) has a direct in-repo precedent, not new design space"
+    security-sensitive-scanning: "find-wallets' safety property (never expose matched secret content) is structural, not conventional — the research brief and design discussion both flag this as the epic's highest-stakes correctness requirement outside of the screenshot-location side effect"
+    os-adapter-extension: "corral-screenshots adds one new OSAdapter capability (set_screenshot_save_location), following find_installed_app's existing macOS-real/Arch-NotImplementedError precedent exactly — narrow, additive extension, not a redesign"
+  confidence: high
+  gate_decisions:
+    grill: single-pass (loops.grill not configured; baseline default)
+    collaborative_review: "enabled (hive.config.yaml planning.collaborative_review: true)"
+    hv_planning: "ran (Medium scope default), no user-facing gate — collaborative review only, per hive.config.yaml planning.collaborative_review without --gate-hv"
+    structured_outline: not required (Medium scope)
+
+stories:
+  - id: find-wallets-command
+    title: Port `find-wallets` as a read-only, structurally leak-proof wallet-artifact scanner
+    complexity: medium
+    depends_on: []
+  - id: dedupe-command
+    title: Port `dedupe` as a read-only, two-stage size-then-hash duplicate finder with full SHA-256
+    complexity: medium
+    depends_on: []
+  - id: corral-screenshots-command
+    title: Port `corral-screenshots` (move + queue/UI staging) plus a gated screenshot-save-location OS capability
+    complexity: high
+    depends_on: []

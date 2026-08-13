@@ -1,0 +1,21 @@
+step_id: ui-design
+status: completed
+timestamp: "2026-08-13"
+delegates_to: design
+notes: >
+  Narrow wireframe check confirmed queue.html/dashboard.html rendering is fully dynamic (no
+  hardcoded group_key allowlist, source-prefix check correctly falls back to the existing
+  "Manual" badge for the new source tag -- expected, not a defect). Real finding: the new
+  "Plan: Corral Screenshots" link needed to be added in three places, not just the
+  dashboard's empty-state text as the story spec assumed -- the persistent nav in base.html,
+  plus the two empty-queue-state sentences in dashboard.html and queue.html. Folded into the
+  implement step.
+wireframe_brief: >
+  Add "Plan: Corral Screenshots" as a third plain-text link (zero visual differentiation
+  from its siblings, matching the existing Sort/Reclaim convention) in base.html's nav right
+  after "Plan: Reclaim" and before "Propose with AI", plus the two empty-queue-state
+  sentences in dashboard.html/queue.html. No new page, no new interaction model, no
+  queue.html/dashboard.html rendering-logic changes needed -- confirmed via close reading of
+  _group_entries, _is_ai_source, and is_image_entry, none of which branch on group_key or
+  source in a way that would mis-render an unfamiliar value.
+artifacts: []

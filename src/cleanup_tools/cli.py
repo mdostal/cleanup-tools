@@ -1,7 +1,8 @@
 """Command-line entry point for cleanup-tools.
 
 Wires up a single top-level argparse parser with one subparser per command
-(``survey``, ``sort``, ``reclaim``, ``propose-ai``, and ``approve``).
+(``survey``, ``sort``, ``reclaim``, ``find-wallets``, ``dedupe``,
+``propose-ai``, and ``approve``).
 ``main()`` builds one :class:`~cleanup_tools.adapters.base.OSAdapter` for the
 whole invocation, dispatches to the matching command module's
 ``run(adapter, args)`` function -- passing the parsed argparse namespace so
@@ -31,7 +32,7 @@ import sys
 from pathlib import Path
 
 from . import adapters
-from .commands import reclaim, sort, survey
+from .commands import corral_screenshots, dedupe, find_wallets, reclaim, sort, survey
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -116,6 +117,78 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    corral_screenshots_parser = subparsers.add_parser(
+        "corral-screenshots",
+        help=(
+            "Move loose screenshot files into ~/Pictures/Screenshots, and "
+            "(with --set-default-location) stop new ones landing on the "
+            "Desktop (dry-run unless --go)."
+        ),
+    )
+    corral_screenshots_parser.add_argument(
+        "dir",
+        nargs="*",
+        default=None,
+        help=(
+            "Root directories to scan (default: configured search_roots, "
+            "else Desktop, Downloads, and Documents)."
+        ),
+    )
+    corral_screenshots_parser.add_argument(
+        "--go",
+        action="store_true",
+        default=False,
+        help="Actually move files (default: dry-run, plan only).",
+    )
+    corral_screenshots_parser.add_argument(
+        "--from-queue",
+        action="store_true",
+        default=False,
+        help=(
+            "Execute already-approved 'move' entries from the approval "
+            "queue whose src falls under a resolved root, instead of "
+            "computing a fresh plan."
+        ),
+    )
+    corral_screenshots_parser.add_argument(
+        "--set-default-location",
+        action="store_true",
+        default=False,
+        help=(
+            "Also set the macOS default screenshot save location to "
+            "~/Pictures/Screenshots. Independent of --go/--from-queue -- "
+            "never triggered by either of them alone."
+        ),
+    )
+
+    find_wallets_parser = subparsers.add_parser(
+        "find-wallets",
+        help=(
+            "Read-only scan for crypto-wallet artifacts by filename and "
+            "content signature (never writes/moves/deletes anything)."
+        ),
+    )
+    find_wallets_parser.add_argument(
+        "root",
+        nargs="?",
+        default=None,
+        help="Root directory to scan (default: the user's home directory).",
+    )
+
+    dedupe_parser = subparsers.add_parser(
+        "dedupe",
+        help=(
+            "Read-only scan for duplicate files by size then full-content "
+            "hash (never writes/moves/deletes anything)."
+        ),
+    )
+    dedupe_parser.add_argument(
+        "dir",
+        nargs="?",
+        default=None,
+        help="Directory to scan (default: the platform Downloads dir).",
+    )
+
     propose_ai_parser = subparsers.add_parser(
         "propose-ai",
         help=(
@@ -164,6 +237,9 @@ COMMANDS = {
     "survey": survey.run,
     "sort": sort.run,
     "reclaim": reclaim.run,
+    "corral-screenshots": corral_screenshots.run,
+    "find-wallets": find_wallets.run,
+    "dedupe": dedupe.run,
 }
 
 

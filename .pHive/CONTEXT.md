@@ -24,12 +24,19 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   files land here for a human decision.
 - **Dry-run / `--go`** — the safety convention for every destructive script: default run only prints
   what *would* change; the literal `--go` flag is required to actually act.
-- **Wallet finder** — `scripts/find-wallets.sh`: scans for crypto-wallet artifacts by filename
-  (`wallet.dat`, `keystore*`, `UTC--*`, `.kdbx`, seed/mnemonic files) and content signatures (BIP39
-  phrases, `xprv`, PEM private keys, Ethereum keystore JSON). **Paths-only** — never prints, logs, or
-  transmits the matched secret/key material.
-- **Dedupe** — `scripts/dedupe.sh`: lists duplicate files by size+hash so the user can decide what to
-  remove; never auto-deletes.
+- **Wallet finder** — `scripts/find-wallets.sh`, ported as `cleanup find-wallets [root]`
+  (`src/cleanup_tools/commands/find_wallets.py`): scans for crypto-wallet artifacts by filename (14
+  patterns: `wallet.dat`, `keystore*`, `UTC--*`, `.kdbx`, seed/mnemonic files, and more) and content
+  signatures (BIP39 phrases, `xprv`, PEM private keys, Ethereum keystore JSON). **Paths-only** —
+  never prints, logs, or transmits the matched secret/key material; in the Python port this is
+  structural (the matched-content object is never bound to a name that outlives its truthiness
+  check), not just a convention.
+- **Dedupe** — `scripts/dedupe.sh`, ported as `cleanup dedupe [dir]`
+  (`src/cleanup_tools/commands/dedupe.py`): lists duplicate files via a two-stage size-then-hash
+  filter so the user can decide what to remove; never auto-deletes, never touches the approval
+  queue. The Python port deliberately hashes with full, uncapped SHA-256 (not bash's SHA-1
+  truncated to 48 bits, and not `queue.py`'s separate 8-MiB-capped hash helper) since dedupe's
+  entire output is a duplicate-ness identity claim, not an auxiliary staleness check.
 - **Keep-clean** — the not-yet-built recurring triage loop (see `docs/REQUIREMENTS.md`) that re-runs
   survey, flags when Downloads/Desktop cross a clutter threshold, and offers a one-tap sort.
 
@@ -50,10 +57,15 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   proposed move/delete actions awaiting human approval, with file locking and atomic writes for safe
   concurrent access. Kept as a separate file from `config.yaml` (not a section within it) so the UI
   and CLI commands can read/write queue entries concurrently without contending over the same file
-  lock as unrelated config changes. `cleanup sort --from-queue` / `cleanup reclaim --from-queue`
-  execute approved entries; `cleanup approve` (`src/cleanup_tools/ui/`) is the localhost-only Flask
-  UI that stages (`/plan/sort`, `/plan/reclaim`) and reviews (approve/reject/undo) entries — it never
-  executes, execution is always a separate deliberate CLI step.
+  lock as unrelated config changes. `cleanup sort --from-queue` / `cleanup reclaim --from-queue` /
+  `cleanup corral-screenshots --from-queue` execute approved entries; `cleanup approve`
+  (`src/cleanup_tools/ui/`) is the localhost-only Flask UI that stages (`/plan/sort`, `/plan/reclaim`,
+  `/plan/corral-screenshots`) and reviews (approve/reject/undo) entries — it never executes,
+  execution is always a separate deliberate CLI step. `corral-screenshots` also introduces
+  `OSAdapter.set_screenshot_save_location` (macOS-only, `NotImplementedError` on Arch), the most
+  invasive OS-level side effect in this codebase (restarts `SystemUIServer`) — gated behind its own
+  `--set-default-location` CLI flag, structurally independent of `--go`/`--from-queue` and
+  unreachable from the UI.
 
 ## Conventions
 

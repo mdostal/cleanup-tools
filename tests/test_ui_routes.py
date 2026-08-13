@@ -243,6 +243,52 @@ def test_plan_reclaim_does_not_stage_master_path_refused_candidates(adapter, cli
     assert not any(e.src == str(junk) for e in entries)
 
 
+def test_plan_corral_screenshots_stages_move_entries_and_is_idempotent(adapter, client, home):
+    desktop = home / "Desktop"
+    desktop.mkdir()
+    shot = desktop / "screenshot-2024.png"
+    shot.write_bytes(b"shot-bytes")
+
+    resp1 = client.get("/plan/corral-screenshots")
+    assert resp1.status_code == 302
+
+    entries_after_first = _reload_queue(adapter)
+    assert len(entries_after_first) == 1
+    entry = entries_after_first[0]
+    assert entry.action == "move"
+    assert entry.status == "pending"
+    assert entry.source == "ui-plan-corral-screenshots"
+    assert entry.group_key == "corral-screenshots"
+    assert entry.src == str(shot)
+    assert entry.dest == str(home / "Pictures" / "Screenshots" / "screenshot-2024.png")
+
+    # Hitting it again must not create a duplicate pending entry for the
+    # same src -- stage_entries()'s existing dedup, exercised through the
+    # route, mirroring plan_sort/plan_reclaim's own idempotency tests.
+    resp2 = client.get("/plan/corral-screenshots")
+    assert resp2.status_code == 302
+
+    entries_after_second = _reload_queue(adapter)
+    assert len(entries_after_second) == 1
+    assert entries_after_second[0].id == entry.id
+
+    # The route only ever stages a dry-run plan -- it must never move a
+    # file or touch the OS screenshot-location preference.
+    assert shot.exists()
+    assert not (home / "Pictures" / "Screenshots" / "screenshot-2024.png").exists()
+
+
+def test_plan_corral_screenshots_no_matches_stages_nothing_without_crashing(
+    adapter, client, home
+):
+    # No Desktop/Downloads/Documents dirs created under the fake home at
+    # all -- corral_screenshots.run() must degrade to an empty plan rather
+    # than raising, and the route must still redirect cleanly.
+    resp = client.get("/plan/corral-screenshots")
+    assert resp.status_code == 302
+    assert _reload_queue(adapter) == []
+
+
 # ---------------------------------------------------------------------------
 # 3. /queue: lists pending entries only, as review cards.
 # ---------------------------------------------------------------------------

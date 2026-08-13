@@ -1,0 +1,12 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Created src/cleanup_tools/commands/find_wallets.py: literal filename patterns (14, not 13
+  as originally briefed -- corrected against the actual bash source) and 4-alternative
+  content regex, _by_filename/_by_content/run(). Leak-proofness made structural: Match
+  object never bound to a name outliving its truthiness check, .group() never called.
+  Registered find-wallets subcommand in cli.py (positional root, no --go/--from-queue).
+artifacts:
+  - src/cleanup_tools/commands/find_wallets.py
+  - src/cleanup_tools/cli.py

@@ -1,0 +1,8 @@
+step_id: doc-check
+status: completed
+timestamp: "2026-08-13"
+commit_ref: "d409348"
+doc_update_plan: "README.md Status section, a new callout on --set-default-location gating, the Scripts table, and the Workflow section all updated. CONTEXT.md's Key paths section updated to note /plan/corral-screenshots and the new set_screenshot_save_location adapter capability."
+artifacts:
+  - README.md
+  - .pHive/CONTEXT.md

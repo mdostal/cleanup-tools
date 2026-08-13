@@ -1,0 +1,39 @@
+run_id: port-remaining-scripts-epic-close
+skill: execute
+timestamp: "2026-08-13"
+epic_id: port-remaining-scripts
+stories_completed: [find-wallets-command, dedupe-command, corral-screenshots-command]
+stories_failed: []
+version_bump: none
+gate_lift_fired: false
+methodology: classic
+total_tests: 414
+commits_on_branch: 10
+nonsensical_defaults: []
+warnings_emitted: 0
+notes: >
+  Full epic complete, all 3 stories. Every story went through independent adversarial review
+  with real reproductions; two of three had real bugs caught and fixed before passing:
+  find-wallets-command (a filename-cap ordering bug where per-pattern draining could starve
+  later patterns once matches exceeded 200, diverging from bash's traversal-order selection
+  -- not a leak, a parity gap, fixed in one fix-cycle round) and dedupe-command (clean pass,
+  zero bugs found despite genuine adversarial effort -- the reviewer's own 10MiB same-prefix-
+  different-tail fixture and 210-file hash-call-count fixture both held up).
+  corral-screenshots-command, the epic's highest-risk story (the first command in this
+  codebase to introduce a live OS-level side effect -- restarting SystemUIServer via
+  killall), also passed clean: independent review gave the --set-default-location
+  independence property the highest scrutiny of the epic (own spy-adapter tests across every
+  flag combination, a full repo grep confirming exactly one production call site, explicit
+  confirmation the UI route's args=None convention makes it structurally unreachable from
+  any request data) and found no gaps.
+
+  find-wallets-command's leak-proofness property (matched secret content must never appear
+  anywhere in output) was independently re-verified with the reviewer's own canary-string
+  fixtures across success, exception, and unreadable-file code paths -- held up completely.
+
+  This epic closes the last gap in the original bash-to-Python port: every one of the six
+  original reference scripts (survey, sort-downloads, safe-reclaim, find-wallets, dedupe,
+  corral-screenshots) now has a real, tested, independently-reviewed Python CLI equivalent,
+  with corral-screenshots additionally wired into the approval-queue/UI infrastructure built
+  in the ai-approvals-ui epic. No push, no PR opened yet -- awaiting user decision (solo
+  project, task_tracking.adapter unset).
