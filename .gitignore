@@ -3,6 +3,10 @@ _REVIEW/
 *.log
 .DS_Store
 
+# Playwright MCP tooling's scratch output dir, created in the repo root
+# during interactive browser-testing sessions -- never project state.
+.playwright-mcp/
+
 # Python packaging/build artifacts
 __pycache__/
 *.pyc
@@ -14,6 +18,10 @@ dist/
 # never commit anything the wallet-finder might surface
 wallets-found.txt
 secrets*
+
+# Raw before/after media captures — real filenames/thumbnails visible,
+# needs blurring/cropping before anything here goes public. Local only.
+media/raw/
 
 # Hive: local session/runtime state, not project state
 .pHive/agent-complete/
@@ -29,3 +37,5 @@ secrets*
 .pHive/epics/harden-cleanup-cli/docs/*.html
 .pHive/epics/harden-cleanup-cli/index.html
 .pHive/epics/harden-cleanup-cli/docs/*.png
+!.pHive/epics/ai-approvals-ui/
+!.pHive/epics/ai-approvals-ui/**

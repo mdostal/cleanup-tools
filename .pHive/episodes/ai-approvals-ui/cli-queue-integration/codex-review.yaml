@@ -1,0 +1,5 @@
+step_id: codex-review
+status: skipped
+timestamp: "2026-08-12"
+notes: "Skipped — codex-companion script not shipped, external_models.codex.enabled unset."
+artifacts: []

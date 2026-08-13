@@ -1,0 +1,143 @@
+id: approvals-ui-core
+epic: ai-approvals-ui
+title: Build the Flask approvals UI - core CRUD + overview dashboard
+status: pending
+complexity: high
+methodology: classic
+depends_on: [approval-queue-store]
+
+description: |
+  Build the localhost-only Flask approvals UI: dashboard (with a DiskDrill-style overview —
+  bucket/category breakdown, sizes, counts, added at user sign-off), plan-trigger routes (with
+  staging dedup), single approve/reject/undo, and image thumbnails. No AI, no bulk actions, no
+  keyboard shortcuts yet (those are the next story). This story only touches the queue
+  (approval-queue-store) directly — it does NOT call --from-queue; execution stays a separate
+  CLI invocation the user runs themselves. This story was flagged for pre-exec wireframing by
+  ui-designer review (recorded in .pHive/cycle-state/ai-approvals-ui.yaml) — wireframe the
+  interaction model before writing route/template code.
+
+acceptance_criteria:
+  - "Given `cleanup approve` is run, when it starts, then a Flask server binds to 127.0.0.1
+    ONLY (verified via lsof/netstat, not just code review) and the default browser opens to it."
+  - "Given the dashboard route (GET /), when loaded, then it shows a bucket/category breakdown
+    of current queue entries with sizes and counts per group, plus per-status counts — not just
+    a flat status-count summary."
+  - "Given GET /plan/sort or GET /plan/reclaim is hit twice in a row, when the second hit
+    completes, then no duplicate pending entries were created for files already staged by the
+    first hit (dedup via queue.stage_entries)."
+  - "Given a pending queue entry for an image file, when its thumbnail route is requested, then
+    a resized thumbnail renders — the original full file is never served over HTTP."
+  - "Given POST /queue/<id>/approve or /reject, when called, then the entry's status updates
+    via queue.set_status and the change is reflected in the UI."
+  - "Given POST /queue/<id>/undo on an entry with prior history, when called, then the status
+    reverts to the previous value."
+  - "Verify via: `pytest tests/test_ui_routes.py tests/test_queue.py -v` — all tests pass, plus
+    a manual lsof/netstat check that the server is not reachable from another machine."
+
+steps:
+  - id: research
+    description: |
+      Read src/cleanup_tools/commands/survey.py's/config.py's existing patterns for
+      adapter-parameterized, testable functions to follow for route handlers. Read
+      src/cleanup_tools/queue.py's full API (from the completed approval-queue-store story).
+    agent: researcher
+  - id: ui-design
+    description: |
+      Delegate to /design for wireframes (atomic external call; see skills/design/SKILL.md).
+      Covers the dashboard overview layout, the single-entry review card (thumbnail + approve/
+      reject/undo), and how the interaction model will extend into bulk/keyboard/pagination in
+      the next story — wireframe both stories' scope together since they're one continuous UI,
+      even though implementation is split.
+    agent: ui-designer
+    delegates_to: design
+    depends_on: [research]
+  - id: implement
+    description: |
+      Create the Flask app (src/cleanup_tools/ui/app.py, routes.py, templates/), the `approve`
+      CLI subcommand (127.0.0.1 binding, browser auto-open), the dashboard's grouping/sizing
+      aggregation, plan-trigger routes with dedup, single approve/reject/undo routes, and
+      Pillow-based thumbnail generation/serving. Add Flask + Pillow to pyproject.toml.
+    agent: developer
+    depends_on: [ui-design]
+    inputs:
+      - source: step_output
+        step: ui-design
+        key: wireframe_brief
+  - id: test
+    description: |
+      Write tests/test_ui_routes.py using Flask's test client (no real server binding needed).
+      Cover route logic, dashboard aggregation math, staging dedup, thumbnail generation. Then
+      manually start the real server and verify via lsof/netstat that it only binds to
+      127.0.0.1.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: does the dashboard's grouping/sizing math match the underlying queue
+      entries exactly? Is the localhost-only binding verified for real (not just trusted from
+      the Flask app.run() call arguments)? Does thumbnail serving ever risk exposing the
+      original full file?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+    web_framework: Flask (synchronous)
+    image_library: Pillow
+  key_files:
+    - path: src/cleanup_tools/queue.py
+      purpose: "The queue API this UI reads/writes — DO NOT modify its schema here without going back to that story"
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/__init__.py
+    change: "Create — UI package marker"
+  - file: src/cleanup_tools/ui/app.py
+    change: "Create — Flask app factory, 127.0.0.1-only binding"
+  - file: src/cleanup_tools/ui/routes.py
+    change: "Create — dashboard, plan-trigger, approve/reject/undo, thumbnail routes"
+  - file: src/cleanup_tools/ui/templates/base.html
+    change: "Create — base layout"
+  - file: src/cleanup_tools/ui/templates/dashboard.html
+    change: "Create — overview breakdown by bucket/category"
+  - file: src/cleanup_tools/ui/templates/queue.html
+    change: "Create — single-entry review cards"
+  - file: src/cleanup_tools/cli.py
+    change: "Add `approve` subcommand"
+  - file: tests/test_ui_routes.py
+    change: "Create — Flask test-client route tests"
+  - file: pyproject.toml
+    change: "Add Flask, Pillow as runtime dependencies"
+
+design_decisions:
+  - decision: "Overview dashboard added to this story's scope at user sign-off, not deferred"
+    rationale: "User explicitly asked for a DiskDrill-style visual breakdown as part of this epic's floor, not a later polish pass — folded into the existing GET / route since it's the same queue data, just grouped/summed differently, not a new data source or layer"
+  - decision: "UI never calls --from-queue directly — execution stays a separate CLI step"
+    rationale: "Keeps the UI's responsibility narrow (review/decide) separate from execution (a later, deliberate CLI invocation), matching the queue's own design as a staging area, not an auto-execute pipeline"
+
+risks:
+  - severity: medium
+    description: "Server accidentally reachable beyond localhost"
+    mitigation: "Explicit manual lsof/netstat check in the test step, not just code review of the bind() call"
+  - severity: medium
+    description: "This is the layer flagged for pre-exec wireframing — interaction model could still ship unusable despite passing route tests"
+    mitigation: "ui-design delegation step runs before implementation, not after; manual browser testing required, not just automated route tests"
+
+references:
+  - path: .pHive/cycle-state/ai-approvals-ui.yaml
+    relevant_excerpt: |
+      ui-designer lens (step 4b collaborative review) called SCALE_CALL: pre-exec — the
+      approval-review interaction model needs to be wireframed before story-writing
+  - path: .pHive/epics/ai-approvals-ui/docs/structured-outline.md
+    relevant_excerpt: |
+      Phase 3a... GET / — dashboard: overview breakdown (post-sign-off addition)... Groups
+      current queue entries by group_key/bucket, computing entry count and total size per group
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md Status section needs an update once `cleanup approve` is a real command."

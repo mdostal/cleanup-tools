@@ -1,0 +1,17 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  sort.py's --from-queue now checks dest.exists() before moving (mirrors --go's dest_exists
+  guard), skips with a "skipped" list entry instead of overwriting. Both sort.py/reclaim.py's
+  --from-queue loops widened from except OSError to except Exception (matching existing
+  reclaim.py precedent), guaranteeing save_queue always runs so earlier entries' executed_at
+  never gets lost to a later entry's unexpected exception. 225/225 tests pass (4 new). Both
+  fixes verified red/green (reverted, confirmed tests fail as expected; restored, confirmed
+  pass).
+artifacts:
+  - src/cleanup_tools/commands/sort.py
+  - src/cleanup_tools/commands/reclaim.py
+  - tests/test_sort.py
+  - tests/test_reclaim.py

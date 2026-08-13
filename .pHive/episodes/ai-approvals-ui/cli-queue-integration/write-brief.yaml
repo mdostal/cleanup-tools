@@ -1,0 +1,10 @@
+step_id: write-brief
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Filter approved+action-matching+under-target-dir entries; staleness check before execution
+  (skip+leave approved on stale, not an execution attempt); master-path refusal before every
+  reclaim delete; per-entry try/except isolation mirroring --go; one lock cycle per --from-queue
+  invocation (load once, execute all, save once) not per-entry; add executed_at/execution_error
+  to QueueEntry.
+artifacts: []

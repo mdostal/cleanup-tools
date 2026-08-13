@@ -1,0 +1,7 @@
+step_id: preflight
+status: completed
+timestamp: "2026-08-12"
+needs_backend: true
+needs_frontend: false
+notes: "146 tests pass (prior epic). queue.py confirmed absent. Branch confirmed."
+artifacts: []

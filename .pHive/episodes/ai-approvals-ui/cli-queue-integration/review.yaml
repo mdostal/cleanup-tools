@@ -1,0 +1,17 @@
+step_id: review
+status: completed
+timestamp: "2026-08-12"
+review_verdict: needs_revision
+review_findings: >
+  Critical: (1) sort.py's --from-queue has no dest_exists check (the one --go has), so it can
+  silently overwrite an existing destination file — reproduced directly. (2) Both sort.py and
+  reclaim.py's --from-queue loops only catch OSError; a non-OSError exception mid-batch
+  propagates uncaught, so save_queue never runs and already-succeeded entries' executed_at/
+  execution_error updates are lost — for reclaim, a real irreversible deletion can happen while
+  the queue permanently forgets it happened (a later run reports the missing src as merely
+  "stale", never as executed). Master-paths refusal (the highest-stakes property) is confirmed
+  correctly implemented and well-tested. Improvements: no test proves the src-scoping property
+  directly (correct by inspection, but zero direct regression coverage); --from-queue executes
+  unconditionally regardless of --go, undocumented in help text; case-sensitivity asymmetry
+  between sort's and reclaim's scoping helpers (low risk, false-negative direction only).
+artifacts: []

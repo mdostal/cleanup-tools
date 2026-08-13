@@ -1,0 +1,10 @@
+step_id: research
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Confirmed real schema gap: QueueEntry lacks executed_at/execution_error fields the
+  structured-outline spec calls for — approval-queue-store story didn't add them, this story
+  must. Confirmed _master_path_refusal (reclaim.py) and both --go per-entry isolation loops as
+  the patterns to reuse. Confirmed the 3 existing master-path bypass fixture tests must be
+  re-run against --from-queue specifically, not assumed to transfer.
+artifacts: []

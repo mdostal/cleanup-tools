@@ -1,0 +1,13 @@
+step_id: fix-cycle-implement
+round: 2
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  build_plan_snapshot/check_staleness now handle directories: skip content-hash entirely for
+  dirs (no size field either, since dir size from stat() isn't meaningful content size),
+  fall back to mtime-only staleness detection, and an is_dir marker catches file<->directory
+  type changes as stale without crashing. 195/195 tests pass (4 new regression tests). Original
+  IsADirectoryError crash independently re-reproduced as fixed.
+artifacts:
+  - src/cleanup_tools/queue.py
+  - tests/test_queue.py

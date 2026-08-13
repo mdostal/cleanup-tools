@@ -1,0 +1,7 @@
+step_id: doc-check
+status: completed
+timestamp: "2026-08-12"
+commit_ref: "251089c"
+doc_update_plan: "README.md Status section updated: --from-queue documented as a second, unconditional execution path; master-paths refusal applies to it too."
+artifacts:
+  - README.md

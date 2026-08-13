@@ -1,0 +1,7 @@
+step_id: preflight
+status: completed
+timestamp: "2026-08-12"
+needs_backend: true
+needs_frontend: false
+notes: "200 tests pass. No --from-queue exists anywhere yet."
+artifacts: []

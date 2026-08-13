@@ -28,6 +28,54 @@ bash-only for now, pending future epics. The CLI now reads (and creates, if abse
 config file at `~/.config/cleanup-tools/config.yaml` for bucket rules, search roots, and master
 paths — sensible defaults apply if the file isn't there.
 
+An approval queue store (`src/cleanup_tools/queue.py`) now also exists, persisting proposed
+move/delete actions as YAML at `~/.config/cleanup-tools/approval_queue.yaml`, with file locking and
+atomic writes so it's safe to touch from multiple processes at once. It's a separate file from
+`config.yaml` rather than a section within it, so a future UI process and CLI commands can read/write
+queue entries concurrently without contending over the same lock as unrelated config changes.
+
+`cleanup sort` and `cleanup reclaim` both now also support a `--from-queue` flag, driven by that
+approval queue store. This is a **second execution path alongside `--go`**, not a replacement for
+it — `--go` still drives the existing "preview vs. act on this run" flow. `--from-queue` instead
+executes actions that were previously staged into the approval queue and approved there.
+Consequently `--from-queue` executes **unconditionally and does not need `--go` alongside it** —
+approval status recorded in the queue is itself the safety gate for that path. The master-paths
+refusal described above (configured masters refused from deletion until marked `backed_up: true`)
+applies to `cleanup reclaim --from-queue` exactly as it does to `cleanup reclaim --go` — queue
+approval does not bypass it.
+
+`cleanup approve` is now a real command: it starts a small localhost-only (`127.0.0.1`, never
+reachable from another machine — hardcoded, not configurable) Flask review UI and opens your
+browser to it. The dashboard gives a DiskDrill-style overview of the approval queue (counts and
+total size per bucket/category, plus a per-status breakdown), `/plan/sort` and `/plan/reclaim`
+stage new proposed moves/deletes into the queue (idempotent — re-hitting either doesn't create
+duplicate pending entries), and each pending entry gets a review card (thumbnail for images,
+never the original full-resolution file) with approve/reject/undo. Approving or rejecting here
+only changes the entry's status — it does **not** execute anything; run `cleanup sort --from-queue`
+or `cleanup reclaim --from-queue` afterward, as a separate deliberate step, to actually act on
+approved entries. The manual (no-AI) approvals UI is now **complete and usable at real scale**:
+`/queue` paginates (`?page=`/`?per_page=`), bulk-approve/bulk-reject act on an entire group_key
+(or an explicit id list) in one click, and keyboard shortcuts (`y`/`n`/`space`/arrow keys) let you
+triage a large plan fast without reaching for the mouse each time.
+
+An AI-provider layer (`src/cleanup_tools/ai/`) now exists — an Anthropic implementation of a
+narrow "given a filename, propose a bucket" interface. Set `ANTHROPIC_API_KEY` in your
+environment, or put the key in `~/.config/cleanup-tools/credentials` (created with `0600`
+permissions — the tool will correct the mode and warn if it finds that file less restrictive).
+
+**The epic is now complete end-to-end**: survey/sort/reclaim CLI, the approvals UI, and
+AI-assisted proposals all connect. `cleanup approve`'s "Propose with AI" button (or
+`cleanup propose-ai [dir] [--cap N]` from the CLI) reads the current sort plan's `other`-bucketed
+(ambiguous) files, asks the AI provider what bucket each belongs in, and stages successful
+proposals into the same approval queue manual staging uses — they show up in `/queue`
+identically to manually-staged entries (same approve/reject/undo/bulk/keyboard flow), tagged
+with an "AI-proposed" badge so you can tell them apart at a glance. The AI call-volume cap
+(default 20) is enforced **before** any calls are made, not by filtering results afterward — a
+misbehaving/fast provider genuinely cannot be called more than the cap allows. AI never talks
+to the network unless you explicitly click "Propose with AI" or run `propose-ai` — this is the
+one sanctioned exception to the "no ambient network calls" rule, and it stays that way: nothing
+else in this tool makes a network call.
+
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
 > **previews by default** and needs `--go` to actually move files. If you're used to running the bash

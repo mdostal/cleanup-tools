@@ -1,0 +1,40 @@
+run_id: ai-approvals-ui-epic-close
+skill: execute
+timestamp: "2026-08-12"
+epic_id: ai-approvals-ui
+stories_completed: [approval-queue-store, cli-queue-integration, approvals-ui-core, approvals-ui-triage-efficiency, ai-provider-layer, ai-queue-wiring]
+stories_failed: []
+version_bump: none
+gate_lift_fired: false
+methodology: classic
+total_tests: 327
+commits_on_branch: 21
+nonsensical_defaults: []
+warnings_emitted: 0
+notes: >
+  Full epic complete, all 6 stories, sequenced manual-UI-first / AI-second per the user's
+  confirmed decision. Every story went through independent adversarial review with real,
+  concrete reproductions (not code-reading alone); every story had at least one real bug
+  caught and fixed in a fix-cycle round before passing: approval-queue-store (4-bug cascade
+  across staleness/directory/FIFO/symlink edge cases); cli-queue-integration (silent
+  destination overwrite + lost execution records mid-batch); approvals-ui-core (unhandled
+  DecompressionBombError + unhandled queue-lock TimeoutError, both real 500s); approvals-ui-
+  triage-efficiency (malformed-JSON crash in bulk routes); ai-provider-layer (unparseable-
+  response edge cases raising instead of degrading gracefully); ai-queue-wiring (AI-sourced
+  entries not visibly distinguishable in the UI, a real gap against the story's own
+  acceptance criteria).
+
+  The story's single highest-stakes correctness property — the AI call-volume cap enforced
+  as a pre-call gate, never a post-call filter — was given proportionate adversarial
+  scrutiny (a fake provider that hard-fails the instant it's over-called, tested against
+  cap=0/negative/over-candidate-count) and held up with no bug found. The "no ambient
+  network calls" hard rule is preserved: the AI provider layer only ever talks to the
+  network behind an explicit user action (UI button or CLI command), never ambiently; the
+  Anthropic SDK's own source was read directly (not assumed) to confirm no default
+  telemetry exists, and one real credential-fallback gap (unparameterized client silently
+  picking up OAuth-profile/WIF creds) was found and closed.
+
+  Manual (no-AI) approvals UI is genuinely standalone-shippable as of approvals-ui-triage-
+  efficiency, per the user's confirmed sequencing decision — real value exists even before
+  the AI stories landed. No push, no PR opened — awaiting user decision (solo project,
+  task_tracking.adapter unset).

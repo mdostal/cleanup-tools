@@ -1,0 +1,17 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Built src/cleanup_tools/ui/ (app.py factory with hardcoded 127.0.0.1 binding + ValueError
+  guard against any other host, routes.py, templates/), the `approve` CLI subcommand
+  (--port, --no-browser), and Pillow-based thumbnail generation. Added Flask + Pillow to
+  pyproject.toml. Never calls --from-queue; queue.py schema untouched.
+artifacts:
+  - src/cleanup_tools/ui/__init__.py
+  - src/cleanup_tools/ui/app.py
+  - src/cleanup_tools/ui/routes.py
+  - src/cleanup_tools/ui/templates/base.html
+  - src/cleanup_tools/ui/templates/dashboard.html
+  - src/cleanup_tools/ui/templates/queue.html
+  - src/cleanup_tools/cli.py
+  - pyproject.toml

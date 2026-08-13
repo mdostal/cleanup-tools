@@ -14,9 +14,13 @@ concrete methods; subclasses only need to implement ``find_installed_app``.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import shutil
 import subprocess
+import tempfile
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -33,6 +37,65 @@ class OSAdapter(ABC):
     def write_file(self, path: Path, content: str) -> None:
         """Write ``content`` to ``path``, overwriting any existing file."""
         Path(path).write_text(content)
+
+    def write_file_atomic(self, path: Path, content: str) -> None:
+        """Write ``content`` to ``path`` without ever leaving a partial file.
+
+        The content is first written to a temp file created in ``path``'s
+        own directory -- not the system temp dir -- so the final
+        ``os.replace`` stays on one filesystem; a cross-filesystem replace
+        is not atomic (and can outright fail). ``os.replace`` is atomic on
+        POSIX, so readers of ``path`` only ever see the old content or the
+        new content in full, never a half-written file. If anything raises
+        before the replace happens, the temp file is cleaned up rather than
+        left behind.
+        """
+        path = Path(path)
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+            os.replace(tmp_path, path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+    @contextlib.contextmanager
+    def file_lock(self, path: Path, timeout: float = 5.0):
+        """Context manager guarding ``path`` with an exclusive advisory lock.
+
+        The lock is taken on a sibling ``<path>.lock`` file, never on
+        ``path`` itself, so acquiring/releasing the lock never touches
+        ``path``'s actual content. Lock acquisition is polled (rather than
+        making a single blocking ``fcntl.flock`` call) so that ``timeout``
+        is genuinely respected instead of blocking forever; raises
+        ``TimeoutError`` if the lock isn't acquired within ``timeout``
+        seconds. The lock is released on exit, including when the body
+        raises.
+        """
+        path = Path(path)
+        lock_path = Path(f"{path}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"Timed out after {timeout}s waiting for lock on {lock_path}"
+                        )
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
     def list_dir(
         self,

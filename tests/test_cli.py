@@ -19,6 +19,7 @@ import pytest
 
 from cleanup_tools import cli
 from cleanup_tools.adapters import MacOSAdapter
+from cleanup_tools.queue import QueueEntry
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +210,167 @@ def test_main_sort_dry_run_end_to_end_leaves_filesystem_untouched(monkeypatch, c
     assert photo.exists() and photo.read_text() == "photo-bytes"
     assert doc.exists() and doc.read_text() == "doc-bytes"
     assert not (target / "_sorted").exists()
+
+
+# ---------------------------------------------------------------------------
+# "propose-ai" subcommand: dispatched directly in main() (NOT through
+# cli.COMMANDS, see main()'s own docstring/comments), so unlike survey/sort
+# above, the seam to fake out is get_provider()/propose_for_other_bucket()
+# themselves, monkeypatched on their SOURCE modules (cleanup_tools.ai /
+# cleanup_tools.ai.wiring) -- main() does `from .ai import get_provider` and
+# `from .ai.wiring import propose_for_other_bucket` fresh on every call, so
+# patching the source module's attribute (rather than e.g. cli.get_provider,
+# which doesn't exist as a module-level name) is what a stub actually needs
+# to land on.
+#
+# adapters.get_adapter() is monkeypatched to a fake-home adapter (mirroring
+# the sort end-to-end test above) purely so config_module.load_config()
+# inside the propose-ai branch never touches the real user's home/config.
+# ---------------------------------------------------------------------------
+
+
+def _fake_home_adapter(tmp_path: Path) -> MacOSAdapter:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    class FakeHomeAdapter(MacOSAdapter):
+        def resolve_home(self) -> Path:
+            return home_dir
+
+    return FakeHomeAdapter()
+
+
+def test_build_parser_recognizes_propose_ai_subcommand_with_dir_and_cap():
+    parser = cli.build_parser()
+    args = parser.parse_args(["propose-ai", "/some/dir", "--cap", "5"])
+    assert args.command == "propose-ai"
+    assert args.dir == "/some/dir"
+    assert args.cap == 5
+
+
+def test_build_parser_propose_ai_subcommand_defaults_dir_and_cap_none():
+    parser = cli.build_parser()
+    args = parser.parse_args(["propose-ai"])
+    assert args.command == "propose-ai"
+    assert args.dir is None
+    assert args.cap is None
+
+
+def test_main_propose_ai_successful_run_prints_proposal_json_and_returns_0(
+    monkeypatch, capsys, tmp_path
+):
+    fake_adapter = _fake_home_adapter(tmp_path)
+    monkeypatch.setattr(cli.adapters, "get_adapter", lambda: fake_adapter)
+
+    fake_provider = object()
+    monkeypatch.setattr("cleanup_tools.ai.get_provider", lambda *a, **kw: fake_provider)
+
+    entry = QueueEntry(
+        action="move",
+        src=str(tmp_path / "mystery.dat"),
+        dest=str(tmp_path / "_sorted" / "misc" / "mystery.dat"),
+        source="ai:anthropic",
+        status="pending",
+        group_key="sort:misc",
+    )
+    captured_call = {}
+
+    def fake_propose(adapter, config, provider, cap, *, target_dir=None, queue_path=None):
+        captured_call["adapter"] = adapter
+        captured_call["provider"] = provider
+        captured_call["cap"] = cap
+        captured_call["target_dir"] = target_dir
+        return {"proposed": [entry], "failures": [], "calls_made": 1}
+
+    monkeypatch.setattr("cleanup_tools.ai.wiring.propose_for_other_bucket", fake_propose)
+
+    exit_code = cli.main(["propose-ai"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+
+    parsed = json.loads(captured.out)
+    assert parsed["calls_made"] == 1
+    assert parsed["failures"] == []
+    assert len(parsed["proposed"]) == 1
+    assert parsed["proposed"][0]["source"] == "ai:anthropic"
+    assert parsed["proposed"][0]["group_key"] == "sort:misc"
+
+    # get_provider()'s result is threaded straight through to
+    # propose_for_other_bucket(), and with no --cap given, the module's own
+    # DEFAULT_CAP (20) is used.
+    assert captured_call["provider"] is fake_provider
+    from cleanup_tools.ai.wiring import DEFAULT_CAP
+
+    assert captured_call["cap"] == DEFAULT_CAP
+    assert captured_call["target_dir"] is None
+
+
+def test_main_propose_ai_respects_cap_flag(monkeypatch, capsys, tmp_path):
+    fake_adapter = _fake_home_adapter(tmp_path)
+    monkeypatch.setattr(cli.adapters, "get_adapter", lambda: fake_adapter)
+    monkeypatch.setattr("cleanup_tools.ai.get_provider", lambda *a, **kw: object())
+
+    captured_call = {}
+
+    def fake_propose(adapter, config, provider, cap, *, target_dir=None, queue_path=None):
+        captured_call["cap"] = cap
+        return {"proposed": [], "failures": [], "calls_made": 0}
+
+    monkeypatch.setattr("cleanup_tools.ai.wiring.propose_for_other_bucket", fake_propose)
+
+    exit_code = cli.main(["propose-ai", "--cap", "5"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    parsed = json.loads(captured.out)
+    assert parsed["calls_made"] == 0
+    assert captured_call["cap"] == 5
+
+
+def test_main_propose_ai_passes_explicit_dir_as_target_dir(monkeypatch, capsys, tmp_path):
+    fake_adapter = _fake_home_adapter(tmp_path)
+    monkeypatch.setattr(cli.adapters, "get_adapter", lambda: fake_adapter)
+    monkeypatch.setattr("cleanup_tools.ai.get_provider", lambda *a, **kw: object())
+
+    target = tmp_path / "somewhere"
+    captured_call = {}
+
+    def fake_propose(adapter, config, provider, cap, *, target_dir=None, queue_path=None):
+        captured_call["target_dir"] = target_dir
+        return {"proposed": [], "failures": [], "calls_made": 0}
+
+    monkeypatch.setattr("cleanup_tools.ai.wiring.propose_for_other_bucket", fake_propose)
+
+    exit_code = cli.main(["propose-ai", str(target)])
+
+    capsys.readouterr()
+    assert exit_code == 0
+    assert captured_call["target_dir"] == target
+
+
+def test_main_propose_ai_no_api_key_fails_gracefully_not_traceback(monkeypatch, capsys, tmp_path):
+    """No API key configured anywhere is a routine, expected condition (see
+    ai/__init__.py's CredentialsError) -- it must print a clean one-line
+    error to stderr and return exit code 1, never let CredentialsError
+    propagate as an uncaught exception (which would print a raw traceback
+    and exit via Python's own unhandled-exception path instead).
+    """
+    fake_adapter = _fake_home_adapter(tmp_path)
+    monkeypatch.setattr(cli.adapters, "get_adapter", lambda: fake_adapter)
+
+    from cleanup_tools.ai import CredentialsError
+
+    def _raise(*_a, **_kw):
+        raise CredentialsError("No Anthropic API key found.")
+
+    monkeypatch.setattr("cleanup_tools.ai.get_provider", _raise)
+
+    exit_code = cli.main(["propose-ai"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "No Anthropic API key found" in captured.err
+    assert "Traceback" not in captured.err

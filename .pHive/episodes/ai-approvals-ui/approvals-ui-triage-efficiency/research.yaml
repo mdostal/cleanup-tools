@@ -1,0 +1,9 @@
+step_id: research
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Re-read the approvals-ui-core wireframe brief (bulk/keyboard/pagination extension points
+  already anticipated: data-entry-id + disabled placeholder checkboxes, per-entry status
+  transitions funneled through queue.set_status/undo, plain-list entry fetch) and the
+  completed routes.py conventions before implementing.
+artifacts: []

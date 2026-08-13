@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Cleanup Approvals{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+
+{% if staged is not none %}
+<div class="flash">Staged {{ staged }} new entr{{ "y" if staged == "1" else "ies" }} for review. <a href="{{ url_for('ui.queue_view') }}">Go review them</a>.</div>
+{% endif %}
+{% if plan_error %}
+<div class="flash error"><strong>Could not plan:</strong> {{ plan_error }}</div>
+{% endif %}
+
+<h2>Status</h2>
+<div class="status-bar">
+  {% for status, count in overall_status_counts.items() %}
+  <div class="status-tile"><strong>{{ count }}</strong>{{ status }}</div>
+  {% else %}
+  <div class="status-tile">Queue is empty.</div>
+  {% endfor %}
+</div>
+
+<h2>Groups <span style="font-weight:normal; color:#888;">({{ total_entries }} total entries)</span></h2>
+<div class="group-grid">
+  {% for g in groups %}
+  <div class="group-card">
+    <h3>{{ g.group_key }}</h3>
+    <p class="meta">{{ g.count }} item{{ "s" if g.count != 1 else "" }} &middot; {{ "%.1f"|format(g.total_size / 1048576) }} MB</p>
+    <div>
+      {% for status, count in g.status_counts.items() %}
+      <span class="badge">{{ status }}: {{ count }}</span>
+      {% endfor %}
+      {% if g.ai_count %}
+      <span class="badge badge-ai">AI-proposed: {{ g.ai_count }}</span>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <p>No queue entries yet. Try <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a> or <a href="{{ url_for('ui.plan_reclaim') }}">Plan: Reclaim</a> to stage some.</p>
+  {% endfor %}
+</div>
+{% endblock %}

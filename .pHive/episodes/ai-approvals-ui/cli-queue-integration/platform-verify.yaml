@@ -1,0 +1,9 @@
+step_id: platform-verify
+status: skipped
+timestamp: "2026-08-12"
+notes: >
+  Skipped per skip_when — no new platform-specific code introduced; reuses existing
+  _master_path_refusal (already platform-verified last epic) and adapter.move/delete. The
+  case-mismatch master-path test did genuinely exercise real macOS/APFS case-insensitivity
+  during the test step, which is the platform-relevant part of this story.
+artifacts: []

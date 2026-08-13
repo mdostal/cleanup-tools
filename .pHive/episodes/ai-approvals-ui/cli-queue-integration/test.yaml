@@ -1,0 +1,13 @@
+step_id: test
+status: completed
+timestamp: "2026-08-12"
+test_results: "222 passed, 0 failed (200 prior unmodified + 22 new). Confirmed zero regression to --go via git-stash baseline comparison."
+notes: >
+  All 3 master-path bypass fixture scenarios (relative path, .. segments, case-mismatch)
+  re-adapted and re-run against --from-queue specifically (approved queue entry), not assumed
+  to transfer from --go. Case-mismatch test genuinely exercised (Darwin/APFS case-insensitive
+  filesystem), not skipped. Bonus test confirms refusal beats staleness (unconditional, never
+  short-circuited). Single-save-per-invocation verified via spy on save_queue/with_queue_lock.
+artifacts:
+  - tests/test_sort.py
+  - tests/test_reclaim.py

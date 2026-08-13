@@ -1,0 +1,20 @@
+step_id: review
+status: completed
+timestamp: "2026-08-12"
+review_verdict: findings_required_fix_cycle
+notes: >
+  Independent review treated the call-volume cap as the single highest-stakes property in
+  the story and gave it proportionate scrutiny: wrote an independent fake provider that
+  hard-fails (AssertionError) the instant it's over-called, tested cap<candidates,
+  cap=0, cap negative, cap>candidates, and cap=1 -- confirmed the pre-call-gate property
+  holds in every case, no path found where propose_bucket is called more than
+  min(cap, len(candidates)) times. Also independently confirmed failure handling doesn't
+  abort the batch, dedup vs pre-existing pending entries works correctly, /propose-ai
+  degrades gracefully with no credentials, and zero-special-casing holds end-to-end
+  through real /queue, approve, bulk-approve, and sort --from-queue execution. Found one
+  major gap against the story's own acceptance criteria: AI-sourced entries were not
+  visibly distinguishable in the UI (entry.source never rendered). Also found two minor
+  gaps: no CLI test coverage for propose-ai, and CLI's FileNotFoundError on a missing
+  target dir raises a raw traceback (confirmed to match pre-existing cleanup sort
+  behavior, not a regression -- left unfixed per explicit scope decision).
+artifacts: []

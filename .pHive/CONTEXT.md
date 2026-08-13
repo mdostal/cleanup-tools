@@ -46,6 +46,14 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
 - `~/.config/cleanup-tools/config.yaml` — optional persisted config (loaded/created by
   `src/cleanup_tools/config.py`) controlling bucket rules, search roots, and master paths; sensible
   defaults apply if absent.
+- `~/.config/cleanup-tools/approval_queue.yaml` — the approval queue store (`src/cleanup_tools/queue.py`):
+  proposed move/delete actions awaiting human approval, with file locking and atomic writes for safe
+  concurrent access. Kept as a separate file from `config.yaml` (not a section within it) so the UI
+  and CLI commands can read/write queue entries concurrently without contending over the same file
+  lock as unrelated config changes. `cleanup sort --from-queue` / `cleanup reclaim --from-queue`
+  execute approved entries; `cleanup approve` (`src/cleanup_tools/ui/`) is the localhost-only Flask
+  UI that stages (`/plan/sort`, `/plan/reclaim`) and reviews (approve/reject/undo) entries — it never
+  executes, execution is always a separate deliberate CLI step.
 
 ## Conventions
 
@@ -57,6 +65,18 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   (see `.pHive/project-profile.yaml → north_star.avoid`).
 - No CLAUDE.md exists yet — until one is added, `.pHive/project-profile.yaml → claude_md_summary`
   is the authoritative source for build/rule conventions.
+- The sole sanctioned exception to "no network, no telemetry": explicit, user-triggered AI calls
+  via `src/cleanup_tools/ai/` (`AIProvider` ABC + `AnthropicProvider`). The SDK itself must never
+  phone home on its own (verified against the installed SDK's source, not assumed) — client
+  construction always passes `api_key=` explicitly so the SDK can't silently fall back to an
+  OAuth-profile/Workload-Identity-Federation credential we don't control. API keys live in
+  `ANTHROPIC_API_KEY` or `~/.config/cleanup-tools/credentials` (0600-enforced) — never in
+  `config.yaml` or `approval_queue.yaml`. Wired in via `src/cleanup_tools/ai/wiring.py`'s
+  `propose_for_other_bucket()`: reads the sort plan's `other`-bucketed files, enforces the call
+  cap as a pre-call gate (slices candidates before calling the provider, never filters results
+  after), and stages successes into the same queue manual staging uses (`source="ai:<provider>"`)
+  — so AI-sourced entries need zero special-casing anywhere downstream. Reachable via the
+  `POST /propose-ai` UI route or `cleanup propose-ai [--cap N]`.
 
 ## Canonical references
 

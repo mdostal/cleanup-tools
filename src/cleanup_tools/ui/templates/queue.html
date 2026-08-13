@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Review Queue - Cleanup Approvals{% endblock %}
+{% block content %}
+<h1>Review Queue <span style="font-weight:normal; color:#888;">({{ total_pending }} pending)</span></h1>
+
+<p class="kbd-hint">
+  Keyboard: <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> move focus &middot;
+  <kbd>y</kbd> approve focused &middot;
+  <kbd>n</kbd> reject focused &middot;
+  <kbd>space</kbd> toggle select
+</p>
+
+<!-- Empty form that the bulk-action-bar buttons below submit into, via the
+     HTML `form="bulk-form"` attribute on each checkbox further down the
+     page -- NOT by nesting the checkboxes inside this form. Each entry
+     card also has its own approve/reject/undo forms, and HTML forms can't
+     nest, so associating far-apart checkboxes to one shared form by id
+     (rather than by DOM position) is what lets the bulk-select checkboxes
+     live inside each entry card without breaking the per-entry forms. -->
+<form id="bulk-form" method="post"></form>
+
+<div class="bulk-action-bar">
+  <button type="submit" form="bulk-form" formaction="{{ url_for('ui.bulk_approve') }}">Approve selected</button>
+  <button type="submit" form="bulk-form" formaction="{{ url_for('ui.bulk_reject') }}">Reject selected</button>
+  <span id="bulk-selected-count" class="meta">0 selected</span>
+
+  {% if group_keys %}
+  <span class="bulk-group-actions">
+    By group:
+    {% for gk in group_keys %}
+    <span class="bulk-group-item">
+      <span class="badge">{{ gk }}</span>
+      <form method="post" action="{{ url_for('ui.bulk_approve') }}" style="display:inline;">
+        <input type="hidden" name="group_key" value="{{ gk }}">
+        <button type="submit" title="Approve every pending entry in {{ gk }}">Approve group</button>
+      </form>
+      <form method="post" action="{{ url_for('ui.bulk_reject') }}" style="display:inline;">
+        <input type="hidden" name="group_key" value="{{ gk }}">
+        <button type="submit" title="Reject every pending entry in {{ gk }}">Reject group</button>
+      </form>
+    </span>
+    {% endfor %}
+  </span>
+  {% endif %}
+</div>
+
+{% for entry in entries %}
+<div class="entry-card" data-entry-id="{{ entry.id }}" tabindex="-1">
+  <!-- Bulk-select checkbox: associated with #bulk-form by id (see above)
+       rather than DOM nesting, and submitted as a repeated `entry_ids`
+       field -- POST /queue/bulk-approve|reject reads exactly these ids. -->
+  <input
+    type="checkbox"
+    class="entry-select"
+    data-id="{{ entry.id }}"
+    name="entry_ids"
+    value="{{ entry.id }}"
+    form="bulk-form"
+    title="Select for bulk action">
+
+  {% if is_image_entry(entry) %}
+  <img class="entry-thumb" src="{{ url_for('ui.thumbnail', entry_id=entry.id) }}" alt="thumbnail for {{ entry.src }}">
+  {% else %}
+  <div class="entry-thumb-placeholder">{{ entry.action }}</div>
+  {% endif %}
+
+  <div class="entry-body">
+    <p>
+      <strong>{{ entry.action }}</strong>
+      &middot; {{ entry.group_key or "ungrouped" }}
+      &middot; status: {{ entry.status }}
+      &middot;
+      {% if is_ai_source(entry.source) %}
+      <span class="badge badge-ai" title="Proposed by {{ entry.source }}">AI-proposed</span>
+      {% else %}
+      <span class="badge badge-manual">Manual</span>
+      {% endif %}
+    </p>
+    <p class="entry-path">src: {{ entry.src }}</p>
+    {% if entry.dest %}
+    <p class="entry-path">dest: {{ entry.dest }}</p>
+    {% endif %}
+
+    <div class="entry-actions">
+      <form method="post" action="{{ url_for('ui.approve_entry', entry_id=entry.id) }}" data-action="approve">
+        <button type="submit">Approve</button>
+      </form>
+      <form method="post" action="{{ url_for('ui.reject_entry', entry_id=entry.id) }}" data-action="reject">
+        <button type="submit">Reject</button>
+      </form>
+      <form method="post" action="{{ url_for('ui.undo_entry', entry_id=entry.id) }}" data-action="undo">
+        <button type="submit">Undo</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% else %}
+<p>Nothing pending right now. Try <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a> or <a href="{{ url_for('ui.plan_reclaim') }}">Plan: Reclaim</a> to stage some.</p>
+{% endfor %}
+
+{% if pagination.total > 0 %}
+<div class="pagination">
+  {% if pagination.has_prev %}
+  <a href="{{ url_for('ui.queue_view', page=pagination.prev_page, per_page=pagination.per_page) }}">&larr; Prev</a>
+  {% else %}
+  <span class="pagination-disabled">&larr; Prev</span>
+  {% endif %}
+
+  <span class="pagination-info">
+    Page {{ pagination.page }} of {{ pagination.total_pages }}
+    ({{ pagination.start_index }}&ndash;{{ pagination.end_index }} of {{ pagination.total }})
+  </span>
+
+  {% if pagination.has_next %}
+  <a href="{{ url_for('ui.queue_view', page=pagination.next_page, per_page=pagination.per_page) }}">Next &rarr;</a>
+  {% else %}
+  <span class="pagination-disabled">Next &rarr;</span>
+  {% endif %}
+</div>
+{% endif %}
+
+<script src="{{ url_for('static', filename='keyboard.js') }}"></script>
+{% endblock %}

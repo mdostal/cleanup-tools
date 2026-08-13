@@ -1,0 +1,17 @@
+step_id: review
+status: completed
+timestamp: "2026-08-12"
+review_verdict: findings_required_fix_cycle
+notes: >
+  Independent adversarial reviewer re-reproduced everything from scratch (real subprocess
+  lsof/netstat, hand-built dashboard fixture, real thumbnail path-traversal probing, 20
+  concurrent real HTTP approve requests). Confirmed correct: localhost-only binding
+  (LAN curl failed to connect), dashboard math, no raw-file route/path-traversal, staging
+  dedup, no execution path, concurrent-write safety. Found 2 major bugs (thumbnail route
+  unhandled DecompressionBombError -> 500 on legitimately large images; unhandled
+  TimeoutError -> 500 on queue-lock contention during a concurrent --from-queue run) plus
+  4 minor findings, 3 of which are documented/intentional tradeoffs (directory size shown
+  as 0.0 MB, duplicate pending entry on re-staging after approve, GET routes mutate state)
+  and 1 fixed opportunistically (double-transition then single-undo not returning to true
+  prior status).
+artifacts: []

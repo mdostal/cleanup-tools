@@ -1,0 +1,15 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Fixed the one minor bug: _extract_bulk_request now treats any non-list, non-string
+  entry_ids value (int/float/bool/dict/etc) as "no ids given" instead of crashing on
+  list(entry_ids), matching the file's existing defensive-parsing convention. Verified red
+  (reverted fix, confirmed 500/TypeError) then green (restored, confirmed 200 with
+  count=0). Added .playwright-mcp/ to .gitignore preventively (confirmed not tracked or
+  present). 265 -> 266 tests pass.
+artifacts:
+  - src/cleanup_tools/ui/routes.py
+  - tests/test_ui_routes.py
+  - .gitignore

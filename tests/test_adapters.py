@@ -13,6 +13,7 @@ unsupported-OS branches without needing to actually run on those OSes.
 from __future__ import annotations
 
 import platform
+import threading
 from pathlib import Path
 
 import pytest
@@ -387,3 +388,243 @@ def test_write_file_overwrites_existing_content(adapter, tmp_path):
     adapter.write_file(target, "new content")
 
     assert adapter.read_file(target) == "new content"
+
+
+# ---------------------------------------------------------------------------
+# 14. write_file_atomic()
+# ---------------------------------------------------------------------------
+
+
+def test_write_file_atomic_content_is_correct_after_write(adapter, tmp_path):
+    target = tmp_path / "queue.yaml"
+
+    adapter.write_file_atomic(target, "hello atomic world")
+
+    assert target.exists()
+    assert target.read_text() == "hello atomic world"
+
+
+def test_write_file_atomic_overwrites_existing_content(adapter, tmp_path):
+    target = tmp_path / "queue.yaml"
+    target.write_text("stale content")
+
+    adapter.write_file_atomic(target, "fresh content")
+
+    assert target.read_text() == "fresh content"
+
+
+def test_write_file_atomic_leaves_no_temp_files_behind_on_success(adapter, tmp_path):
+    target = tmp_path / "queue.yaml"
+
+    adapter.write_file_atomic(target, "content")
+
+    remaining = {p.name for p in tmp_path.iterdir()}
+    assert remaining == {"queue.yaml"}
+    assert not any(name.endswith(".tmp") for name in remaining)
+
+
+def test_write_file_atomic_creates_temp_file_in_same_directory_as_target(adapter, tmp_path, monkeypatch):
+    # The temp file must be created via tempfile.mkstemp(dir=path.parent) so
+    # the final os.replace stays on one filesystem. Capture the dir= kwarg
+    # actually passed to confirm this without relying on implementation
+    # internals beyond the public tempfile API surface.
+    import tempfile
+
+    target = tmp_path / "sub" / "queue.yaml"
+    target.parent.mkdir()
+
+    captured_dirs = []
+    real_mkstemp = tempfile.mkstemp
+
+    def spy_mkstemp(*args, **kwargs):
+        captured_dirs.append(kwargs.get("dir"))
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "mkstemp", spy_mkstemp)
+
+    adapter.write_file_atomic(target, "content")
+
+    assert captured_dirs == [target.parent]
+
+
+def test_write_file_atomic_failure_during_replace_does_not_corrupt_original(
+    adapter, tmp_path, monkeypatch
+):
+    # Simulate a failure in the "finalize" step (os.replace), which happens
+    # after the full new content has already been written to the temp file.
+    # The original file's content must survive untouched, and the temp file
+    # must be cleaned up rather than left behind.
+    target = tmp_path / "queue.yaml"
+    target.write_text("original content")
+
+    import os as os_module
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated failure during os.replace")
+
+    monkeypatch.setattr(os_module, "replace", boom)
+
+    with pytest.raises(OSError, match="simulated failure"):
+        adapter.write_file_atomic(target, "new content that should never land")
+
+    assert target.read_text() == "original content"
+    leftover_tmp = [p for p in tmp_path.iterdir() if p.name != "queue.yaml"]
+    assert leftover_tmp == []
+
+
+def test_write_file_atomic_failure_mid_write_does_not_corrupt_original(
+    adapter, tmp_path, monkeypatch
+):
+    # Simulate a failure while content is still being written to the temp
+    # file (before os.replace is ever reached). The original file must be
+    # untouched and no temp file left behind.
+    target = tmp_path / "queue.yaml"
+    target.write_text("original content")
+
+    import os as os_module
+
+    real_fdopen = os_module.fdopen
+
+    class ExplodingFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def write(self, data):
+            raise OSError("simulated failure mid-write")
+
+    def fake_fdopen(fd, mode="r", *args, **kwargs):
+        os_module.close(fd)  # avoid leaking the real fd since we never use it
+        return ExplodingFile()
+
+    monkeypatch.setattr(os_module, "fdopen", fake_fdopen)
+
+    with pytest.raises(OSError, match="simulated failure mid-write"):
+        adapter.write_file_atomic(target, "new content that should never land")
+
+    assert target.read_text() == "original content"
+    leftover_tmp = [p for p in tmp_path.iterdir() if p.name != "queue.yaml"]
+    assert leftover_tmp == []
+
+
+# ---------------------------------------------------------------------------
+# 15. file_lock()
+# ---------------------------------------------------------------------------
+
+
+def test_file_lock_uncontended_acquire_and_release_succeeds(adapter, tmp_path):
+    target = tmp_path / "queue.yaml"
+
+    with adapter.file_lock(target, timeout=1.0):
+        pass  # must not raise
+
+
+def test_file_lock_creates_sibling_lock_file_without_touching_target(adapter, tmp_path):
+    target = tmp_path / "queue.yaml"
+    target.write_text("original content")
+
+    with adapter.file_lock(target):
+        pass
+
+    assert target.read_text() == "original content"
+    assert (tmp_path / "queue.yaml.lock").exists()
+
+
+def test_file_lock_two_callers_cannot_hold_it_simultaneously(adapter, tmp_path):
+    target = tmp_path / "queue.yaml"
+
+    holder_ready = threading.Event()
+    release_holder = threading.Event()
+
+    def hold_lock():
+        with adapter.file_lock(target):
+            holder_ready.set()
+            release_holder.wait(timeout=5)
+
+    holder_thread = threading.Thread(target=hold_lock)
+    holder_thread.start()
+    assert holder_ready.wait(timeout=5), "holder thread never acquired the lock"
+
+    # A second caller trying to acquire while the first still holds it must
+    # time out rather than silently proceeding.
+    with pytest.raises(TimeoutError):
+        with adapter.file_lock(target, timeout=0.3):
+            pytest.fail("second caller must not have acquired the lock")
+
+    release_holder.set()
+    holder_thread.join(timeout=5)
+    assert not holder_thread.is_alive()
+
+    # Once released, a fresh acquisition must succeed promptly.
+    with adapter.file_lock(target, timeout=1.0):
+        pass
+
+
+def test_file_lock_timeout_error_message_names_timeout_and_lock_path(adapter, tmp_path):
+    target = tmp_path / "queue.yaml"
+    holder_ready = threading.Event()
+    release_holder = threading.Event()
+
+    def hold_lock():
+        with adapter.file_lock(target):
+            holder_ready.set()
+            release_holder.wait(timeout=5)
+
+    holder_thread = threading.Thread(target=hold_lock)
+    holder_thread.start()
+    assert holder_ready.wait(timeout=5)
+
+    try:
+        with pytest.raises(TimeoutError, match=r"0\.25s"):
+            with adapter.file_lock(target, timeout=0.25):
+                pass
+    finally:
+        release_holder.set()
+        holder_thread.join(timeout=5)
+
+
+def test_file_lock_is_released_on_exception_in_body(adapter, tmp_path):
+    target = tmp_path / "queue.yaml"
+
+    with pytest.raises(RuntimeError):
+        with adapter.file_lock(target):
+            raise RuntimeError("boom")
+
+    # Lock must have been released despite the exception -- a fresh
+    # acquisition should succeed immediately, not time out.
+    with adapter.file_lock(target, timeout=1.0):
+        pass
+
+
+def test_file_lock_many_threads_serialize_a_shared_counter(adapter, tmp_path):
+    # A more demanding version of the "can't hold simultaneously" test:
+    # many threads each acquire the lock, do a read-increment-write cycle on
+    # a plain counter file, and release. Without correct mutual exclusion,
+    # concurrent increments would race and the final count would be less
+    # than the number of threads. Threads here do real file I/O (which
+    # releases the GIL), so this is a genuine race, not one the GIL
+    # happens to serialize for us.
+    target = tmp_path / "counter.txt"
+    target.write_text("0")
+    thread_count = 40
+
+    def increment():
+        with adapter.file_lock(target, timeout=5.0):
+            current = int(target.read_text())
+            # Widen the race window: without the lock, this gives other
+            # threads ample opportunity to interleave between the read and
+            # the write.
+            for _ in range(1000):
+                pass
+            target.write_text(str(current + 1))
+
+    threads = [threading.Thread(target=increment) for _ in range(thread_count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+        assert not t.is_alive()
+
+    assert int(target.read_text()) == thread_count

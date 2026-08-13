@@ -1,0 +1,15 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Created src/cleanup_tools/ai/base.py (ProposalResult, AIProvider ABC),
+  anthropic_provider.py (AnthropicProvider, explicit range(2) retry loop, only retries
+  APITimeoutError/RateLimitError), __init__.py (get_provider() factory: env var first,
+  0600-enforced credentials file fallback, correct-then-warn permission policy documented
+  as deliberate for a single-user personal tool). Added anthropic SDK to pyproject.toml.
+  Not wired into cli.py/routes.py/queue.py -- standalone module, confirmed via grep.
+artifacts:
+  - src/cleanup_tools/ai/__init__.py
+  - src/cleanup_tools/ai/base.py
+  - src/cleanup_tools/ai/anthropic_provider.py
+  - pyproject.toml

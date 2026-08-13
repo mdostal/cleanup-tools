@@ -1,0 +1,99 @@
+id: approvals-ui-triage-efficiency
+epic: ai-approvals-ui
+title: Add bulk actions, keyboard shortcuts, and pagination to the approvals UI
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [approvals-ui-core]
+
+description: |
+  Complete the manual approvals UI: bulk approve/reject (group_key-scoped), keyboard shortcuts
+  for fast single-entry triage, and pagination for large plans. This is the shippable-standalone
+  milestone — with this story done, the manual (no-AI) approvals UI is real, complete, working
+  value even if the AI stories (next two) slip to a follow-on epic, per the user's confirmed
+  sequencing decision.
+
+acceptance_criteria:
+  - "Given a group_key shared by N pending entries, when POST /queue/bulk-approve is called with
+    that group_key, then all N entries transition to approved and no entries outside that group
+    are affected."
+  - "Given the same setup, when POST /queue/bulk-reject is called, then all N entries transition
+    to rejected, no entries outside the group affected."
+  - "Given a queue list view with more entries than one page, when paginated, then page
+    boundaries are correct (no entry appears on two pages, no entry is skipped)."
+  - "Given a real browser session against a 100+-entry fixture plan, when keyboard shortcuts
+    (y/n/space/arrows) are used, then they approve/reject/select/navigate the focused entry
+    correctly — verified manually, not just via automated route tests."
+  - "Verify via: `pytest tests/test_ui_routes.py -v` — all tests pass, plus a manual
+    keyboard-shortcut walkthrough against a realistic fixture plan."
+
+steps:
+  - id: research
+    description: |
+      Re-read the ui-design wireframe brief produced in the approvals-ui-core story (covers
+      both stories' interaction model) for the bulk/keyboard/pagination specifics. Read the
+      completed approvals-ui-core routes.py for the existing route/template conventions.
+    agent: researcher
+  - id: implement
+    description: |
+      Add POST /queue/bulk-approve, POST /queue/bulk-reject (accepting a list of ids or a
+      group_key) to routes.py. Add ?page=/?per_page= pagination to GET /queue. Add
+      static/keyboard.js implementing y/n/space/arrow-key handling against the focused entry.
+      Update queue.html/dashboard.html templates for bulk-select checkboxes + action bar and
+      pagination controls.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write bulk-route and pagination tests in test_ui_routes.py (group-key scoping is exactly
+      right, boundaries are correct). Manually test keyboard shortcuts in a real browser against
+      a 100+-entry fixture plan — this is the actual test of "is this fast," which route tests
+      alone can't answer.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: does bulk-approve/reject ONLY touch entries in the specified group
+      (no accidental over-broad matching)? Are pagination boundaries off-by-one-free? Was the
+      keyboard-shortcut manual walkthrough actually performed, not just claimed?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "Extend with bulk/pagination routes — from the completed approvals-ui-core story"
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/routes.py
+    change: "Add bulk-approve/bulk-reject routes, pagination on GET /queue"
+  - file: src/cleanup_tools/ui/templates/queue.html
+    change: "Add bulk-select UI, pagination controls"
+  - file: src/cleanup_tools/ui/static/keyboard.js
+    change: "Create — keyboard shortcut handler"
+  - file: tests/test_ui_routes.py
+    change: "Add bulk/pagination test cases"
+
+design_decisions:
+  - decision: "This story, not approvals-ui-core, is the real 'shippable even if AI never lands' milestone"
+    rationale: "A list-only UI (core story) is usable but too slow for a real messy Downloads folder to be the actual commitment the design discussion made — bulk/keyboard/pagination is what makes 'manual UI ships as real standalone value' true in practice, not just in principle"
+
+risks:
+  - severity: medium
+    description: "Interaction model quality (is this actually fast to use) can't be fully verified by automated tests"
+    mitigation: "Manual keyboard-shortcut walkthrough against a realistic large fixture is a required verification step, not optional"
+
+references:
+  - path: .pHive/epics/ai-approvals-ui/docs/vertical-plan.md
+    relevant_excerpt: |
+      Slice 3b... This is the point where the manual approvals UI is actually fast to use
+      against a real, messy Downloads folder — the shippable-standalone milestone
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md Status section: note the manual approvals UI is complete and usable at real scale once this story lands."

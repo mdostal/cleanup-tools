@@ -1,0 +1,8 @@
+step_id: platform-verify
+status: skipped
+timestamp: "2026-08-12"
+notes: >
+  Skipped per skip_when — write_file_atomic/file_lock are concrete/shared using POSIX-standard
+  primitives (os.replace, fcntl.flock) that work identically on macOS and Linux; no
+  per-platform divergent logic. Arch Linux execution deferred per "we do arch another day."
+artifacts: []

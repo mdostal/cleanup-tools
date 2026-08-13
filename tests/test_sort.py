@@ -15,6 +15,8 @@ main() would normally pass.
 
 from __future__ import annotations
 
+import contextlib
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +30,8 @@ from cleanup_tools.config import (
     Config,
     save_config,
 )
+from cleanup_tools import queue as queue_module
+from cleanup_tools.queue import QueueEntry, build_plan_snapshot
 
 
 def _make_fake_adapter(home: Path) -> MacOSAdapter:
@@ -337,3 +341,449 @@ def test_nonexistent_target_dir_raises_file_not_found_error(adapter, tmp_path):
 
     with pytest.raises(FileNotFoundError, match=str(missing)):
         sort.run(adapter, SimpleNamespace(dir=str(missing), go=True))
+
+
+# ---------------------------------------------------------------------------
+# 9. --from-queue: executes only approved, queue-sourced ``move`` entries
+#    under the target dir. See sort._run_from_queue's docstring for the
+#    staleness/isolation/single-lock-cycle contract these tests pin down.
+# ---------------------------------------------------------------------------
+
+
+def _seed_queue(adapter, entries: list[QueueEntry]) -> Path:
+    """Write ``entries`` straight to the (fake-home) default queue path."""
+    path = queue_module.default_queue_path(adapter)
+    queue_module.save_queue(adapter, entries, path)
+    return path
+
+
+def _reload_queue(adapter) -> list[QueueEntry]:
+    return queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
+
+
+@pytest.mark.parametrize("status", ["pending", "approved", "rejected"])
+def test_from_queue_executes_only_approved_move_entries(adapter, tmp_path, status):
+    target = tmp_path / "target"
+    target.mkdir()
+    src = target / "file.txt"
+    src.write_text("content")
+    dest = target / "_sorted" / "docs" / "file.txt"
+
+    entry = QueueEntry(
+        action="move",
+        src=str(src),
+        dest=str(dest),
+        status=status,
+        plan_snapshot=build_plan_snapshot(src),
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)
+    report = result["from_queue"]
+
+    if status == "approved":
+        assert report["qualifying_count"] == 1
+        assert report["executed"] == [{"id": entry.id, "src": str(src), "dest": str(dest)}]
+        assert not src.exists()
+        assert dest.exists()
+        assert dest.read_text() == "content"
+    else:
+        assert report["qualifying_count"] == 0
+        assert report["executed"] == []
+        assert src.exists()
+        assert not dest.exists()
+
+    # The persisted status is never mutated by --from-queue itself -- only
+    # execution outcome fields are.
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == status
+
+
+def test_from_queue_ignores_approved_non_move_action(adapter, tmp_path):
+    """An approved queue entry whose action isn't "move" must never execute
+    through sort's --from-queue, even though it's approved and under the
+    target dir -- confirming the "right action type" half of the filter.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+    src = target / "file.txt"
+    src.write_text("content")
+
+    entry = QueueEntry(
+        action="delete",
+        src=str(src),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(src),
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["qualifying_count"] == 0
+    assert report["executed"] == []
+    assert src.exists()
+    assert src.read_text() == "content"
+
+
+def test_from_queue_stale_entry_is_skipped_status_and_execution_fields_untouched(
+    adapter, tmp_path
+):
+    """A stale approved entry (content changed since plan_snapshot) is left
+    alone entirely: never moved, status stays "approved", executed_at/
+    execution_error stay None, and it's reported in the "stale" list.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+    src = target / "file.txt"
+    src.write_text("original-content")
+    dest = target / "_sorted" / "docs" / "file.txt"
+
+    snapshot = build_plan_snapshot(src)
+    # Content changes after the snapshot was taken -- same file, same name,
+    # but the recorded content_hash (and size) no longer match.
+    src.write_text("a completely different, longer payload now")
+
+    entry = QueueEntry(
+        action="move", src=str(src), dest=str(dest), status="approved", plan_snapshot=snapshot
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["qualifying_count"] == 1
+    assert report["executed"] == []
+    assert report["failed"] == []
+    assert len(report["stale"]) == 1
+    assert report["stale"][0]["id"] == entry.id
+    assert report["stale"][0]["src"] == str(src)
+
+    # Never touched on disk.
+    assert src.exists()
+    assert src.read_text() == "a completely different, longer payload now"
+    assert not dest.exists()
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"
+    assert reloaded.executed_at is None
+    assert reloaded.execution_error is None
+
+
+def test_from_queue_stale_entry_deleted_src_is_skipped_and_reported(adapter, tmp_path):
+    """The other half of "changed/deleted since plan_snapshot": a src that no
+    longer exists at all is also stale, not a hard failure.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+    src = target / "file.txt"
+    src.write_text("content")
+    dest = target / "_sorted" / "docs" / "file.txt"
+    snapshot = build_plan_snapshot(src)
+    src.unlink()
+
+    entry = QueueEntry(
+        action="move", src=str(src), dest=str(dest), status="approved", plan_snapshot=snapshot
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["executed"] == []
+    assert len(report["stale"]) == 1
+    assert report["stale"][0]["id"] == entry.id
+    assert not dest.exists()
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"
+    assert reloaded.executed_at is None
+    assert reloaded.execution_error is None
+
+
+def test_from_queue_successful_execution_sets_executed_at_and_clears_error(adapter, tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    src = target / "file.txt"
+    src.write_text("content")
+    dest = target / "_sorted" / "docs" / "file.txt"
+
+    entry = QueueEntry(
+        action="move",
+        src=str(src),
+        dest=str(dest),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(src),
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)
+
+    assert result["from_queue"]["executed"] == [
+        {"id": entry.id, "src": str(src), "dest": str(dest)}
+    ]
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"  # execution never touches status
+    assert reloaded.executed_at is not None
+    assert reloaded.execution_error is None
+    # Sanity: it's a real, parseable timestamp, not a placeholder string.
+    datetime.fromisoformat(reloaded.executed_at)
+
+
+def test_from_queue_dest_already_exists_is_skipped_not_overwritten(adapter, tmp_path):
+    """CRITICAL regression: --from-queue must never clobber a pre-existing
+    destination file, mirroring the --go path's dest_exists guard. Before
+    the fix, _run_from_queue called adapter.move() unconditionally and
+    silently overwrote whatever was already sitting at entry.dest.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+    src = target / "file.txt"
+    src.write_text("new-content")
+    dest = target / "_sorted" / "docs" / "file.txt"
+    dest.parent.mkdir(parents=True)
+    dest.write_text("pre-existing-content-must-survive")
+
+    entry = QueueEntry(
+        action="move",
+        src=str(src),
+        dest=str(dest),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(src),
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)
+    report = result["from_queue"]
+
+    # Neither side of the move is executed nor reported as executed.
+    assert report["executed"] == []
+    assert report["failed"] == []
+    assert len(report["skipped"]) == 1
+    assert report["skipped"][0]["id"] == entry.id
+    assert report["skipped"][0]["src"] == str(src)
+    assert report["skipped"][0]["dest"] == str(dest)
+    assert (
+        report["skipped"][0]["reason"]
+        == "destination already exists, skipped to avoid overwrite"
+    )
+
+    # The pre-existing destination file survives untouched, and the source
+    # was never moved (and thus still exists with its own original content).
+    assert dest.read_text() == "pre-existing-content-must-survive"
+    assert src.exists()
+    assert src.read_text() == "new-content"
+
+    # Never recorded as an execution attempt: executed_at/execution_error
+    # stay untouched (this is a skip, not a raised-exception failure), and
+    # status is left alone too.
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"
+    assert reloaded.executed_at is None
+    assert reloaded.execution_error is None
+
+
+def test_from_queue_failed_execution_isolated_per_entry(adapter, tmp_path, monkeypatch):
+    """One entry's adapter.move() raising OSError sets execution_error to
+    the error string (executed_at still gets set), and the batch continues
+    on to the next entry rather than aborting -- per-entry isolation,
+    mirroring --go's existing per-entry try/except.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+    good_src = target / "good.txt"
+    good_src.write_text("good-bytes")
+    bad_src = target / "bad.txt"
+    bad_src.write_text("bad-bytes")
+    good_dest = target / "_sorted" / "docs" / "good.txt"
+    bad_dest = target / "_sorted" / "docs" / "bad.txt"
+
+    good_entry = QueueEntry(
+        action="move",
+        src=str(good_src),
+        dest=str(good_dest),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(good_src),
+    )
+    bad_entry = QueueEntry(
+        action="move",
+        src=str(bad_src),
+        dest=str(bad_dest),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(bad_src),
+    )
+    _seed_queue(adapter, [bad_entry, good_entry])
+
+    real_move = adapter.move
+
+    def flaky_move(src, dst):
+        if Path(src).name == "bad.txt":
+            raise OSError("permission denied (simulated)")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(adapter, "move", flaky_move)
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)  # must not raise
+    report = result["from_queue"]
+
+    assert len(report["failed"]) == 1
+    assert report["failed"][0]["id"] == bad_entry.id
+    assert report["failed"][0]["error"] == "permission denied (simulated)"
+
+    # The batch continued: the good entry after the bad one in queue order
+    # still executed.
+    assert len(report["executed"]) == 1
+    assert report["executed"][0]["id"] == good_entry.id
+
+    by_id = {e.id: e for e in _reload_queue(adapter)}
+
+    bad_reloaded = by_id[bad_entry.id]
+    assert bad_reloaded.status == "approved"
+    assert bad_reloaded.executed_at is not None  # set on failure too
+    assert bad_reloaded.execution_error == "permission denied (simulated)"
+    assert bad_src.exists()  # never actually moved
+    assert bad_src.read_text() == "bad-bytes"
+
+    good_reloaded = by_id[good_entry.id]
+    assert good_reloaded.status == "approved"
+    assert good_reloaded.executed_at is not None
+    assert good_reloaded.execution_error is None
+    assert not good_src.exists()
+    assert good_dest.exists()
+
+
+def test_from_queue_non_oserror_mid_batch_does_not_lose_prior_entrys_result(
+    adapter, tmp_path, monkeypatch
+):
+    """CRITICAL regression: a non-OSError exception raised while executing
+    one entry must not prevent save_queue from persisting the outcome
+    already recorded on an *earlier* entry in the same batch.
+
+    Before the fix, _run_from_queue only caught ``except OSError``, so a
+    ValueError (or any other non-OSError) raised mid-batch would propagate
+    out of the whole function -- past save_queue -- losing the first
+    entry's already-set executed_at/execution_error entirely.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+    first_src = target / "first.txt"
+    first_src.write_text("first-bytes")
+    second_src = target / "second.txt"
+    second_src.write_text("second-bytes")
+    first_dest = target / "_sorted" / "docs" / "first.txt"
+    second_dest = target / "_sorted" / "docs" / "second.txt"
+
+    first_entry = QueueEntry(
+        action="move",
+        src=str(first_src),
+        dest=str(first_dest),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(first_src),
+    )
+    second_entry = QueueEntry(
+        action="move",
+        src=str(second_src),
+        dest=str(second_dest),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(second_src),
+    )
+    _seed_queue(adapter, [first_entry, second_entry])
+
+    real_move = adapter.move
+
+    def flaky_move(src, dst):
+        if Path(src).name == "second.txt":
+            raise ValueError("unexpected bug (simulated), not an OSError")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(adapter, "move", flaky_move)
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)  # must not raise
+    report = result["from_queue"]
+
+    assert len(report["executed"]) == 1
+    assert report["executed"][0]["id"] == first_entry.id
+
+    assert len(report["failed"]) == 1
+    assert report["failed"][0]["id"] == second_entry.id
+    assert report["failed"][0]["error"] == "unexpected bug (simulated), not an OSError"
+
+    # The queue file was still saved -- the first entry's success is not
+    # lost just because the second entry blew up with something other
+    # than OSError.
+    by_id = {e.id: e for e in _reload_queue(adapter)}
+
+    first_reloaded = by_id[first_entry.id]
+    assert first_reloaded.status == "approved"
+    assert first_reloaded.executed_at is not None
+    assert first_reloaded.execution_error is None
+    assert not first_src.exists()
+    assert first_dest.exists()
+
+    second_reloaded = by_id[second_entry.id]
+    assert second_reloaded.status == "approved"
+    assert second_reloaded.executed_at is not None
+    assert second_reloaded.execution_error == "unexpected bug (simulated), not an OSError"
+    assert second_src.exists()  # never actually moved
+
+
+def test_from_queue_saves_queue_exactly_once_per_invocation(adapter, tmp_path, monkeypatch):
+    """The whole load -> mutate -> save cycle runs inside a single
+    with_queue_lock block: N qualifying entries must still only produce one
+    lock acquisition and one save_queue call, not N of each.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+
+    entries = []
+    for i in range(4):
+        src = target / f"file{i}.txt"
+        src.write_text(f"content-{i}")
+        dest = target / "_sorted" / "docs" / f"file{i}.txt"
+        entries.append(
+            QueueEntry(
+                action="move",
+                src=str(src),
+                dest=str(dest),
+                status="approved",
+                plan_snapshot=build_plan_snapshot(src),
+            )
+        )
+    _seed_queue(adapter, entries)
+
+    save_calls: list[list[QueueEntry]] = []
+    real_save = queue_module.save_queue
+
+    def spy_save(adapter_, entries_, path=None):
+        save_calls.append(list(entries_))
+        return real_save(adapter_, entries_, path)
+
+    monkeypatch.setattr(sort.queue_module, "save_queue", spy_save)
+
+    lock_calls: list[Path] = []
+    real_lock = queue_module.with_queue_lock
+
+    @contextlib.contextmanager
+    def spy_lock(adapter_, path):
+        lock_calls.append(path)
+        with real_lock(adapter_, path):
+            yield
+
+    monkeypatch.setattr(sort.queue_module, "with_queue_lock", spy_lock)
+
+    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    result = sort.run(adapter, args)
+
+    assert result["from_queue"]["qualifying_count"] == 4
+    assert len(result["from_queue"]["executed"]) == 4
+    assert len(save_calls) == 1
+    assert len(lock_calls) == 1

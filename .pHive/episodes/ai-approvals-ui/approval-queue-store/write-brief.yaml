@@ -1,0 +1,5 @@
+step_id: write-brief
+status: completed
+timestamp: "2026-08-12"
+notes: "write_file_atomic (temp+os.replace) and file_lock (fcntl.flock+timeout) as new shared OSAdapter methods. queue.py schema/ops matching structured-outline.md Phase 1 exactly, separate file from config.yaml."
+artifacts: []

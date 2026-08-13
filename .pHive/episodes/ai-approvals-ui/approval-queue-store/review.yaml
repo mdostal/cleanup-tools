@@ -1,0 +1,16 @@
+step_id: review
+status: completed
+timestamp: "2026-08-12"
+review_verdict: needs_revision
+review_findings: >
+  Critical: (1) stage_entries's dedup is computed once from existing entries before iterating
+  new_entries — two entries with the same src in ONE call both get added, no concurrency
+  needed to reproduce. (2) check_staleness is content-blind: same-size content replacement with
+  a restored mtime (cp -p, rsync -t, some editors) slips through as "not stale" — a real safety
+  gap since this gates whether an approved delete/move is safe to execute. Improvements: lock
+  identity keyed on raw path string not canonicalized (no current exploit, no guardrail against
+  future path-alias callers); save_queue/load_queue unlocked-by-convention only; atomic write
+  silently tightens file permissions to 0600 on first write. The locking/atomicity mechanism
+  itself (the story's main risk) is solid and well-tested — independently re-verified by the
+  reviewer including a fresh-file/fresh-directory race with zero lost entries.
+artifacts: []

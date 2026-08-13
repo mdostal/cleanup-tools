@@ -1,0 +1,6 @@
+step_id: integrate
+status: completed
+timestamp: "2026-08-12"
+commit_ref: "adbd1c6"
+notes: "225/225 tests pass. Staged only story files. Committed locally on feat/ai-approvals-ui. Not pushed."
+artifacts: []

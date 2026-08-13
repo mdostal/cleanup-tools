@@ -1,0 +1,14 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Wrapped _parse_response's body in try/except (TypeError, AttributeError, ValueError,
+  OverflowError), converting response-shape-mismatch failures to
+  ProposalResult(kind="unparseable", ...) instead of raising, matching how other malformed
+  cases already degrade in this function. Did not blanket-catch Exception. Verified red
+  (reverted wrapper, confirmed both new tests fail with the raw TypeError/OverflowError)
+  then green (restored, confirmed pass). 299 -> 301 tests pass.
+artifacts:
+  - src/cleanup_tools/ai/anthropic_provider.py
+  - tests/test_ai_provider.py

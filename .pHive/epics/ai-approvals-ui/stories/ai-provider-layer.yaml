@@ -1,0 +1,130 @@
+id: ai-provider-layer
+epic: ai-approvals-ui
+title: Build the AI-provider interface and Anthropic implementation
+status: pending
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  Build a standalone, tested AI-provider interface (ABC + typed ProposalResult outcomes) and
+  one concrete implementation (Anthropic), scoped narrowly to "given a filename, propose a
+  bucket." Not wired into anything else yet — that's the next story. This story has its own
+  error taxonomy, retry policy (at most 1 retry, only on timeout/rate-limit), API-key storage
+  (env var first, a 0600-permission credentials file as fallback — NEVER config.yaml or the
+  approval queue file), and a call-volume cap. Genuinely independent of every other story in
+  this epic; sequenced here only per the user's confirmed manual-first decision.
+
+acceptance_criteria:
+  - "Given AIProvider.propose_bucket(filename, metadata) is called against a mocked successful
+    response, when it returns, then ProposalResult.kind == 'success' with bucket/confidence/
+    rationale populated."
+  - "Given a mocked auth-failure/rate-limited/timeout/unparseable-response, when
+    propose_bucket is called, then it returns the correspondingly typed ProposalResult.kind —
+    never a raw provider exception propagated to the caller."
+  - "Given a mocked timeout-then-success sequence, when propose_bucket is called, then it
+    retries exactly once and returns the success result."
+  - "Given a mocked timeout-then-timeout sequence, when propose_bucket is called, then it
+    makes exactly 2 total attempts (1 retry) and returns a timeout ProposalResult — never
+    retries a second time."
+  - "Given ANTHROPIC_API_KEY is set in the environment, when get_provider() is called, then it
+    uses that key. Given it is unset but ~/.config/cleanup-tools/credentials exists with mode
+    0600, when get_provider() is called, then it uses that file's key instead."
+  - "Given the credentials file exists but does NOT have 0600 permissions, when get_provider()
+    reads it, then it corrects the mode (or refuses with a clear error) rather than silently
+    using an insecurely-permissioned file."
+  - "Given the anthropic SDK's client construction, when inspected during implementation, then
+    any default telemetry/analytics/update-check behavior is identified and explicitly disabled
+    if present — findings documented in the implementation, not just assumed clean."
+  - "Given one real (manually-provided) Anthropic API key, when a real call is made manually
+    (NOT part of the automated suite), then it succeeds end-to-end, confirming the mock
+    accurately reflects the real API's response shape."
+  - "Verify via: `pytest tests/test_ai_provider.py -v` — all tests pass, zero real network
+    calls in the automated run."
+
+steps:
+  - id: research
+    description: |
+      Research the Anthropic Python SDK's client construction and default behavior
+      (telemetry/analytics/update-checks) — this needs a real answer, not an assumption, per
+      design-discussion's named risk. Read src/cleanup_tools/adapters/base.py for the
+      ABC+factory pattern precedent this interface's *shape* (not its risk model) follows.
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/ai/base.py (ProposalResult, AIProvider ABC),
+      src/cleanup_tools/ai/anthropic_provider.py (AnthropicProvider, one-retry policy),
+      src/cleanup_tools/ai/__init__.py (get_provider() factory: env var first, credentials-file
+      fallback with 0600 enforcement). Add anthropic SDK to pyproject.toml, explicitly disabling
+      any default telemetry found during research.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_ai_provider.py — ALL automated tests use a mocked provider/HTTP layer,
+      zero real network calls. Cover every ProposalResult.kind, the exact retry-count assertion
+      (2 attempts on timeout-then-timeout, not 3+), key resolution order, credentials-file
+      permission enforcement. Then perform ONE manual, opt-in real API call (documented in the
+      PR/commit notes, not in the automated suite) to confirm the mock's shape matches reality.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: is the retry policy exactly "at most 1 retry" with no path to more?
+      Is the API key genuinely never read from or written to config.yaml or the approval queue
+      file? Was the SDK's telemetry behavior actually investigated (cite what was found), not
+      just asserted clean?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+    ai_sdk: anthropic (official Python SDK)
+  key_files:
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "Structural precedent for ABC+factory shape — NOT a precedent for error/retry/security model, which is genuinely different for network calls (per architect review)"
+
+files_to_modify:
+  - file: src/cleanup_tools/ai/__init__.py
+    change: "Create — get_provider() factory"
+  - file: src/cleanup_tools/ai/base.py
+    change: "Create — ProposalResult, AIProvider ABC"
+  - file: src/cleanup_tools/ai/anthropic_provider.py
+    change: "Create — AnthropicProvider implementation"
+  - file: tests/test_ai_provider.py
+    change: "Create — mocked-provider tests covering every outcome + retry policy + key resolution"
+  - file: pyproject.toml
+    change: "Add anthropic SDK as a runtime dependency"
+
+design_decisions:
+  - decision: "API key storage: env var primary, dedicated 0600 credentials file fallback — never config.yaml or the queue file"
+    rationale: "config.yaml is plaintext and was the original (wrong) assumption; team review caught that a secret has no business in the same file as bucket rules or approval state"
+  - decision: "At most 1 retry, only on timeout/rate-limit, implemented as a plain loop not a backoff library"
+    rationale: "Keeps the 'at most one extra network call' guarantee legible in the code, not buried in a library's default retry policy — directly closes the network-scope-creep risk named in design-discussion §4"
+
+risks:
+  - severity: high
+    description: "AI SDK's default telemetry/analytics silently violates the no-ambient-network hard rule"
+    mitigation: "Explicit research step investigating actual SDK behavior before considering this story done, with findings documented"
+  - severity: high
+    description: "API key ends up in a world-readable file or the wrong config file"
+    mitigation: "Dedicated credentials file with enforced 0600 permissions, explicitly never config.yaml/queue file"
+  - severity: medium
+    description: "Call-volume cap enforcement — belongs to the NEXT story (ai-queue-wiring), not this one, since this story doesn't yet make bulk calls"
+    mitigation: "N/A for this story — flagged so it isn't forgotten in ai-queue-wiring"
+
+references:
+  - path: .pHive/epics/ai-approvals-ui/docs/design-discussion.md
+    relevant_excerpt: |
+      Error taxonomy... Retry policy: at most one retry... API-key storage: NOT in config.yaml...
+      Call volume: one call per ambiguous file, with a per-invocation cap
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md and CONTEXT.md need notes on how to configure an Anthropic API key once this story lands, plus the explicit 'no ambient network calls' guarantee this preserves."

@@ -1,0 +1,13 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Fixed batch-internal dedup (running seen_srcs set updated during iteration, not a static
+  pre-batch snapshot). Fixed staleness content-blindness (sha256 content_hash added to
+  plan_snapshot, capped at 8MiB with a documented prefix-hash tradeoff for larger files;
+  build_plan_snapshot() helper added for callers). 191/191 tests pass (2 new regression tests).
+  Both original bugs independently re-reproduced against fixed code and confirmed closed.
+artifacts:
+  - src/cleanup_tools/queue.py
+  - tests/test_queue.py
