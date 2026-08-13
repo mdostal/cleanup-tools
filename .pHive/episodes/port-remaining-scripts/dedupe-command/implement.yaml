@@ -1,0 +1,12 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Created src/cleanup_tools/commands/dedupe.py: _group_by_size (cheap per-file stat,
+  2+-member groups only), _hash_file (full uncapped hashlib.sha256 read, no cap reused
+  from queue.py), _group_by_hash (hashes only size-matched candidates), run() returning
+  structured {dir, duplicate_groups: [{hash, size_bytes, paths}]}. Registered dedupe
+  subcommand in cli.py (positional dir, no --go/--from-queue).
+artifacts:
+  - src/cleanup_tools/commands/dedupe.py
+  - src/cleanup_tools/cli.py

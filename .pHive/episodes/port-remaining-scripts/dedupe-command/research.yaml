@@ -1,0 +1,8 @@
+step_id: research
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Re-read scripts/dedupe.sh's two-stage size-then-hash shape, and queue.py's _content_hash/
+  CONTENT_HASH_MAX_BYTES pattern (read for contrast, deliberately not reused -- that cap
+  exists for a staleness check, not an identity claim). Re-read survey.py's read-only shape.
+artifacts: []
