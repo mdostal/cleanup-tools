@@ -29,6 +29,9 @@
       {% for status, count in g.status_counts.items() %}
       <span class="badge">{{ status }}: {{ count }}</span>
       {% endfor %}
+      {% if g.ai_count %}
+      <span class="badge badge-ai">AI-proposed: {{ g.ai_count }}</span>
+      {% endif %}
     </div>
   </div>
   {% else %}

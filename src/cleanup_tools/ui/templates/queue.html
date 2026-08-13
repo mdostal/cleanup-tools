@@ -69,6 +69,12 @@
       <strong>{{ entry.action }}</strong>
       &middot; {{ entry.group_key or "ungrouped" }}
       &middot; status: {{ entry.status }}
+      &middot;
+      {% if is_ai_source(entry.source) %}
+      <span class="badge badge-ai" title="Proposed by {{ entry.source }}">AI-proposed</span>
+      {% else %}
+      <span class="badge badge-manual">Manual</span>
+      {% endif %}
     </p>
     <p class="entry-path">src: {{ entry.src }}</p>
     {% if entry.dest %}

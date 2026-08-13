@@ -1,25 +1,34 @@
 """Command-line entry point for cleanup-tools.
 
 Wires up a single top-level argparse parser with one subparser per command
-(``survey``, ``sort``, ``reclaim``, and ``approve``). ``main()`` builds one
-:class:`~cleanup_tools.adapters.base.OSAdapter` for the whole invocation,
-dispatches to the matching command module's ``run(adapter, args)`` function
--- passing the parsed argparse namespace so commands with options (e.g.
-``sort``'s ``dir``/``--go``, ``reclaim``'s ``dir``/``--go``/``--docker``) can
-read them, while options-less commands (e.g. ``survey``) simply ignore
-``args`` -- and prints the result as pretty-printed JSON.
+(``survey``, ``sort``, ``reclaim``, ``propose-ai``, and ``approve``).
+``main()`` builds one :class:`~cleanup_tools.adapters.base.OSAdapter` for the
+whole invocation, dispatches to the matching command module's
+``run(adapter, args)`` function -- passing the parsed argparse namespace so
+commands with options (e.g. ``sort``'s ``dir``/``--go``, ``reclaim``'s
+``dir``/``--go``/``--docker``) can read them, while options-less commands
+(e.g. ``survey``) simply ignore ``args`` -- and prints the result as
+pretty-printed JSON.
 
-``approve`` is the one exception: it starts the localhost approvals UI (see
-:mod:`cleanup_tools.ui.app`) and blocks for as long as the server runs, so
-it is dispatched directly in ``main()`` rather than through ``COMMANDS`` /
-the JSON-printing convention every other subcommand follows.
+``approve`` and ``propose-ai`` are the two exceptions to that plain
+``COMMANDS`` dispatch, each for its own reason: ``approve`` starts the
+localhost approvals UI (see :mod:`cleanup_tools.ui.app`) and blocks for as
+long as the server runs; ``propose-ai`` needs an
+:class:`~cleanup_tools.ai.base.AIProvider` assembled via
+:func:`cleanup_tools.ai.get_provider` first (which can fail with a routine
+``CredentialsError`` if no API key is configured, printed as a clean error
+rather than a traceback) and its ``QueueEntry`` results need
+``dataclasses.asdict()`` before they fit the JSON-printing convention every
+other subcommand follows.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
+from pathlib import Path
 
 from . import adapters
 from .commands import reclaim, sort, survey
@@ -107,6 +116,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    propose_ai_parser = subparsers.add_parser(
+        "propose-ai",
+        help=(
+            "Ask the configured AI provider to bucket ambiguous ('other') "
+            "files and stage the successful proposals into the approval "
+            "queue, same as `approve`'s UI would."
+        ),
+    )
+    propose_ai_parser.add_argument(
+        "dir",
+        nargs="?",
+        default=None,
+        help="Directory to scan (default: the platform Downloads dir, same as sort).",
+    )
+    propose_ai_parser.add_argument(
+        "--cap",
+        type=int,
+        default=None,
+        help="Max number of AI proposals to request in one run (default: 20).",
+    )
+
     approve_parser = subparsers.add_parser(
         "approve",
         help=(
@@ -158,6 +188,35 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port if args.port is not None else DEFAULT_PORT,
             open_browser=not args.no_browser,
         )
+        return 0
+
+    if args.command == "propose-ai":
+        # Also dispatched directly rather than through COMMANDS: it needs an
+        # AIProvider assembled via get_provider() first (which can fail with
+        # a routine, expected CredentialsError if no API key is configured
+        # anywhere -- printed as a clean one-line error, not a traceback),
+        # and its QueueEntry results need dataclasses.asdict() before they're
+        # JSON-serializable in the same shape every other subcommand prints.
+        from . import config as config_module
+        from .ai import CredentialsError, get_provider
+        from .ai.wiring import DEFAULT_CAP, propose_for_other_bucket
+
+        try:
+            provider = get_provider()
+        except CredentialsError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
+        config = config_module.load_config(adapter)
+        target_dir = Path(args.dir) if args.dir else None
+        cap = args.cap if args.cap is not None else DEFAULT_CAP
+        result = propose_for_other_bucket(adapter, config, provider, cap, target_dir=target_dir)
+        output = {
+            "proposed": [dataclasses.asdict(e) for e in result["proposed"]],
+            "failures": result["failures"],
+            "calls_made": result["calls_made"],
+        }
+        print(json.dumps(output, indent=2, default=str))
         return 0
 
     command_fn = COMMANDS[args.command]

@@ -833,6 +833,46 @@ def test_queue_pagination_per_page_is_clamped(adapter, client, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 8b. AI-sourced entries are visibly distinguishable in the queue view --
+#     the story's acceptance criteria require an AI proposal to "look and
+#     behave identically to a manual entry... with source visibly
+#     distinguishable but not functionally different". This asserts on the
+#     actual rendered /queue response body (not by calling a template
+#     helper directly), so it genuinely exercises what a human reviewing
+#     the queue sees.
+# ---------------------------------------------------------------------------
+
+
+def test_queue_view_distinguishes_ai_proposed_entries_from_manual(adapter, client, tmp_path):
+    manual_file = tmp_path / "manual_report.txt"
+    manual_file.write_text("manual")
+    ai_file = tmp_path / "ai_photo.jpg"
+    ai_file.write_text("ai")
+
+    manual_entry = QueueEntry(
+        action="move", src=str(manual_file), dest="", status="pending", source="manual"
+    )
+    ai_entry = QueueEntry(
+        action="move", src=str(ai_file), dest="", status="pending", source="ai:anthropic"
+    )
+    _seed_queue(adapter, [manual_entry, ai_entry])
+
+    resp = client.get("/queue")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+
+    # Split the rendered page into each entry's own card so the assertions
+    # below check what's near THAT card specifically, not just "the string
+    # appears somewhere on the page".
+    manual_card = html.split(f'data-entry-id="{manual_entry.id}"')[1].split("entry-card")[0]
+    ai_card = html.split(f'data-entry-id="{ai_entry.id}"')[1].split("entry-card")[0]
+
+    assert "AI-proposed" in ai_card
+    assert "AI-proposed" not in manual_card
+    assert "Manual" in manual_card
+
+
+# ---------------------------------------------------------------------------
 # 9. Keyboard shortcuts / bulk-select markup: static asset is served, and
 #    queue.html carries the data attributes + focus/select scaffolding
 #    keyboard.js depends on. (The real interactive keyboard behavior is

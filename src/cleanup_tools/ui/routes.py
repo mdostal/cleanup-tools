@@ -30,7 +30,11 @@ from pathlib import Path
 from flask import Blueprint, Response, abort, current_app, redirect, render_template, request, url_for
 from PIL import Image, UnidentifiedImageError
 
+from .. import config as config_module
 from .. import queue as queue_module
+from ..ai import CredentialsError, get_provider
+from ..ai.wiring import DEFAULT_CAP as DEFAULT_AI_CAP
+from ..ai.wiring import propose_for_other_bucket
 from ..commands import reclaim as reclaim_module
 from ..commands import sort as sort_module
 
@@ -93,6 +97,22 @@ def is_image_entry(entry: queue_module.QueueEntry) -> bool:
     return Path(entry.src).suffix.lower() in IMAGE_EXTENSIONS
 
 
+def _is_ai_source(source: str) -> bool:
+    """Whether a QueueEntry's ``source`` tag marks it as AI-proposed.
+
+    AI-sourced entries carry ``source=f"ai:<provider>"`` (see
+    ``ai.wiring._provider_source``, e.g. ``"ai:anthropic"``). Every other
+    source convention currently in use -- the ``QueueEntry`` default
+    ``"manual"``, and this module's own ``"ui-plan-sort"``/
+    ``"ui-plan-reclaim"`` plan-staging tags -- is a human-triggered source
+    and therefore NOT AI-proposed. This is purely a rendering distinction
+    (see ``queue.html``'s per-entry badge and ``dashboard.html``'s
+    per-group AI count): it never changes approve/reject/undo/bulk
+    behavior, which treats every entry identically regardless of source.
+    """
+    return source.startswith("ai:")
+
+
 def _pending_entries() -> list[queue_module.QueueEntry]:
     return [e for e in _load_entries() if e.status == "pending"]
 
@@ -124,11 +144,14 @@ def _group_entries(entries: list[queue_module.QueueEntry]) -> list[dict]:
     for entry in entries:
         key = entry.group_key or "ungrouped"
         group = groups.setdefault(
-            key, {"group_key": key, "count": 0, "total_size": 0, "status_counts": {}}
+            key,
+            {"group_key": key, "count": 0, "total_size": 0, "status_counts": {}, "ai_count": 0},
         )
         group["count"] += 1
         group["total_size"] += _entry_size(entry)
         group["status_counts"][entry.status] = group["status_counts"].get(entry.status, 0) + 1
+        if _is_ai_source(entry.source):
+            group["ai_count"] += 1
 
     return sorted(groups.values(), key=lambda g: g["total_size"], reverse=True)
 
@@ -242,6 +265,43 @@ def plan_reclaim():
     return redirect(url_for("ui.dashboard", staged=len(added)))
 
 
+@bp.route("/propose-ai", methods=["POST"])
+def propose_ai():
+    """Ask the configured AI provider to bucket up to ``DEFAULT_AI_CAP`` of
+    the files sort.py's dry-run plan would otherwise leave in ``'other'``,
+    and stage every successful proposal into the SAME approval queue manual
+    entries use (see ``ai.wiring.propose_for_other_bucket``).
+
+    ``get_provider()`` raising ``CredentialsError`` (no API key configured
+    anywhere it looks) is a routine, expected condition for a tool that
+    doesn't require AI to be configured at all -- handled the same way
+    ``plan_sort``/``plan_reclaim`` handle their own routine failure modes
+    above: a redirect back to the dashboard carrying a ``plan_error``
+    message, never a 500.
+    """
+    adapter = _adapter()
+    try:
+        provider = get_provider()
+    except CredentialsError as exc:
+        return redirect(url_for("ui.dashboard", plan_error=str(exc)))
+
+    config = config_module.load_config(adapter)
+    try:
+        result = propose_for_other_bucket(
+            adapter, config, provider, DEFAULT_AI_CAP, queue_path=_queue_path()
+        )
+    except FileNotFoundError as exc:
+        return redirect(url_for("ui.dashboard", plan_error=str(exc)))
+    except TimeoutError:
+        return redirect(url_for("ui.dashboard", plan_error=QUEUE_BUSY_MESSAGE))
+
+    staged = len(result["proposed"])
+    failed = len(result["failures"])
+    if failed:
+        return redirect(url_for("ui.dashboard", staged=staged, plan_error=f"{failed} AI proposal(s) failed"))
+    return redirect(url_for("ui.dashboard", staged=staged))
+
+
 # ---------------------------------------------------------------------------
 # Review queue.
 # ---------------------------------------------------------------------------
@@ -333,6 +393,7 @@ def queue_view():
         total_pending=len(entries),
         group_keys=group_keys,
         is_image_entry=is_image_entry,
+        is_ai_source=_is_ai_source,
         pagination=pagination,
     )
 
