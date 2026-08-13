@@ -1,0 +1,8 @@
+step_id: doc-check
+status: completed
+timestamp: "2026-08-12"
+commit_ref: "fa10a68"
+doc_update_plan: "README.md Status section documents Propose with AI end-to-end and declares the epic complete (survey/sort/reclaim CLI + approvals UI + AI-assisted proposals all connected). CONTEXT.md's AI-exception entry updated from 'standalone, not wired in' to describe the wiring and the pre-call cap gate."
+artifacts:
+  - README.md
+  - .pHive/CONTEXT.md

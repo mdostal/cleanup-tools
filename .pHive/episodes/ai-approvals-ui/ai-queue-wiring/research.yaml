@@ -1,0 +1,8 @@
+step_id: research
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Read queue.py (QueueEntry, stage_entries), ai/base.py + anthropic_provider.py
+  (ProposalResult, AIProvider), routes.py's existing plan/approve/bulk conventions, and
+  sort.py's dry-run planning logic to confirm exact integration points before implementing.
+artifacts: []

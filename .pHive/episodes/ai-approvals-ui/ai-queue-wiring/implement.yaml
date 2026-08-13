@@ -1,0 +1,15 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Created src/cleanup_tools/ai/wiring.py's propose_for_other_bucket(): filters the sort
+  dry-run plan to bucket=='other', slices candidates to the cap BEFORE calling the
+  provider (pre-call gate, not a post-call filter), stages successes via queue.stage_entries
+  with source=f"ai:{provider_name}", collects failures without creating entries. Added
+  POST /propose-ai to routes.py (graceful on missing credentials) and an optional
+  `cleanup propose-ai [--cap N]` CLI command.
+artifacts:
+  - src/cleanup_tools/ai/wiring.py
+  - src/cleanup_tools/ui/routes.py
+  - src/cleanup_tools/ui/templates/base.html
+  - src/cleanup_tools/cli.py
