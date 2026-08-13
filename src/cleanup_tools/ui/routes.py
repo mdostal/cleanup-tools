@@ -1,10 +1,11 @@
 """Routes for the approvals UI.
 
-Scope for this story: a dashboard overview, plan-staging routes that reuse
-the existing sort/reclaim planning logic (never re-scanning the filesystem
-themselves), a pending-entry review queue, per-entry approve/reject/undo,
-and an image thumbnail route that NEVER serves an original full-resolution
-file over HTTP.
+Scope: a dashboard overview, plan-staging routes that reuse the existing
+sort/reclaim planning logic (never re-scanning the filesystem themselves),
+a pending-entry review queue with pagination, per-entry approve/reject/undo,
+bulk approve/reject (by group_key or explicit id list), and an image
+thumbnail route that NEVER serves an original full-resolution file over
+HTTP.
 
 This module deliberately never calls ``sort.run``/``reclaim.run`` with
 ``go=True`` and never touches ``--from-queue`` execution -- the UI only
@@ -12,21 +13,13 @@ ever moves entries between queue *statuses* (via ``queue.set_status``/
 ``queue.undo``), never the files themselves. Execution stays a separate,
 deliberate CLI step.
 
-A follow-up story adds bulk actions / keyboard shortcuts / pagination. To
-keep that addable without a rewrite:
-
-- Single-entry status changes go through the small ``_transition`` helper
-  below; a future bulk route can loop over ids calling the same helper
-  (or wrap ``queue.set_status`` directly the same way) instead of
-  duplicating the approve/reject logic.
-- ``queue.html``'s per-entry card is a self-contained block with the entry
-  id available as both a ``data-entry-id`` attribute and each form's URL,
-  so a bulk-select checkbox can be dropped into the existing card markup
-  without restructuring it (a disabled placeholder checkbox is already
-  there, see the template).
-- ``/queue`` lists all pending entries as a plain Python list assembled by
-  ``_pending_entries``; pagination can slice that list without changing
-  how entries are fetched or rendered.
+Bulk actions (``/queue/bulk-approve``, ``/queue/bulk-reject``) reuse
+``queue.set_status`` per-id exactly the way the single-entry routes do --
+see ``_bulk_transition`` -- rather than duplicating the transition logic.
+Keyboard shortcuts (``static/keyboard.js``) work entirely client-side
+against the existing per-entry approve/reject forms (each tagged with a
+``data-action`` attribute) and the bulk-select checkboxes rendered in
+``queue.html``; no new server-side state is needed for focus tracking.
 """
 
 from __future__ import annotations
@@ -253,10 +246,95 @@ def plan_reclaim():
 # Review queue.
 # ---------------------------------------------------------------------------
 
+# Pagination defaults for /queue. DEFAULT_PER_PAGE is used whenever
+# ``per_page`` is absent/invalid; MAX_PER_PAGE caps a caller-supplied value
+# so a malicious or accidental ``?per_page=999999999`` can't force the
+# route to render (or even just slice) an enormous list in one request.
+DEFAULT_PER_PAGE = 25
+MAX_PER_PAGE = 200
+
+
+def _paginate(entries: list, page_arg, per_page_arg) -> tuple[list, dict]:
+    """Slice ``entries`` for the requested page, clamping out-of-range input.
+
+    ``page`` and ``per_page`` are parsed defensively -- a missing, blank, or
+    non-integer value falls back to the default rather than raising (so a
+    malformed query string degrades to "page 1 at the default size" instead
+    of a 500). ``per_page`` is clamped to ``[1, MAX_PER_PAGE]`` and ``page``
+    is clamped so it never goes below 1, and never above the last real page
+    (once ``total`` is known) -- a page number past the end returns the
+    *last* page's worth of entries when the queue is non-empty, and an empty
+    slice when the queue is empty entirely, rather than 500ing or silently
+    returning page 1's entries for a request that asked for page 40.
+
+    Returns ``(page_entries, pagination_info)`` where ``pagination_info``
+    carries everything the template needs to render prev/next controls and
+    a "page X of Y" indicator.
+    """
+
+    def _to_int(value, default):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return default
+        return value
+
+    per_page = _to_int(per_page_arg, DEFAULT_PER_PAGE)
+    if per_page < 1:
+        per_page = DEFAULT_PER_PAGE
+    per_page = min(per_page, MAX_PER_PAGE)
+
+    total = len(entries)
+    total_pages = max(1, -(-total // per_page))  # ceil division
+
+    page = _to_int(page_arg, 1)
+    if page < 1:
+        page = 1
+    if page > total_pages:
+        page = total_pages
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_entries = entries[start:end]
+
+    info = {
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+        "prev_page": page - 1,
+        "next_page": page + 1,
+        "start_index": start + 1 if page_entries else 0,
+        "end_index": start + len(page_entries),
+    }
+    return page_entries, info
+
 
 @bp.route("/queue")
 def queue_view():
-    return render_template("queue.html", entries=_pending_entries(), is_image_entry=is_image_entry)
+    entries = _pending_entries()
+    page_entries, pagination = _paginate(
+        entries, request.args.get("page"), request.args.get("per_page")
+    )
+    # Distinct, truthy group_keys among ALL pending entries (not just the
+    # current page) -- feeds the "bulk-approve/reject this whole group"
+    # quick-action bar, which must be able to target entries regardless of
+    # which page they currently sit on. Entries with no group_key (the
+    # "ungrouped" display fallback) are deliberately excluded here: there is
+    # no real group_key value that would round-trip back to matching them
+    # via the exact-match bulk routes, so offering a fake "ungrouped" button
+    # would silently do nothing when clicked.
+    group_keys = sorted({e.group_key for e in entries if e.group_key})
+    return render_template(
+        "queue.html",
+        entries=page_entries,
+        total_pending=len(entries),
+        group_keys=group_keys,
+        is_image_entry=is_image_entry,
+        pagination=pagination,
+    )
 
 
 @bp.route("/queue/<entry_id>/approve", methods=["POST"])
@@ -279,6 +357,114 @@ def reject_entry(entry_id):
     except TimeoutError:
         abort(503, description=QUEUE_BUSY_MESSAGE)
     return redirect(url_for("ui.queue_view"))
+
+
+# ---------------------------------------------------------------------------
+# Bulk actions. Both routes accept EITHER a ``group_key`` (the primary use
+# case -- "approve everything in the screenshots group") OR an explicit list
+# of entry ids (``entry_ids``, repeated form/query keys or a JSON body list),
+# scoped to pending entries only:
+#
+# - group_key scoping is an EXACT match against ``entry.group_key`` -- never
+#   a substring/prefix match -- so a group_key of "sort:screenshots" cannot
+#   accidentally also sweep up "sort:screenshots_old" or anything else that
+#   merely contains the string.
+# - id-list scoping only ever touches ids that are both present in the
+#   supplied list AND currently pending; an id for an already-approved/
+#   rejected entry, or an id not in the queue at all, is silently ignored
+#   rather than erroring, since the point is "act on whichever of these are
+#   still actionable", not "fail the whole batch over one stale id".
+#
+# Neither route ever reaches entries outside the specified scope: both
+# build their target id set from ``_pending_entries()`` first, then call
+# ``queue.set_status`` only for ids in that intersection.
+# ---------------------------------------------------------------------------
+
+
+def _bulk_target_ids(pending: list, group_key: str | None, entry_ids: list[str] | None) -> list[str]:
+    """Resolve the pending-entry ids a bulk action should touch.
+
+    ``group_key`` (if given, non-blank) takes priority and is matched
+    exactly against ``entry.group_key`` -- entries with no group_key never
+    match a group_key request, even "ungrouped" (the display fallback used
+    only in templates, never a real stored value). If ``group_key`` isn't
+    given, ``entry_ids`` (if given) is intersected against the pending ids
+    so only ids that are both requested and still pending are touched.
+    Returns an empty list if neither is given.
+    """
+    if group_key:
+        return [e.id for e in pending if e.group_key == group_key]
+    if entry_ids:
+        pending_ids = {e.id for e in pending}
+        # Preserve request order, dedup, and drop anything not pending.
+        seen = set()
+        result = []
+        for eid in entry_ids:
+            if eid in pending_ids and eid not in seen:
+                seen.add(eid)
+                result.append(eid)
+        return result
+    return []
+
+
+def _extract_bulk_request() -> tuple[str | None, list[str]]:
+    """Pull ``group_key``/``entry_ids`` out of a bulk-action POST.
+
+    Accepts either an HTML form POST (``group_key`` field, and/or
+    ``entry_ids`` as a repeated form field) or a JSON body with the same
+    two keys -- so this is usable both from the bulk-action-bar form in
+    queue.html and from a future/scripted JSON caller.
+
+    ``entry_ids`` is parsed defensively, the same way ``_paginate``'s
+    ``_to_int`` degrades malformed pagination input rather than raising: a
+    bare scalar (e.g. ``{"entry_ids": 12345}``) is neither a list nor a
+    string, so it can't be iterated into individual ids and is treated as
+    "no ids given" instead of blowing up ``list()`` with a 500.
+    """
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+        group_key = data.get("group_key") or None
+        entry_ids = data.get("entry_ids") or []
+        if isinstance(entry_ids, str):
+            entry_ids = [entry_ids]
+        elif not isinstance(entry_ids, list):
+            entry_ids = []
+        return group_key, list(entry_ids)
+
+    group_key = request.form.get("group_key") or None
+    entry_ids = request.form.getlist("entry_ids")
+    return group_key, entry_ids
+
+
+def _bulk_transition(new_status: str):
+    group_key, entry_ids = _extract_bulk_request()
+    pending = _pending_entries()
+    target_ids = _bulk_target_ids(pending, group_key, entry_ids)
+
+    updated = []
+    try:
+        for entry_id in target_ids:
+            updated.append(queue_module.set_status(_adapter(), entry_id, new_status, _queue_path()))
+    except TimeoutError:
+        abort(503, description=QUEUE_BUSY_MESSAGE)
+
+    if request.is_json:
+        return {
+            "status": new_status,
+            "updated_ids": [e.id for e in updated],
+            "count": len(updated),
+        }
+    return redirect(url_for("ui.queue_view"))
+
+
+@bp.route("/queue/bulk-approve", methods=["POST"])
+def bulk_approve():
+    return _bulk_transition("approved")
+
+
+@bp.route("/queue/bulk-reject", methods=["POST"])
+def bulk_reject():
+    return _bulk_transition("rejected")
 
 
 @bp.route("/queue/<entry_id>/undo", methods=["POST"])

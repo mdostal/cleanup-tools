@@ -96,6 +96,46 @@
   }
   .flash { border: 1px solid #8884; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
   .flash.error { border-color: #c33; color: #c33; }
+
+  .entry-card.focused {
+    border-color: #3579f6;
+    box-shadow: 0 0 0 2px #3579f655;
+  }
+
+  kbd {
+    border: 1px solid #8886;
+    border-radius: 4px;
+    padding: 0.05rem 0.4rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    background: #8881;
+  }
+  .kbd-hint { color: #888; font-size: 0.85rem; margin-bottom: 1rem; }
+
+  .bulk-action-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    border: 1px solid #8884;
+    border-radius: 8px;
+    padding: 0.6rem 0.9rem;
+    margin-bottom: 1.25rem;
+  }
+  .bulk-action-bar .meta { color: #888; }
+  .bulk-group-actions { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .bulk-group-item { display: inline-flex; align-items: center; gap: 0.3rem; }
+  .bulk-group-item form { display: inline; }
+
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.25rem;
+    margin: 1.5rem 0;
+  }
+  .pagination-disabled { color: #8886; }
+  .pagination-info { color: #888; font-size: 0.9rem; }
 </style>
 </head>
 <body>

@@ -3,6 +3,10 @@ _REVIEW/
 *.log
 .DS_Store
 
+# Playwright MCP tooling's scratch output dir, created in the repo root
+# during interactive browser-testing sessions -- never project state.
+.playwright-mcp/
+
 # Python packaging/build artifacts
 __pycache__/
 *.pyc

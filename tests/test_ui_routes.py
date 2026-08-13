@@ -537,3 +537,328 @@ def test_plan_sort_never_moves_files_only_stages_pending_entries(adapter, client
     entries = _reload_queue(adapter)
     assert len(entries) == 1
     assert entries[0].status == "pending"
+
+
+# ---------------------------------------------------------------------------
+# 7. Bulk actions: group_key and explicit id-list scoping, and that neither
+#    ever touches entries outside the requested scope.
+# ---------------------------------------------------------------------------
+
+
+def _make_entry(tmp_path, name, group_key=None, status="pending"):
+    f = tmp_path / name
+    f.write_text(name)
+    return QueueEntry(action="move", src=str(f), dest="", status=status, group_key=group_key)
+
+
+def test_bulk_approve_by_group_key_transitions_only_that_group(adapter, client, tmp_path):
+    screenshots = [
+        _make_entry(tmp_path, f"shot{i}.png", group_key="sort:screenshots") for i in range(3)
+    ]
+    other_group = [_make_entry(tmp_path, "report.pdf", group_key="reclaim:build_caches")]
+    ungrouped = [_make_entry(tmp_path, "mystery.bin", group_key=None)]
+    _seed_queue(adapter, screenshots + other_group + ungrouped)
+
+    resp = client.post("/queue/bulk-approve", data={"group_key": "sort:screenshots"})
+    assert resp.status_code == 302
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    for e in screenshots:
+        assert reloaded[e.id].status == "approved"
+        assert reloaded[e.id].status_history[-1]["status"] == "approved"
+
+    # Entries OUTSIDE the target group must be genuinely untouched: still
+    # pending, and with no history entry appended at all (not merely "not
+    # approved") -- proving the bulk route never even looked at them.
+    for e in other_group + ungrouped:
+        assert reloaded[e.id].status == "pending"
+        assert reloaded[e.id].status_history == []
+
+
+def test_bulk_reject_by_group_key_transitions_only_that_group(adapter, client, tmp_path):
+    caches = [_make_entry(tmp_path, f"cache{i}.bin", group_key="reclaim:build_caches") for i in range(4)]
+    screenshots = [_make_entry(tmp_path, "shot.png", group_key="sort:screenshots")]
+    _seed_queue(adapter, caches + screenshots)
+
+    resp = client.post("/queue/bulk-reject", data={"group_key": "reclaim:build_caches"})
+    assert resp.status_code == 302
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    for e in caches:
+        assert reloaded[e.id].status == "rejected"
+    for e in screenshots:
+        assert reloaded[e.id].status == "pending"
+        assert reloaded[e.id].status_history == []
+
+
+def test_bulk_approve_group_key_is_exact_match_not_substring(adapter, client, tmp_path):
+    """"sort:screenshots" must not also sweep up "sort:screenshots_old" --
+    bulk scoping is an exact match against group_key, never a substring or
+    prefix match.
+    """
+    target = [_make_entry(tmp_path, "shot.png", group_key="sort:screenshots")]
+    decoy = [_make_entry(tmp_path, "old_shot.png", group_key="sort:screenshots_old")]
+    _seed_queue(adapter, target + decoy)
+
+    client.post("/queue/bulk-approve", data={"group_key": "sort:screenshots"})
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    assert reloaded[target[0].id].status == "approved"
+    assert reloaded[decoy[0].id].status == "pending"
+
+
+def test_bulk_approve_by_explicit_entry_ids(adapter, client, tmp_path):
+    entries = [_make_entry(tmp_path, f"f{i}.txt", group_key="sort:misc") for i in range(5)]
+    _seed_queue(adapter, entries)
+
+    target_ids = [entries[0].id, entries[2].id]
+    resp = client.post("/queue/bulk-approve", data={"entry_ids": target_ids})
+    assert resp.status_code == 302
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    assert reloaded[entries[0].id].status == "approved"
+    assert reloaded[entries[2].id].status == "approved"
+    # Untouched entries: still pending, no history recorded at all.
+    for e in (entries[1], entries[3], entries[4]):
+        assert reloaded[e.id].status == "pending"
+        assert reloaded[e.id].status_history == []
+
+
+def test_bulk_reject_by_explicit_entry_ids_ignores_non_pending_and_unknown_ids(adapter, client, tmp_path):
+    pending = _make_entry(tmp_path, "a.txt", status="pending")
+    already_approved = _make_entry(tmp_path, "b.txt", status="approved")
+    _seed_queue(adapter, [pending, already_approved])
+
+    resp = client.post(
+        "/queue/bulk-reject",
+        data={"entry_ids": [pending.id, already_approved.id, "totally-unknown-id"]},
+    )
+    assert resp.status_code == 302
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    assert reloaded[pending.id].status == "rejected"
+    # Already-approved entry must NOT be flipped to rejected just because
+    # its id was in the request -- bulk scope is pending entries only.
+    assert reloaded[already_approved.id].status == "approved"
+
+
+def test_bulk_approve_with_neither_group_key_nor_ids_touches_nothing(adapter, client, tmp_path):
+    entries = [_make_entry(tmp_path, "a.txt"), _make_entry(tmp_path, "b.txt")]
+    _seed_queue(adapter, entries)
+
+    resp = client.post("/queue/bulk-approve", data={})
+    assert resp.status_code == 302
+
+    reloaded = _reload_queue(adapter)
+    assert all(e.status == "pending" for e in reloaded)
+
+
+def test_bulk_approve_via_json_body_returns_json_summary(adapter, client, tmp_path):
+    entries = [_make_entry(tmp_path, f"j{i}.txt", group_key="sort:json_group") for i in range(2)]
+    _seed_queue(adapter, entries)
+
+    resp = client.post("/queue/bulk-approve", json={"group_key": "sort:json_group"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "approved"
+    assert body["count"] == 2
+    assert set(body["updated_ids"]) == {e.id for e in entries}
+
+    reloaded = _reload_queue(adapter)
+    assert all(e.status == "approved" for e in reloaded)
+
+
+def test_bulk_approve_via_json_body_with_scalar_entry_ids_does_not_500(adapter, client, tmp_path):
+    # Regression: a JSON body where entry_ids is a bare non-iterable scalar
+    # (int/float/bool/None/dict, as opposed to a list or a lone string --
+    # both of which are legitimate shapes handled elsewhere) used to reach
+    # list(entry_ids) unguarded and raise TypeError, surfacing as a 500.
+    # It should instead be treated the same as "no ids given": a normal
+    # response that touches nothing, matching this file's existing
+    # degrade-rather-than-raise handling of malformed input (see
+    # _paginate's _to_int).
+    entry = _make_entry(tmp_path, "a.txt", group_key="sort:misc")
+    _seed_queue(adapter, [entry])
+
+    resp = client.post("/queue/bulk-approve", json={"entry_ids": 12345})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["count"] == 0
+    assert body["updated_ids"] == []
+
+    reloaded = _reload_queue(adapter)
+    assert reloaded[0].status == "pending"
+
+
+def test_bulk_approve_returns_503_when_queue_lock_contended(adapter, client, tmp_path, monkeypatch):
+    entry = _make_entry(tmp_path, "a.txt", group_key="sort:misc")
+    qpath = _seed_queue(adapter, [entry])
+
+    @contextlib.contextmanager
+    def fast_with_queue_lock(adapter, path):
+        with adapter.file_lock(path, timeout=0.2):
+            yield
+
+    monkeypatch.setattr(queue_module, "with_queue_lock", fast_with_queue_lock)
+
+    with adapter.file_lock(qpath, timeout=5.0):
+        resp = client.post("/queue/bulk-approve", data={"group_key": "sort:misc"})
+
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# 8. Pagination: correct boundaries (no dup/skip), sensible defaults,
+#    graceful handling of out-of-range page numbers.
+# ---------------------------------------------------------------------------
+
+
+def test_queue_pagination_default_page_size_and_no_dup_no_skip(adapter, client, tmp_path):
+    import re
+
+    entries = [_make_entry(tmp_path, f"f{i:03d}.txt") for i in range(70)]
+    _seed_queue(adapter, entries)
+    all_ids = {e.id for e in entries}
+
+    resp1 = client.get("/queue?page=1")
+    html1 = resp1.data.decode()
+    match = re.search(r"Page 1 of (\d+)", html1)
+    assert match, "pagination indicator not found on page 1"
+    total_pages = int(match.group(1))
+    # 70 entries at the documented default of 25/page -> 3 pages (25, 25, 20).
+    assert total_pages == 3
+
+    seen_ids = []
+    for page in range(1, total_pages + 1):
+        resp = client.get(f"/queue?page={page}")
+        assert resp.status_code == 200
+        html = resp.data.decode()
+        page_ids_here = [e.id for e in entries if f'data-entry-id="{e.id}"' in html]
+        assert page_ids_here, f"page {page} unexpectedly empty"
+        seen_ids.extend(page_ids_here)
+
+    # Every entry appears exactly once across however many pages it took --
+    # no duplicate (an entry appearing on two pages) and no skip.
+    assert len(seen_ids) == len(all_ids)
+    assert set(seen_ids) == all_ids
+    assert len(seen_ids) == len(set(seen_ids))
+
+    # And genuinely past the end (page total_pages + 1) doesn't 500 -- it
+    # clamps to the last real page rather than erroring or ever-growing.
+    resp_over = client.get(f"/queue?page={total_pages + 1}")
+    assert resp_over.status_code == 200
+
+
+def test_queue_pagination_exact_multiple_of_per_page(adapter, client, tmp_path):
+    # Exactly 2 full pages at per_page=10 -- page 2 must be full (10 items),
+    # and there must be no phantom page 3.
+    entries = [_make_entry(tmp_path, f"f{i:03d}.txt") for i in range(20)]
+    _seed_queue(adapter, entries)
+
+    resp1 = client.get("/queue?page=1&per_page=10")
+    resp2 = client.get("/queue?page=2&per_page=10")
+    html1, html2 = resp1.data.decode(), resp2.data.decode()
+
+    ids1 = [e.id for e in entries if f'data-entry-id="{e.id}"' in html1]
+    ids2 = [e.id for e in entries if f'data-entry-id="{e.id}"' in html2]
+    assert len(ids1) == 10
+    assert len(ids2) == 10
+    assert set(ids1).isdisjoint(set(ids2))
+    assert "Page 2 of 2" in html2
+    assert resp2.data  # sanity
+
+    # Page 3 doesn't exist (only 2 full pages) -- must clamp, not 500 or
+    # silently repeat page 1/2's content as "page 3".
+    resp3 = client.get("/queue?page=3&per_page=10")
+    assert resp3.status_code == 200
+    html3 = resp3.data.decode()
+    ids3 = [e.id for e in entries if f'data-entry-id="{e.id}"' in html3]
+    assert set(ids3) == set(ids2)  # clamped to the last real page
+
+
+def test_queue_pagination_one_more_than_a_multiple(adapter, client, tmp_path):
+    # 21 entries at per_page=10 -> 3 pages, with page 3 holding exactly 1.
+    entries = [_make_entry(tmp_path, f"f{i:03d}.txt") for i in range(21)]
+    _seed_queue(adapter, entries)
+
+    resp3 = client.get("/queue?page=3&per_page=10")
+    assert resp3.status_code == 200
+    html3 = resp3.data.decode()
+    ids3 = [e.id for e in entries if f'data-entry-id="{e.id}"' in html3]
+    assert len(ids3) == 1
+    assert "Page 3 of 3" in html3
+
+    resp4 = client.get("/queue?page=4&per_page=10")
+    assert resp4.status_code == 200  # out of range but clamped, not 500
+
+
+def test_queue_pagination_one_less_than_a_multiple(adapter, client, tmp_path):
+    # 19 entries at per_page=10 -> page 2 holds exactly 9, no phantom page 3.
+    entries = [_make_entry(tmp_path, f"f{i:03d}.txt") for i in range(19)]
+    _seed_queue(adapter, entries)
+
+    resp2 = client.get("/queue?page=2&per_page=10")
+    html2 = resp2.data.decode()
+    ids2 = [e.id for e in entries if f'data-entry-id="{e.id}"' in html2]
+    assert len(ids2) == 9
+    assert "Page 2 of 2" in html2
+
+
+def test_queue_pagination_out_of_range_page_does_not_500(adapter, client, tmp_path):
+    entries = [_make_entry(tmp_path, f"f{i:03d}.txt") for i in range(5)]
+    _seed_queue(adapter, entries)
+
+    for bad_page in ("0", "-5", "9999", "not-a-number", ""):
+        resp = client.get(f"/queue?page={bad_page}")
+        assert resp.status_code == 200, f"page={bad_page!r} should not 500"
+
+
+def test_queue_pagination_empty_queue_does_not_500(client):
+    resp = client.get("/queue?page=5&per_page=10")
+    assert resp.status_code == 200
+    assert b"Nothing pending" in resp.data
+
+
+def test_queue_pagination_per_page_is_clamped(adapter, client, tmp_path):
+    entries = [_make_entry(tmp_path, f"f{i:03d}.txt") for i in range(5)]
+    _seed_queue(adapter, entries)
+
+    # Non-numeric / negative per_page falls back to the default rather than
+    # erroring or producing a zero/negative-size page.
+    resp = client.get("/queue?per_page=-3")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    ids = [e.id for e in entries if f'data-entry-id="{e.id}"' in html]
+    assert len(ids) == 5  # all 5 fit within the fallback default page size
+
+
+# ---------------------------------------------------------------------------
+# 9. Keyboard shortcuts / bulk-select markup: static asset is served, and
+#    queue.html carries the data attributes + focus/select scaffolding
+#    keyboard.js depends on. (The real interactive keyboard behavior is
+#    verified separately via a real browser -- see the story's report.)
+# ---------------------------------------------------------------------------
+
+
+def test_static_keyboard_js_is_served(client):
+    resp = client.get("/static/keyboard.js")
+    assert resp.status_code == 200
+    assert b"keydown" in resp.data
+
+
+def test_queue_view_includes_keyboard_js_and_bulk_scaffolding(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.txt", group_key="sort:screenshots")
+    _seed_queue(adapter, [entry])
+
+    resp = client.get("/queue")
+    html = resp.data.decode()
+
+    assert "keyboard.js" in html
+    assert f'data-entry-id="{entry.id}"' in html
+    # Checkbox is enabled now (no longer the disabled placeholder) and
+    # associated with the bulk form by id, not by nesting.
+    assert 'form="bulk-form"' in html
+    assert "disabled" not in html.split('class="entry-select"')[1].split(">")[0]
+    assert 'data-action="approve"' in html
+    assert 'data-action="reject"' in html
+    assert "bulk-selected-count" in html
