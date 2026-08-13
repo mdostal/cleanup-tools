@@ -1,0 +1,8 @@
+step_id: doc-check
+status: completed
+timestamp: "2026-08-13"
+commit_ref: "cc9cef7"
+doc_update_plan: "README.md Status section, Scripts table, and Wallet finding section all updated to document cleanup find-wallets as a real ported command with the structural leak-proofness guarantee. CONTEXT.md's Wallet finder glossary entry updated similarly."
+artifacts:
+  - README.md
+  - .pHive/CONTEXT.md

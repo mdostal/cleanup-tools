@@ -1,0 +1,15 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Restructured _by_filename to walk the directory once (adapter.list_dir(root), no pattern
+  filter) and test each file against all 14 patterns in order via matches_pattern, mirroring
+  _by_content's already-correct single-pass structure. Same exclusions/dedup/200-cap
+  preserved; multi-pattern matches tagged with the first pattern in list order that
+  matches. Verified red (reverted to per-pattern-loop, confirmed the new regression test
+  reproduces a 150/50 lopsided split) then green (restored, confirmed 100/100). 372 -> 373
+  tests pass.
+artifacts:
+  - src/cleanup_tools/commands/find_wallets.py
+  - tests/test_find_wallets.py

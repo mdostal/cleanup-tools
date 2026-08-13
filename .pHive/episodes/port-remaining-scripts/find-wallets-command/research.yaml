@@ -1,0 +1,8 @@
+step_id: research
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Re-read scripts/find-wallets.sh character by character to extract the literal filename
+  patterns and content regex. Re-read survey.py's read-only shape and reclaim.py's
+  _os_junk_category multi-pattern-per-adapter-call precedent.
+artifacts: []
