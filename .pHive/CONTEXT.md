@@ -48,10 +48,12 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   defaults apply if absent.
 - `~/.config/cleanup-tools/approval_queue.yaml` — the approval queue store (`src/cleanup_tools/queue.py`):
   proposed move/delete actions awaiting human approval, with file locking and atomic writes for safe
-  concurrent access. Kept as a separate file from `config.yaml` (not a section within it) so a future
-  UI and CLI commands can read/write queue entries concurrently without contending over the same file
-  lock as unrelated config changes. Foundation only as of this writing — nothing populates or consumes
-  it yet: no `--from-queue` flag, no UI.
+  concurrent access. Kept as a separate file from `config.yaml` (not a section within it) so the UI
+  and CLI commands can read/write queue entries concurrently without contending over the same file
+  lock as unrelated config changes. `cleanup sort --from-queue` / `cleanup reclaim --from-queue`
+  execute approved entries; `cleanup approve` (`src/cleanup_tools/ui/`) is the localhost-only Flask
+  UI that stages (`/plan/sort`, `/plan/reclaim`) and reviews (approve/reject/undo) entries — it never
+  executes, execution is always a separate deliberate CLI step.
 
 ## Conventions
 
