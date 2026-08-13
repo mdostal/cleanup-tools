@@ -96,6 +96,17 @@ to the network unless you explicitly click "Propose with AI" or run `propose-ai`
 one sanctioned exception to the "no ambient network calls" rule, and it stays that way: nothing
 else in this tool makes a network call.
 
+**Desktop app packaging is in progress** (`packaging/pyinstaller/`): the Flask UI now freezes into
+a standalone binary via PyInstaller — no Python install required on the end user's machine — as
+the first step toward a real double-clickable app (Tauri, macOS + Arch Linux) instead of
+`cleanup approve` typed into a terminal. Build it with
+`pip install -e '.[build]' && pyinstaller packaging/pyinstaller/cleanup_ui.spec`; smoke-test the
+result with `python3 scripts/smoke_test_sidecar.py <path-to-binary>`. Ships as a directory
+(`--onedir`, the default), not a single file — a single-file build was measured to leave an
+orphaned server process holding the port if the OS ever has to force-kill it (`SIGKILL`), since
+that signal can't reach the real process behind PyInstaller's single-file bootloader; the directory
+build doesn't have this problem and is worth the extra size (~67MB vs. ~31MB).
+
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
 > **previews by default** and needs `--go` to actually move files. If you're used to running the bash

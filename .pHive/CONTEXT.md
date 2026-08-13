@@ -72,6 +72,15 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   `dict[job_id -> JobState]` guarded by a single lock, lost entirely on process restart. A job only
   needs to survive one open browser tab/desktop-app window; there is nothing to recover if the
   server restarts mid-job. `static/plan-reclaim.js` is the client-side counterpart that polls it.
+- `packaging/pyinstaller/` — the PyInstaller spec (`cleanup_ui.spec`) + entrypoint
+  (`entrypoint.py`) that freeze `src/cleanup_tools/ui/` into a standalone sidecar binary, later
+  wired into a Tauri desktop shell's `externalBin`. Ships `--onedir` (a directory, not a single
+  file) — a real measured finding, not a style preference: killing a `--onefile` build with
+  `SIGKILL` orphans the real Flask process behind PyInstaller's bootloader (confirmed via
+  `lsof`/`netstat` on the actual built binaries), while `--onedir`'s reported PID always is the
+  real process. `tests/test_pyinstaller_spec_datas.py` fails loudly if the spec's `datas=` list
+  ever drifts out of sync with the real `templates/`/`static/` directories — this already caught
+  a real bug once (a new static file landing in a concurrent story, missed by the spec).
 
 ## Conventions
 
