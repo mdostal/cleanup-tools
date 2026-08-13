@@ -31,8 +31,12 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   never prints, logs, or transmits the matched secret/key material; in the Python port this is
   structural (the matched-content object is never bound to a name that outlives its truthiness
   check), not just a convention.
-- **Dedupe** — `scripts/dedupe.sh`: lists duplicate files by size+hash so the user can decide what to
-  remove; never auto-deletes.
+- **Dedupe** — `scripts/dedupe.sh`, ported as `cleanup dedupe [dir]`
+  (`src/cleanup_tools/commands/dedupe.py`): lists duplicate files via a two-stage size-then-hash
+  filter so the user can decide what to remove; never auto-deletes, never touches the approval
+  queue. The Python port deliberately hashes with full, uncapped SHA-256 (not bash's SHA-1
+  truncated to 48 bits, and not `queue.py`'s separate 8-MiB-capped hash helper) since dedupe's
+  entire output is a duplicate-ness identity claim, not an auxiliary staleness check.
 - **Keep-clean** — the not-yet-built recurring triage loop (see `docs/REQUIREMENTS.md`) that re-runs
   survey, flags when Downloads/Desktop cross a clutter threshold, and offers a one-tap sort.
 

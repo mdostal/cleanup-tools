@@ -27,8 +27,12 @@ packaged CLI's first full round. `cleanup find-wallets [root]` is now also a rea
 command from `scripts/find-wallets.sh`: same 14 filename patterns and 4 content-signature
 alternatives, byte-for-byte, and the same read-only safety property (paths + which pattern
 matched only — matched secret content never appears anywhere in its output, by construction, not
-just by convention). `dedupe` and `corral-screenshots` remain bash-only for now, pending their own
-stories in this epic. The CLI now reads (and creates, if absent) an optional
+just by convention). `cleanup dedupe [dir]` is now also a real, working ported command from
+`scripts/dedupe.sh`: same two-stage size-then-hash shape, but with two deliberate corrections —
+full, uncapped SHA-256 instead of bash's SHA-1 truncated to 48 bits, and structured
+`{hash, size_bytes, paths}` groups instead of raw line pairs (see the callout below).
+`corral-screenshots` remains bash-only for now, pending its own story in this epic. The CLI now
+reads (and creates, if absent) an optional
 config file at `~/.config/cleanup-tools/config.yaml` for bucket rules, search roots, and master
 paths — sensible defaults apply if the file isn't there.
 
@@ -87,6 +91,14 @@ else in this tool makes a network call.
 > matches the CLI's overall dry-run-by-default convention (see Principles above), but it is a real
 > reversal from the old script's convention, so don't assume old muscle memory carries over.
 
+> ⚠ **`cleanup dedupe` hashes differently than `dedupe.sh` — a deliberate correctness fix, not
+> silent parity.** The old bash script hashes with `shasum`'s default (SHA-1) truncated to 12 hex
+> characters (48 bits) — a real collision risk for a tool whose entire output is "these files are
+> the same, safe to remove one." `cleanup dedupe` hashes the full file content with uncapped
+> SHA-256 instead. This is slower on large duplicate-heavy folders (the two-stage size-then-hash
+> filter still bounds what gets hashed at all), but correctness matters more here than for
+> `queue.py`'s separate, narrower staleness-check use of a capped hash.
+
 > ⚠ **Docker pruning now needs `--go` AND `--docker` — not `--go` alone.** `safe-reclaim.sh` ran
 > `docker system prune` automatically any time you passed `--go`. The new `cleanup reclaim` makes
 > that a deliberate, separate opt-in: Docker layer/volume pruning only runs when **both** `--go` and
@@ -103,7 +115,7 @@ else in this tool makes a network call.
 | `safe-reclaim.sh [--go]` | Deletes node_modules, build caches, Docker layers, junk (`.DS_Store`, `~$*`, `$RECYCLE.BIN`) | **dry-run default**, needs `--go` |
 | `cleanup reclaim [--go] [--docker]` | Ported version of `safe-reclaim.sh` (see Status above): same categories plus new orphaned-installer detection (macOS-only) and GB-reclaimed reporting; refuses to delete any configured master path not marked `backed_up: true`; Docker pruning needs `--go` **and** `--docker` — see the callout above. | **dry-run default**, needs `--go` |
 | `find-wallets.sh [root]` | Finds crypto-wallet artifacts by filename + content; **prints paths only, never key material**. Ported to the CLI as `cleanup find-wallets [root]` (see Status above) — behavior-identical. | read-only |
-| `dedupe.sh [dir]` | Lists duplicate files (size + hash) to reclaim | read-only |
+| `dedupe.sh [dir]` | Lists duplicate files (size + hash) to reclaim. Ported to the CLI as `cleanup dedupe [dir]` (see the callout above for the hash-strength and output-shape changes vs. the old script). | read-only |
 
 ## Workflow
 1. `survey.sh` — see the picture.
