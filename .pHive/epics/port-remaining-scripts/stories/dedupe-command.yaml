@@ -1,0 +1,177 @@
+id: dedupe-command
+epic: port-remaining-scripts
+title: Port `dedupe` as a read-only, two-stage size-then-hash duplicate finder with full SHA-256
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Implement `cleanup dedupe [dir]`, a read-only port of scripts/dedupe.sh (6 dense lines): group
+  files by exact byte size (cheap pre-filter), then hash only the size-matched candidates and
+  group those by hash. Two deliberate corrections vs. the bash original, both per decision 2:
+  full, uncapped SHA-256 instead of bash's SHA-1 truncated to 12 hex chars (48 bits), and
+  structured `{hash, size_bytes, paths}` groups instead of raw `"<hash>  <path>"` line pairs. No
+  dry-run/--go concept applies -- this command never writes, moves, or deletes anything; reclaiming
+  space from the duplicates it finds is explicitly out of scope for this epic.
+
+acceptance_criteria:
+  - "Given `cleanup dedupe` is run with no dir argument, when it completes, then it scans the
+    platform Downloads directory by default (matching bash's `DIR=\"${1:-$HOME/Downloads}\"`), and
+    `cleanup dedupe <dir>` scans an explicit directory instead."
+  - "Given a fixture directory with 3 files of the same size but different content, when `dedupe`
+    runs, then size-grouping considers all 3 (a 3+-member same-size group), but hash-grouping
+    reports zero duplicate groups among them -- no false positive from same-size-but-different-
+    content files."
+  - "Given a fixture directory with 2 files of identical size AND identical content (a true
+    duplicate pair), when `dedupe` runs, then they are reported together in one duplicate group
+    with the correct shared hash and size."
+  - "Given a fixture directory with 2 files of identical size and identical content for the first
+    N bytes but differing content after byte N (for N smaller than any hash-truncation/cap a naive
+    port might reuse), when `dedupe` runs, then they are NOT reported as duplicates -- proving the
+    port hashes the full file content, not a prefix, unlike `queue.py`'s existing capped
+    `_content_hash` helper."
+  - "Given a fixture directory with only singleton-sized files (no two files share a size), when
+    `dedupe` runs, then no file's content is ever read/hashed at all (verified via a hash-call
+    counter or mock in the test), proving the two-stage cheap-filter-before-expensive-filter shape
+    is preserved, not just the final output correctness."
+  - "Given `dedupe`'s output, when inspected, then it is a structured
+    `{\"dir\": ..., \"duplicate_groups\": [{\"hash\", \"size_bytes\", \"paths\": [...]}]}` shape,
+    not raw unstructured `<hash> <path>` line pairs."
+  - "Verify via: `pytest tests/test_dedupe.py -v` -- all tests pass."
+
+steps:
+  - id: research
+    description: |
+      Re-read scripts/dedupe.sh in full (all 6 lines) to confirm the exact two-stage shape: size
+      grouping via `stat -f%z` (BSD/macOS-only) + sort + the adjacent-line awk trick, then hashing
+      only size-matched survivors via `shasum` (SHA-1, truncated to 12 hex chars) + sort + the
+      same adjacent-line awk trick. Re-read queue.py's `_content_hash`/`CONTENT_HASH_MAX_BYTES`
+      (queue.py:275-293) to understand -- and deliberately NOT reuse -- its 8-MiB prefix-cap
+      tradeoff (that cap exists for a staleness check, not an identity claim; see this story's
+      design_decisions for why dedupe needs a different tradeoff). Re-read survey.py's read-only
+      run(adapter, args=None) -> dict shape to follow.
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/commands/dedupe.py: _group_by_size(adapter, target_dir) ->
+      dict[int, list[Path]] via adapter.list_dir(target_dir, pattern=None) excluding
+      node_modules, Path.stat().st_size per file (a cheap per-file stat, not the recursive-tree
+      case dir_size_bytes exists for), keeping only size groups with 2+ members.
+      _hash_file(path) -> str: full, uncapped hashlib.sha256() read over the entire file content
+      (NOT queue.py's CONTENT_HASH_MAX_BYTES-capped pattern -- read the whole file regardless of
+      size, per decision 2). _group_by_hash(candidates) -> dict[str, list[Path]]: hash every
+      size-matched candidate only (never a singleton-size file), group by full hex digest, keep
+      only groups with 2+ members. run(adapter, args=None): resolve target_dir from args.dir or
+      adapter.resolve_standard_dir("downloads"), run both stages, return {"dir": ...,
+      "duplicate_groups": [{"hash": h, "size_bytes": size, "paths": [...]} for each hash group]}.
+      Register the dedupe subcommand in cli.py (positional `dir`, nargs="?", no --go/--from-queue)
+      and add dedupe.run to COMMANDS.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_dedupe.py: same-size-different-content fixture produces zero duplicate
+      groups (no false positive from size alone); identical-size-identical-content fixture
+      produces one correct duplicate group; same-size-same-prefix-different-tail fixture produces
+      zero duplicate groups (proves full-file hashing, not prefix-capped -- the acceptance
+      criterion queue.py's existing approach would fail); singleton-sized files are never hashed
+      at all (mock/count hashlib calls or _hash_file invocations to prove the size pre-filter
+      actually gates hashing, not just that the final output happens to be correct); output shape
+      matches the structured {hash, size_bytes, paths} contract, not raw pairs; a directory with
+      zero duplicates returns an empty duplicate_groups list without erroring.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: does _group_by_hash ever run against a file whose size didn't already
+      match another file's size (i.e. is the cheap-filter-before-expensive-filter ordering
+      actually enforced in the code, not just true in practice for the test fixtures)? Does
+      _hash_file read the full file with no size cap -- confirm there is no accidental reuse of
+      queue.py's CONTENT_HASH_MAX_BYTES constant or read(N) call anywhere in this module? Is the
+      SHA-1-truncated-to-48-bits behavior from bash fully gone (grep for "shasum"/"sha1" as a
+      concrete check)?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+  key_files:
+    - path: scripts/dedupe.sh
+      purpose: "Full two-stage size-then-hash shape to preserve; the SHA-1-truncated-to-48-bits hash strength and raw-line-pair output are NOT preserved (decision 2, see design_decisions)"
+    - path: src/cleanup_tools/queue.py
+      purpose: "_content_hash/CONTENT_HASH_MAX_BYTES (lines 275-293) is the existing capped-SHA-256 pattern in this codebase -- read for contrast, deliberately NOT reused here; DO NOT modify queue.py in this story"
+    - path: src/cleanup_tools/commands/survey.py
+      purpose: "The read-only, dict-returning command shape this module follows: run(adapter, args=None) -> dict, private _helper functions, no filesystem mutation anywhere"
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "list_dir(path, pattern)/resolve_standard_dir(kind) consumed here -- DO NOT modify the interface; this story needs no new adapter method"
+
+files_to_modify:
+  - file: src/cleanup_tools/commands/dedupe.py
+    change: "Create -- dedupe command implementation, two-stage size-then-hash filter, full uncapped SHA-256"
+  - file: src/cleanup_tools/cli.py
+    change: "Add dedupe subcommand registration (positional dir, no flags) and COMMANDS entry"
+  - file: tests/test_dedupe.py
+    change: "Create -- size-filter, full-hash-correctness, structured-output, and no-hashing-of-singletons tests"
+
+code_examples:
+  - title: "Two-stage size-then-hash shape being ported (preserve the shape, not the hash choice)"
+    file: scripts/dedupe.sh
+    snippet: |
+      find "$DIR" -type f ! -path '*/node_modules/*' -exec sh -c 'echo "$(stat -f%z "$1") $1"' _ {} \; 2>/dev/null \
+       | sort -n | awk '{sz=$1; $1=""; f=substr($0,2); if(sz==p){print pf; print f} p=sz; pf=f}' \
+       | sort -u | while read -r f; do echo "$(shasum "$f" 2>/dev/null | cut -c1-12)  $f"; done | sort | awk '{if($1==h)print ph"\n"$0; h=$1; ph=$0}'
+  - title: "Existing capped-SHA-256 pattern in this codebase -- deliberately NOT reused here"
+    file: src/cleanup_tools/queue.py
+    snippet: |
+      CONTENT_HASH_MAX_BYTES = 8 * 1024 * 1024  # 8 MiB
+
+      def _content_hash(path: Path) -> str:
+          hasher = hashlib.sha256()
+          with open(path, "rb") as f:
+              hasher.update(f.read(CONTENT_HASH_MAX_BYTES))
+          return hasher.hexdigest()
+
+design_decisions:
+  - decision: "dedupe.py hashes the FULL, uncapped file content with SHA-256, not queue.py's existing 8-MiB-prefix-capped _content_hash helper"
+    rationale: "decision 2 (task brief) / research-brief.md Risk 4 / design-discussion Open Question 2: queue.py's cap exists for a staleness check, where a false negative (missing a real change) is an acceptable narrow gap per that module's own docstring. dedupe's entire output is an identity claim ('these files are duplicates') that a user may delete files based on -- a false positive there (two same-size, same-first-8MiB, different-tail files reported as duplicates) is a materially worse failure mode. Correctness over speed, since the two-stage size pre-filter already bounds how many files ever get hashed."
+  - decision: "Output is structured {hash, size_bytes, paths} groups, not bash's raw <hash> <path> line pairs"
+    rationale: "research-brief.md: 'the Python port should return a structured {hash: [paths]} (or list-of-groups) shape instead, matching every other command's dict-of-JSON-serializable-data convention' -- consistent with survey.py's JSON-shaped output"
+  - decision: "No dry-run/--go, no queue/UI integration for this command"
+    rationale: "decision 5/6 (task brief) / design-discussion Open Question 3: dedupe never writes anything, and staging its output into the approval queue would need a third pseudo-action ('duplicate marker') with no executor -- scope creep with no consumer epic yet. CLI-only, matching find-wallets' identical scoping."
+
+risks:
+  - severity: medium
+    description: "A large, duplicate-heavy Downloads folder (repeated installer re-downloads, video exports) could mean hashing a non-trivial number of large files even after the size pre-filter narrows the candidate set -- full uncapped SHA-256 on multiple large files is real wall-clock time, unlike bash's SHA-1 (faster, but the point of decision 2 is that speed isn't the priority here)"
+    mitigation: "Bounded by the two-stage filter (never hashes a singleton-sized file); the test step includes a fixture-scale check confirming hashing only ever touches size-matched candidates, and this is called out explicitly as a known, accepted tradeoff (correctness over speed) rather than silently discovered later"
+  - severity: low
+    description: "A naive re-derivation of the size-grouping logic could accidentally hash files that don't share a size with anything else, defeating the entire point of the two-stage filter"
+    mitigation: "Acceptance criteria and tests explicitly assert singleton-sized files are never hashed (not just that final output is correct), and the review step checks this ordering is enforced in code"
+
+references:
+  - path: .pHive/epics/port-remaining-scripts/docs/research-brief.md
+    relevant_excerpt: |
+      shasum's default is SHA-1, truncated to 12 hex characters (48 bits) here. That's a
+      meaningfully higher collision risk than a full SHA-256... worth reconsidering for the port
+      even though this pass stays read-only/informational... dedupe's whole output is a
+      duplicate-ness claim, not an auxiliary staleness check.
+  - path: .pHive/epics/port-remaining-scripts/docs/design-discussion.md
+    relevant_excerpt: |
+      Lean: full SHA-256, uncapped, accepting the slower worst case since it's already gated
+      behind the cheap size pre-filter -- real tradeoff, needs sign-off... Dedupe hashing
+      performance at scale -- bounded by the size pre-filter, but a large duplicate-heavy
+      Downloads folder... could still mean hashing a non-trivial number of large files.
+  - path: .pHive/CONTEXT.md
+    relevant_excerpt: |
+      Dedupe -- scripts/dedupe.sh: lists duplicate files by size+hash so the user can decide what
+      to remove; never auto-deletes.
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's Status section (README.md:26) currently lists dedupe as remaining bash-only, and the Scripts table (README.md:102) describes scripts/dedupe.sh directly. Update both once cleanup dedupe ships: note it as a real ported command, add a `cleanup dedupe [dir]` row to the Scripts table noting the full-SHA-256/structured-output behavior change vs. the old script (its hash choice and raw-pair output are both different from bash, not silent parity). Also update .pHive/CONTEXT.md's Dedupe terminology entry to describe the ported command alongside the bash original."

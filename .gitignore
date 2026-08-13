@@ -39,3 +39,5 @@ media/raw/
 .pHive/epics/harden-cleanup-cli/docs/*.png
 !.pHive/epics/ai-approvals-ui/
 !.pHive/epics/ai-approvals-ui/**
+!.pHive/epics/port-remaining-scripts/
+!.pHive/epics/port-remaining-scripts/**

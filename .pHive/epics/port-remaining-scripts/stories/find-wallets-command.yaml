@@ -1,0 +1,193 @@
+id: find-wallets-command
+epic: port-remaining-scripts
+title: Port `find-wallets` as a read-only, structurally leak-proof wallet-artifact scanner
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Implement `cleanup find-wallets [root]`, a read-only port of scripts/find-wallets.sh (17 lines):
+  a filename scan (13 case-insensitive glob patterns) and a content scan (4-alternative regex over
+  Documents/Desktop/Downloads, restricted to .txt/.json/.md/.rtf/.csv) for crypto-wallet artifacts.
+  No dry-run/--go concept applies -- this command never writes anything, matching the bash
+  script's existing safety property. The single non-negotiable requirement is that the port
+  preserves the bash version's exact detection patterns (not reconstructed from memory) AND its
+  never-print-matched-content guarantee -- made structural in the Python port, not just
+  conventional, per the design discussion's Risk 2.
+
+acceptance_criteria:
+  - "Given `cleanup find-wallets` is run with no root argument, when it completes, then it scans
+    from the user's home directory by default (matching bash's `ROOT=\"${1:-$HOME}\"`), and
+    `cleanup find-wallets <root>` scans from an explicit root instead."
+  - "Given a fixture tree containing files matching each of the 13 filename patterns (wallet.dat,
+    *.wallet, keystore*, UTC--*, *.kdbx, electrum*, *mnemonic*, *seed*phrase*, *recovery*phrase*,
+    *.keychain, default_wallet, metamask*, exodus*, atomic*wallet*) case-INsensitively, when
+    `find-wallets` runs against it, then every one is reported by filename match, and files under
+    node_modules/ or Library/Caches/ are excluded even if they'd otherwise match."
+  - "Given a fixture tree containing files whose content matches each of the 4 content-regex
+    alternatives (a 12-24-word lowercase run shaped like a BIP39 seed phrase, an `xprv[0-9A-Za-z]
+    {20,}` BIP32 extended-key prefix, a `-----BEGIN ... PRIVATE KEY-----` PEM header, and an
+    Ethereum keystore JSON's `\"crypto\": {...\"cipher\"` signature) inside .txt/.json/.md/.rtf/
+    .csv files under Documents/Desktop/Downloads, when `find-wallets` runs, then every one is
+    reported by content match with which alternative fired, and files with non-matching content
+    (including near-miss strings, e.g. a 10-word run or an 8-char base58 string) are NOT reported."
+  - "Given the same fixture tree, when `find-wallets`'s returned dict is inspected at every key and
+    every nesting level, then no matched secret/key substring -- the seed-phrase words, the xprv
+    string, the PEM key body, the keystore cipher JSON -- appears anywhere in it; only file paths
+    and a match-type/pattern-identity tag (e.g. `{\"path\": ..., \"match_type\": \"content\",
+    \"pattern\": \"xprv\"}`) are ever present. This must be true by construction (the scanning
+    function never calls `.group()` on a content match anywhere in its code path), not merely true
+    for the current fixture set."
+  - "Given `cleanup find-wallets` is run against a directory it has no permission to fully read,
+    when it completes, then it returns whatever it could scan rather than crashing."
+  - "Verify via: `pytest tests/test_find_wallets.py -v` -- all tests pass, including the explicit
+    no-leaked-secret-substring assertion above."
+
+steps:
+  - id: research
+    description: |
+      Re-read scripts/find-wallets.sh in full (all 17 lines) to extract the exact 13 -iname
+      patterns and the exact 4-alternative content regex as literal strings -- do not
+      approximate or "clean up" any of them (Risk 1: xprv[0-9A-Za-z]{20,} is a specific BIP32
+      key-prefix check, not a generic base58 heuristic). Re-read survey.py's read-only,
+      dict-returning shape (run(adapter, args=None) -> dict, private _helper functions, args
+      accepted-and-ignored) to follow exactly. Re-read reclaim.py's _os_junk_category
+      (reclaim.py:231-247) for the "loop multiple patterns per adapter.list_dir call" precedent
+      the filename scan reuses.
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/commands/find_wallets.py: a module-level tuple of the 13 literal
+      filename patterns and the 4-alternative content regex (compiled once, as literal constants
+      matching the bash source exactly). _by_filename(adapter, root): loop
+      adapter.list_dir(root, pattern=p) per pattern, exclude paths containing "node_modules" or
+      "Library/Caches" segments, dedupe, cap at 200 (matching bash's `head -200`). _by_content(
+      adapter, root): walk Documents/Desktop/Downloads under root for the 5 allowed extensions
+      (.txt/.json/.md/.rtf/.csv), excluding node_modules/.git, run re.search per alternative
+      against each file's text, and on a match append ONLY {"path": ..., "match_type": "content",
+      "pattern": <alternative name>} to the results -- the Match object itself must never be
+      assigned to a variable that outlives the immediate `if match:` check, and .group() must
+      never be called anywhere in this module (this is the load-bearing safety property; a code
+      reviewer must be able to verify it by grep, not just by reading intent). Cap content-scan
+      results at 100 (matching bash's `head -100`). run(adapter, args=None): resolve root from
+      args.root or adapter.resolve_home(), return {"root": ..., "by_filename": [...],
+      "by_content": [...]}. Register the find-wallets subcommand in cli.py (positional `root`,
+      nargs="?", no --go/--from-queue) and add find_wallets.run to COMMANDS.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_find_wallets.py: parametrized tests asserting every one of the 13 filename
+      patterns matches its literal bash-derived fixture string and does not match a deliberately
+      close near-miss; parametrized tests asserting each of the 4 content-regex alternatives
+      matches its literal fixture string (a real-shaped fake seed phrase, a fake xprv string, a
+      fake PEM header, a fake keystore JSON) and does not match adjacent non-matching text (a
+      too-short word run, a plain base58 string, etc.); an explicit test that serializes
+      find_wallets.run()'s full return value (e.g. via json.dumps) and asserts none of the fixture
+      files' matched secret substrings appear anywhere in that serialized output; a test that
+      node_modules/Library-Caches exclusion holds for the filename scan; a test that the
+      home-directory default and explicit-root argument both resolve correctly.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: does any code path in find_wallets.py call `.group()` or otherwise
+      extract content from a content-regex Match object (grep the module for `.group` as a
+      concrete check, not just a read-through)? Do the 13 filename patterns and 4 regex
+      alternatives match scripts/find-wallets.sh's literal source byte-for-byte (diff them side by
+      side)? Is the no-leaked-secret-substring test in test_find_wallets.py actually exercising
+      real secret-shaped fixture content, not a trivial always-passing check?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+  key_files:
+    - path: scripts/find-wallets.sh
+      purpose: "Full behavior to port -- the 13 filename patterns and 4-alternative content regex are literal constants to preserve exactly, not reconstruct from memory (Risk 1)"
+    - path: src/cleanup_tools/commands/survey.py
+      purpose: "The read-only, dict-returning command shape this module follows: run(adapter, args=None) -> dict, private _helper functions, no filesystem mutation anywhere"
+    - path: src/cleanup_tools/commands/reclaim.py
+      purpose: "_os_junk_category (lines 231-247) is the existing precedent for looping multiple filename patterns over adapter.list_dir in one category -- reuse this shape for the filename scan, do not invent a new one"
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "list_dir(path, max_depth, pattern)/resolve_home() consumed here -- DO NOT modify the interface; this story needs no new adapter method"
+
+files_to_modify:
+  - file: src/cleanup_tools/commands/find_wallets.py
+    change: "Create -- find-wallets command implementation, filename + content scans, leak-proof by construction"
+  - file: src/cleanup_tools/cli.py
+    change: "Add find-wallets subcommand registration (positional root, no flags) and COMMANDS entry"
+  - file: tests/test_find_wallets.py
+    change: "Create -- pattern-fidelity tests, no-leaked-secret-substring test, exclusion tests"
+
+code_examples:
+  - title: "Exact filename patterns + content regex being ported (preserve literally)"
+    file: scripts/find-wallets.sh
+    snippet: |
+      find "$ROOT" -type f 2>/dev/null \( \
+        -iname 'wallet.dat' -o -iname '*.wallet' -o -iname 'keystore*' -o -iname 'UTC--*' \
+        -o -iname '*.kdbx' -o -iname 'electrum*' -o -iname '*mnemonic*' -o -iname '*seed*phrase*' \
+        -o -iname '*recovery*phrase*' -o -iname '*.keychain' -o -iname 'default_wallet' \
+        -o -iname 'metamask*' -o -iname 'exodus*' -o -iname 'atomic*wallet*' \) \
+        ! -path '*/node_modules/*' ! -path '*/Library/Caches/*' | head -200
+      grep -rlIE '(\b[a-z]+ ){11,23}[a-z]+\b|xprv[0-9A-Za-z]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"crypto"\s*:\s*\{[^}]*"cipher"' \
+        "$ROOT/Documents" "$ROOT/Desktop" "$ROOT/Downloads" 2>/dev/null \
+        --include='*.txt' --include='*.json' --include='*.md' --include='*.rtf' --include='*.csv' \
+        --exclude-dir=node_modules --exclude-dir=.git | head -100
+  - title: "Existing multi-pattern-per-adapter-call precedent to reuse for the filename scan"
+    file: src/cleanup_tools/commands/reclaim.py
+    snippet: |
+      for root in roots:
+          if not root.is_dir():
+              continue
+          for pattern in OS_JUNK_PATTERNS:
+              candidates.extend(adapter.list_dir(root, max_depth=3, pattern=pattern))
+
+design_decisions:
+  - decision: "The content-scan function never binds a regex Match object to a variable that outlives the immediate match check, and never calls .group() anywhere in the module -- verified by the review step grepping the module, not just reading it"
+    rationale: "design-discussion.md Risk 2 / research-brief.md Risk 2: the bash script's safety is structural (grep -l physically cannot emit matched content); a Python re.search port that stores or logs match.group() anywhere would silently weaken that guarantee. Making the return shape (path + pattern-identity only) the only thing the function ever constructs makes leaking impossible by construction, not just unlikely by convention."
+  - decision: "The 13 filename patterns and 4 regex alternatives are ported as literal, tested constants copied directly from scripts/find-wallets.sh's source, not re-derived from a general understanding of 'wallet file names look like'"
+    rationale: "research-brief.md Risk 1: xprv[0-9A-Za-z]{20,} is a specific BIP32 extended-key prefix check, not a generic base58-looking-string heuristic; a well-intentioned 'simplification' during translation risks silently narrowing or widening detection coverage"
+  - decision: "No dry-run/--go, no queue/UI integration for this command"
+    rationale: "decision 5 (task brief) / design-discussion Open Question 1: find-wallets never writes anything and produces no approve/reject decision -- CLI-only, matching dedupe's identical scoping"
+
+risks:
+  - severity: high
+    description: "A Python re.search-based content scan could leak matched secret text if any code path stores or logs match.group() -- this is the single highest-stakes correctness property in this story, since the whole point of the command is to be safe to run against files that may contain real private keys/seed phrases"
+    mitigation: "The review step explicitly greps find_wallets.py for `.group` as a concrete, mechanical check (not just intent-reading), and test_find_wallets.py asserts no fixture secret substring appears anywhere in the serialized return value"
+  - severity: medium
+    description: "An imprecise regex/glob port could silently narrow (false negatives) or widen (false positives) wallet detection relative to the bash original"
+    mitigation: "All 13 filename patterns and 4 regex alternatives are tested against literal fixture strings mirroring bash's exact source, both positive and negative cases, per acceptance criteria"
+  - severity: low
+    description: "A naive Python walk + open().read() + re.search() over every matching-extension file under Documents/Desktop/Downloads could be materially slower than grep's C implementation at this project's own clutter scale"
+    mitigation: "Not solved in this story's first pass -- flagged in the review step as an explicit follow-up if a real run proves slow; shelling out to grep -rlIE (mirroring dir_size_bytes's existing du shell-out precedent, adapters/base.py:213-224) is the documented fallback if needed"
+
+references:
+  - path: .pHive/epics/port-remaining-scripts/docs/research-brief.md
+    relevant_excerpt: |
+      Safety property, verified by close reading: the script *never* reads a match back out --
+      grep -l only ever emits filenames, never the matched line/content... This exact behavior
+      (never resolve a content match to its matched substring, never cat/print file contents) is
+      the one non-negotiable safety property the port must preserve byte-for-byte.
+  - path: .pHive/epics/port-remaining-scripts/docs/design-discussion.md
+    relevant_excerpt: |
+      Content-match leakage risk is structural, not conventional (Risk 2) -- re.search hands back
+      a Match with .group() available; nothing stops a future edit from logging it. Mitigation:
+      the scanning function returns only path + which-alternative-fired, never touches .group()
+      anywhere, and a test asserts no fixture-secret substring ever appears in output.
+  - path: .pHive/CONTEXT.md
+    relevant_excerpt: |
+      Wallet finder -- scripts/find-wallets.sh: scans for crypto-wallet artifacts by filename...
+      and content signatures... Paths-only -- never prints, logs, or transmits the matched
+      secret/key material.
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's Status section (README.md:26) currently lists find-wallets as remaining bash-only, and the Scripts table (README.md:101) and Wallet finding section (README.md:114-120) describe scripts/find-wallets.sh directly. Update all three once cleanup find-wallets ships: note it as a real ported command alongside survey/sort/reclaim, add a `cleanup find-wallets [root]` row to the Scripts table, and update the Wallet finding section to mention the new command while keeping the existing 'paths only, never key material' framing. Also update .pHive/CONTEXT.md's Wallet finder terminology entry and Key paths' scripts/ description to reflect the ported command existing alongside the bash original."
