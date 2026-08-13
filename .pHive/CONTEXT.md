@@ -57,10 +57,15 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   proposed move/delete actions awaiting human approval, with file locking and atomic writes for safe
   concurrent access. Kept as a separate file from `config.yaml` (not a section within it) so the UI
   and CLI commands can read/write queue entries concurrently without contending over the same file
-  lock as unrelated config changes. `cleanup sort --from-queue` / `cleanup reclaim --from-queue`
-  execute approved entries; `cleanup approve` (`src/cleanup_tools/ui/`) is the localhost-only Flask
-  UI that stages (`/plan/sort`, `/plan/reclaim`) and reviews (approve/reject/undo) entries — it never
-  executes, execution is always a separate deliberate CLI step.
+  lock as unrelated config changes. `cleanup sort --from-queue` / `cleanup reclaim --from-queue` /
+  `cleanup corral-screenshots --from-queue` execute approved entries; `cleanup approve`
+  (`src/cleanup_tools/ui/`) is the localhost-only Flask UI that stages (`/plan/sort`, `/plan/reclaim`,
+  `/plan/corral-screenshots`) and reviews (approve/reject/undo) entries — it never executes,
+  execution is always a separate deliberate CLI step. `corral-screenshots` also introduces
+  `OSAdapter.set_screenshot_save_location` (macOS-only, `NotImplementedError` on Arch), the most
+  invasive OS-level side effect in this codebase (restarts `SystemUIServer`) — gated behind its own
+  `--set-default-location` CLI flag, structurally independent of `--go`/`--from-queue` and
+  unreachable from the UI.
 
 ## Conventions
 

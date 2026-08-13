@@ -31,7 +31,15 @@ just by convention). `cleanup dedupe [dir]` is now also a real, working ported c
 `scripts/dedupe.sh`: same two-stage size-then-hash shape, but with two deliberate corrections —
 full, uncapped SHA-256 instead of bash's SHA-1 truncated to 48 bits, and structured
 `{hash, size_bytes, paths}` groups instead of raw line pairs (see the callout below).
-`corral-screenshots` remains bash-only for now, pending its own story in this epic. The CLI now
+`cleanup corral-screenshots [dir...] [--go] [--from-queue] [--set-default-location]` is now also
+a real, working ported command from `scripts/corral-screenshots.sh` — **this closes out the
+port-remaining-scripts epic: every bash script now has a real Python CLI equivalent.** It follows
+`sort`'s dry-run/`--go`/`--from-queue` pattern (not `reclaim`'s master-paths refusal, which is
+delete-specific and doesn't apply to file moves — this is a pre-existing gap `sort` also has, not
+new here), stages its moves into the approvals UI just like `sort`/`reclaim` do (a third
+"Plan: Corral Screenshots" link), and reports an exact moved-count instead of bash's pre-move
+approximation. The old script's screenshot-save-location system-preference change (which restarts
+a live macOS process) is preserved but never runs implicitly — see the callout below. The CLI now
 reads (and creates, if absent) an optional
 config file at `~/.config/cleanup-tools/config.yaml` for bucket rules, search roots, and master
 paths — sensible defaults apply if the file isn't there.
@@ -99,6 +107,17 @@ else in this tool makes a network call.
 > filter still bounds what gets hashed at all), but correctness matters more here than for
 > `queue.py`'s separate, narrower staleness-check use of a capped hash.
 
+> ⚠ **`cleanup corral-screenshots` never changes your screenshot save location unless you pass
+> `--set-default-location` explicitly.** `corral-screenshots.sh` always ran
+> `defaults write com.apple.screencapture location ~/Pictures/Screenshots && killall
+> SystemUIServer` after moving files — a live system-preference change plus a Dock/menu-bar
+> restart, unconditionally. `cleanup corral-screenshots --go` moves your existing screenshots but
+> **does not** touch that system preference or restart anything. If you also want new screenshots
+> to land in `~/Pictures/Screenshots` going forward (stopping the recurring Desktop clutter, not
+> just cleaning up what's already there), pass `--set-default-location` as its own explicit,
+> independent flag — on Arch Linux this capability isn't supported and is reported as skipped
+> rather than erroring.
+
 > ⚠ **Docker pruning now needs `--go` AND `--docker` — not `--go` alone.** `safe-reclaim.sh` ran
 > `docker system prune` automatically any time you passed `--go`. The new `cleanup reclaim` makes
 > that a deliberate, separate opt-in: Docker layer/volume pruning only runs when **both** `--go` and
@@ -112,6 +131,7 @@ else in this tool makes a network call.
 | `survey.sh` | Snapshot of what's eating space + where the clutter is | read-only |
 | `sort-downloads.sh [dir] [--dry]` | Stages a folder into `_sorted/<type>/` buckets by type (screenshots, installers, pdfs, photos, videos, archives, data, docs, other). Unchanged, still works as before — **acts by default**, pass `--dry` to preview. Ported to the CLI as `cleanup sort` (see Status above): note that `cleanup sort` flips this and **previews by default**, needing `--go` to act. | non-destructive (mv within folder) |
 | `corral-screenshots.sh` | Moves every screenshot → `~/Pictures/Screenshots` + stops new ones hitting the Desktop | move-only |
+| `cleanup corral-screenshots [dir...] [--go] [--from-queue] [--set-default-location]` | Ported version (see Status above and the callout above for the `--set-default-location` gating change vs. the old script) — dry-run by default, stages into the approvals UI, exact moved-count. | **dry-run default**, needs `--go`; system-preference change needs `--set-default-location` separately |
 | `safe-reclaim.sh [--go]` | Deletes node_modules, build caches, Docker layers, junk (`.DS_Store`, `~$*`, `$RECYCLE.BIN`) | **dry-run default**, needs `--go` |
 | `cleanup reclaim [--go] [--docker]` | Ported version of `safe-reclaim.sh` (see Status above): same categories plus new orphaned-installer detection (macOS-only) and GB-reclaimed reporting; refuses to delete any configured master path not marked `backed_up: true`; Docker pruning needs `--go` **and** `--docker` — see the callout above. | **dry-run default**, needs `--go` |
 | `find-wallets.sh [root]` | Finds crypto-wallet artifacts by filename + content; **prints paths only, never key material**. Ported to the CLI as `cleanup find-wallets [root]` (see Status above) — behavior-identical. | read-only |
@@ -123,7 +143,9 @@ else in this tool makes a network call.
 3. `safe-reclaim.sh` (dry-run → `--go`; or `cleanup reclaim --go`, once installed — masters not
    marked `backed_up` are refused, and add `--docker` too if you also want the Docker prune) —
    instant, zero-risk GB.
-4. `corral-screenshots.sh` — kill the #1 clutter source.
+4. `corral-screenshots.sh` (or `cleanup corral-screenshots --go`, once installed — add
+   `--set-default-location` too if you also want new screenshots to stop landing on the Desktop
+   going forward, see the callout above) — kill the #1 clutter source.
 5. `sort-downloads.sh` (or `cleanup sort --go`, once installed — remember it's dry-run by default, unlike the script) — bucket the 857 Downloads, then bulk-act per bucket.
 6. Then the plan's Desktop/Documents phases by hand.
 
