@@ -1,0 +1,17 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Added static/plan-reclaim.js to the spec's datas= list; rebuilt both binaries and verified
+  GET /static/plan-reclaim.js returns real content (previously 404). Added a durable drift-
+  check: tests/test_pyinstaller_spec_datas.py statically parses the spec's datas= list via
+  ast and asserts it exactly matches a real recursive scan of templates/static -- verified
+  red (temporarily removed the plan-reclaim.js entry, confirmed the test fails) then green.
+  Added /plan/corral-screenshots coverage to the smoke test. Rebuilt both binaries and
+  re-ran the smoke test against each -- all checks pass. 436 -> 438 tests pass (smoke test
+  genuinely exercised against a rebuilt binary, not skipped).
+artifacts:
+  - packaging/pyinstaller/cleanup_ui.spec
+  - scripts/smoke_test_sidecar.py
+  - tests/test_pyinstaller_spec_datas.py

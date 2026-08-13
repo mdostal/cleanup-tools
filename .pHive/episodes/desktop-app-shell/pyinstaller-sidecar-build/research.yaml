@@ -1,0 +1,9 @@
+step_id: research
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Research via research-brief.md's PyInstaller-vs-Nuitka-vs-bundled-runtime answer plus
+  targeted current-docs lookups for spec-file datas= syntax, --onefile/--onedir semantics,
+  and PyInstaller-hooks-contrib coverage for httpx/pydantic. Read app.py's run_server
+  signature and routes.py's full route list to build the smoke-test target list.
+artifacts: []

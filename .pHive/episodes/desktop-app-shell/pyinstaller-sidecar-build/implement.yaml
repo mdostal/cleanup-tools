@@ -1,0 +1,16 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Created packaging/pyinstaller/entrypoint.py + cleanup_ui.spec (datas= for templates/static,
+  hiddenimports for anthropic/httpx/pydantic). Built both --onefile and --onedir, ran a real
+  SIGKILL/lsof/netstat spike against each: onedir's PID is the real process (port frees
+  instantly); onefile's PID is the bootloader, whose forked child survives SIGKILL orphaned
+  and still listening. Chose onedir as primary (67MB vs onefile's 31MB) based on this
+  evidence. /propose-ai genuinely exercised against the frozen binary via a real timed
+  network round-trip with a fake API key, proving the anthropic/httpx/pydantic import chain
+  resolved. Added a build optional-dependencies group to pyproject.toml.
+artifacts:
+  - packaging/pyinstaller/entrypoint.py
+  - packaging/pyinstaller/cleanup_ui.spec
+  - pyproject.toml

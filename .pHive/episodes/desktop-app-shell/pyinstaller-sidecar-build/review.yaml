@@ -1,0 +1,19 @@
+step_id: review
+status: completed
+timestamp: "2026-08-13"
+review_verdict: findings_required_fix_cycle
+notes: >
+  Independent review gave the SIGKILL-orphaning claim -- the single most consequential,
+  falsifiable claim driving the onedir-vs-onefile architectural decision -- the highest
+  scrutiny in this story: reproduced it from scratch with its own raw kill -9/kill -15 +
+  netstat/curl probes against the already-built binaries, confirmed the exact asymmetry
+  claimed. Also independently confirmed binary sizes, template rendering, the /propose-ai
+  import-chain proof (including reading anthropic_provider.py's narrow exception handling to
+  confirm a failed import couldn't have been silently swallowed), smoke-test cleanup
+  hygiene, and pyproject.toml's correct dependency placement. Found two real bugs from a
+  coordination gap with the concurrent flask-progress-reporting story: static/plan-
+  reclaim.js (added by that story) was missing from the spec's datas= list, 404ing in the
+  frozen binary and silently breaking the async Plan: Reclaim UI flow (major); and the smoke
+  test never exercised /plan/corral-screenshots despite claiming full route coverage
+  (minor).
+artifacts: []
