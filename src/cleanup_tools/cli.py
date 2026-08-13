@@ -1,7 +1,8 @@
 """Command-line entry point for cleanup-tools.
 
 Wires up a single top-level argparse parser with one subparser per command
-(``survey``, ``sort``, ``reclaim``, ``propose-ai``, and ``approve``).
+(``survey``, ``sort``, ``reclaim``, ``find-wallets``, ``propose-ai``, and
+``approve``).
 ``main()`` builds one :class:`~cleanup_tools.adapters.base.OSAdapter` for the
 whole invocation, dispatches to the matching command module's
 ``run(adapter, args)`` function -- passing the parsed argparse namespace so
@@ -31,7 +32,7 @@ import sys
 from pathlib import Path
 
 from . import adapters
-from .commands import reclaim, sort, survey
+from .commands import find_wallets, reclaim, sort, survey
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -116,6 +117,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    find_wallets_parser = subparsers.add_parser(
+        "find-wallets",
+        help=(
+            "Read-only scan for crypto-wallet artifacts by filename and "
+            "content signature (never writes/moves/deletes anything)."
+        ),
+    )
+    find_wallets_parser.add_argument(
+        "root",
+        nargs="?",
+        default=None,
+        help="Root directory to scan (default: the user's home directory).",
+    )
+
     propose_ai_parser = subparsers.add_parser(
         "propose-ai",
         help=(
@@ -164,6 +179,7 @@ COMMANDS = {
     "survey": survey.run,
     "sort": sort.run,
     "reclaim": reclaim.run,
+    "find-wallets": find_wallets.run,
 }
 
 
