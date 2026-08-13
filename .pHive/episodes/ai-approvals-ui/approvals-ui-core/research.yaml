@@ -1,0 +1,8 @@
+step_id: research
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Read queue.py's full API, sort.py/reclaim.py/survey.py's adapter-parameterized patterns,
+  and config.py before implementing, to keep route handlers consistent with existing
+  conventions.
+artifacts: []

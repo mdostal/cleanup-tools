@@ -1,0 +1,10 @@
+step_id: test
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  tests/test_ui_routes.py added (20 tests initially, 22 after fix-cycle). Real-server
+  lsof/netstat verification performed against a live subprocess (HOME redirected to a scratch
+  dir): confirmed listening on 127.0.0.1:<port> only, no 0.0.0.0/*:<port> binding. Full suite
+  225 -> 245 passing after implement, 248 after fix-cycle.
+artifacts:
+  - tests/test_ui_routes.py

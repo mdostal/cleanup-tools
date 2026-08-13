@@ -1,0 +1,21 @@
+step_id: ui-design
+status: completed
+timestamp: "2026-08-12"
+delegates_to: design
+notes: >
+  Wireframe/interaction-model note produced inline ahead of implementation (per the
+  SCALE_CALL: pre-exec escalation recorded in .pHive/cycle-state/ai-approvals-ui.yaml):
+  dashboard groups by group_key sorted largest-first with a global status bar; queue cards
+  show thumbnail + src/dest + three independent approve/reject/undo POST forms; cards carry
+  data-entry-id and a disabled placeholder checkbox and routes are structured so the next
+  story (bulk actions/keyboard shortcuts/pagination) can extend without a rewrite.
+wireframe_brief: >
+  Dashboard (GET /): per-group_key cards (count, total MB, sorted largest-first) plus a global
+  pending/approved/rejected/executed status bar. Queue (GET /queue): one review card per pending
+  entry — thumbnail (Pillow-resized, never the original file) or an action-labeled placeholder
+  for non-images, monospace src/dest paths, three POST forms (approve/reject/undo). Forward
+  compatibility for the next story: card markup includes data-entry-id + a disabled checkbox
+  placeholder for future bulk-select; status transitions funnel through queue.set_status/undo
+  per-entry so a bulk route can loop over ids; /queue's entry list is a plain Python list a
+  future pagination step can slice without touching how entries are fetched.
+artifacts: []
