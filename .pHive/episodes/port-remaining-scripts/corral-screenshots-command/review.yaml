@@ -1,0 +1,16 @@
+step_id: review
+status: completed
+timestamp: "2026-08-13"
+review_verdict: passed
+notes: >
+  Independent review gave the --set-default-location independence property the highest
+  scrutiny in the epic (treating any gap as critical, not just major, given the invasiveness
+  of killall SystemUIServer): own spy-adapter script testing every flag combination
+  including go+from_queue together with the flag entirely absent from args, a full repo grep
+  confirming exactly one production call site, and confirmation the UI route's args=None
+  convention makes it structurally unreachable from any request data. Also independently
+  verified macOS subprocess argv/check-kwarg correctness, zero master-path-machinery
+  imports, exact moved-count via its own fixture, root resolution via its own config
+  fixture, --from-queue staleness re-check via its own mutated-file scenario, and all three
+  template link locations. No bugs found, zero fix-cycle rounds needed. 414/414 tests pass.
+artifacts: []
