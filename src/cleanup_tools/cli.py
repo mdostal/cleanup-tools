@@ -1,8 +1,8 @@
 """Command-line entry point for cleanup-tools.
 
 Wires up a single top-level argparse parser with one subparser per command
-(``survey``, ``sort``, ``reclaim``, ``find-wallets``, ``propose-ai``, and
-``approve``).
+(``survey``, ``sort``, ``reclaim``, ``find-wallets``, ``dedupe``,
+``propose-ai``, and ``approve``).
 ``main()`` builds one :class:`~cleanup_tools.adapters.base.OSAdapter` for the
 whole invocation, dispatches to the matching command module's
 ``run(adapter, args)`` function -- passing the parsed argparse namespace so
@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 from . import adapters
-from .commands import find_wallets, reclaim, sort, survey
+from .commands import dedupe, find_wallets, reclaim, sort, survey
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -131,6 +131,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Root directory to scan (default: the user's home directory).",
     )
 
+    dedupe_parser = subparsers.add_parser(
+        "dedupe",
+        help=(
+            "Read-only scan for duplicate files by size then full-content "
+            "hash (never writes/moves/deletes anything)."
+        ),
+    )
+    dedupe_parser.add_argument(
+        "dir",
+        nargs="?",
+        default=None,
+        help="Directory to scan (default: the platform Downloads dir).",
+    )
+
     propose_ai_parser = subparsers.add_parser(
         "propose-ai",
         help=(
@@ -180,6 +194,7 @@ COMMANDS = {
     "sort": sort.run,
     "reclaim": reclaim.run,
     "find-wallets": find_wallets.run,
+    "dedupe": dedupe.run,
 }
 
 
