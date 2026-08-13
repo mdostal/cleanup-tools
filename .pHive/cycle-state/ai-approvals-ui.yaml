@@ -2,16 +2,21 @@ epic_id: ai-approvals-ui
 created: "2026-08-11"
 
 escalations:
-  - trigger: ui-scale-call
+  - trigger: ui:major
     placement: pre-exec
     severity: moderate
-    stories: [approvals-ui]
+    stories: [approvals-ui-core, approvals-ui-triage-efficiency]
     reason: >
       ui-designer lens (step 4b collaborative review) called SCALE_CALL: pre-exec — the
       approval-review interaction model (bulk actions, keyboard shortcuts, undo, pagination,
-      diff/before-after view) needs to be wireframed before story-writing locks in the
+      overview dashboard) needs to be wireframed before story-writing locks in the
       approval-queue schema, since these interaction needs shape that schema (status history
       for undo, ordering/cursors for pagination, group-keys for bulk ops), not just the UI's
-      pixels.
+      pixels. Corrected trigger id at /execute time: originally recorded as the invented
+      "ui-scale-call"; the real catalog id is "ui:major" (specialist-triggers.md). Practical
+      effect is unchanged either way — ui:major's workflow field is empty in v1
+      ("catalog-registered... ships with the ui-team-skills epic"), so the catalog's own
+      documented v1 behavior is "design work continues in-planning" — already satisfied by the
+      ui-design (/design delegation) step embedded directly in the approvals-ui-core story.
     raised_by: ui-designer
     raised_at: "2026-08-11"
