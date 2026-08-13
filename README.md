@@ -58,6 +58,14 @@ approved entries. The manual (no-AI) approvals UI is now **complete and usable a
 (or an explicit id list) in one click, and keyboard shortcuts (`y`/`n`/`space`/arrow keys) let you
 triage a large plan fast without reaching for the mouse each time.
 
+An AI-provider layer (`src/cleanup_tools/ai/`) now exists — an Anthropic implementation of a
+narrow "given a filename, propose a bucket" interface — but it is **not wired into anything
+yet** (no CLI command, no UI button calls it). This preserves the "no ambient network calls"
+rule: nothing in this tool talks to the network unless a future story explicitly wires this in
+behind a deliberate user action. To use it once that wiring lands, set `ANTHROPIC_API_KEY` in
+your environment, or put the key in `~/.config/cleanup-tools/credentials` (created with `0600`
+permissions — the tool will correct the mode and warn if it finds that file less restrictive).
+
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
 > **previews by default** and needs `--go` to actually move files. If you're used to running the bash

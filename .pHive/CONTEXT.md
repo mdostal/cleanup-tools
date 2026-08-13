@@ -65,6 +65,14 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   (see `.pHive/project-profile.yaml → north_star.avoid`).
 - No CLAUDE.md exists yet — until one is added, `.pHive/project-profile.yaml → claude_md_summary`
   is the authoritative source for build/rule conventions.
+- The sole sanctioned exception to "no network, no telemetry": explicit, user-triggered AI calls
+  via `src/cleanup_tools/ai/` (`AIProvider` ABC + `AnthropicProvider`). The SDK itself must never
+  phone home on its own (verified against the installed SDK's source, not assumed) — client
+  construction always passes `api_key=` explicitly so the SDK can't silently fall back to an
+  OAuth-profile/Workload-Identity-Federation credential we don't control. API keys live in
+  `ANTHROPIC_API_KEY` or `~/.config/cleanup-tools/credentials` (0600-enforced) — never in
+  `config.yaml` or `approval_queue.yaml`. As of this writing the provider layer is standalone,
+  not wired into the CLI/UI/queue yet.
 
 ## Canonical references
 
