@@ -1,0 +1,16 @@
+step_id: backend-implement
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  executed_at/execution_error added to QueueEntry. sort.py/reclaim.py both gain _run_from_queue:
+  single load->process->save cycle per invocation (not per-entry), staleness leaves approved
+  entries untouched for re-plan, reclaim reuses the existing _master_path_refusal helper
+  unconditionally per entry (never short-circuited by staleness check). --from-queue flag added
+  to cli.py. Smoke-tested against a hand-built 7-entry fixture: stale entry correctly skipped
+  and left approved; master-path-protected approved entry correctly refused with no delete and
+  no executed_at set. 200 existing tests still pass. No formal pytest tests yet.
+artifacts:
+  - src/cleanup_tools/queue.py
+  - src/cleanup_tools/commands/sort.py
+  - src/cleanup_tools/commands/reclaim.py
+  - src/cleanup_tools/cli.py
