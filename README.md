@@ -30,11 +30,19 @@ paths — sensible defaults apply if the file isn't there.
 
 An approval queue store (`src/cleanup_tools/queue.py`) now also exists, persisting proposed
 move/delete actions as YAML at `~/.config/cleanup-tools/approval_queue.yaml`, with file locking and
-atomic writes so it's safe to touch from multiple processes at once. This is foundation only, not
-yet usable end-to-end — nothing writes to it, no command reads from it (no `--from-queue` flag
-yet), and there's no UI to approve/reject entries. It's a separate file from `config.yaml` rather
-than a section within it, so a future UI process and CLI commands can read/write queue entries
-concurrently without contending over the same lock as unrelated config changes.
+atomic writes so it's safe to touch from multiple processes at once. It's a separate file from
+`config.yaml` rather than a section within it, so a future UI process and CLI commands can read/write
+queue entries concurrently without contending over the same lock as unrelated config changes.
+
+`cleanup sort` and `cleanup reclaim` both now also support a `--from-queue` flag, driven by that
+approval queue store. This is a **second execution path alongside `--go`**, not a replacement for
+it — `--go` still drives the existing "preview vs. act on this run" flow. `--from-queue` instead
+executes actions that were previously staged into the approval queue and approved there.
+Consequently `--from-queue` executes **unconditionally and does not need `--go` alongside it** —
+approval status recorded in the queue is itself the safety gate for that path. The master-paths
+refusal described above (configured masters refused from deletion until marked `backed_up: true`)
+applies to `cleanup reclaim --from-queue` exactly as it does to `cleanup reclaim --go` — queue
+approval does not bypass it.
 
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
