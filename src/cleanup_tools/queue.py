@@ -44,6 +44,8 @@ class QueueEntry:
     group_key: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     plan_snapshot: dict = field(default_factory=dict)
+    executed_at: str | None = None
+    execution_error: str | None = None
 
 
 QUEUE_FILENAME = "approval_queue.yaml"
@@ -66,6 +68,8 @@ def _entry_from_dict(data: dict) -> QueueEntry:
         group_key=data.get("group_key"),
         created_at=data.get("created_at") or datetime.now(timezone.utc).isoformat(),
         plan_snapshot=dict(data.get("plan_snapshot") or {}),
+        executed_at=data.get("executed_at"),
+        execution_error=data.get("execution_error"),
     )
 
 
@@ -81,6 +85,8 @@ def _entry_to_dict(entry: QueueEntry) -> dict:
         "group_key": entry.group_key,
         "created_at": entry.created_at,
         "plan_snapshot": dict(entry.plan_snapshot),
+        "executed_at": entry.executed_at,
+        "execution_error": entry.execution_error,
     }
 
 

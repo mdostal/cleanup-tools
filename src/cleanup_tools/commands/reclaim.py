@@ -31,9 +31,11 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cleanup_tools import config as config_module
+from cleanup_tools import queue as queue_module
 from cleanup_tools.adapters.base import OSAdapter
 
 BUILD_CACHE_DIR_NAMES = ("node_modules", ".next", ".turbo", "dist")
@@ -429,6 +431,108 @@ def _resolve_roots(
     return [adapter.resolve_standard_dir("documents"), adapter.resolve_standard_dir("desktop")]
 
 
+def _run_from_queue(
+    adapter: OSAdapter, config: config_module.Config, roots: list[Path]
+) -> dict:
+    """Execute every approved, queue-sourced ``delete`` whose ``src`` is under a root.
+
+    Mirrors ``sort.py``'s ``_run_from_queue`` (load the queue exactly once,
+    process every qualifying entry, save exactly once, all inside a single
+    ``with_queue_lock`` block), with two reclaim-specific twists:
+
+    - "Under a root" is checked case-insensitively via ``_is_relative_to_ci``
+      against every resolved root, matching how the rest of this module
+      compares paths on a case-insensitive filesystem.
+    - Before any delete attempt, every qualifying entry -- stale or not --
+      is run through the *exact same* ``_master_path_refusal`` helper that
+      ``--go``'s ``_category_entries`` already uses. A match refuses the
+      entry unconditionally: no delete, no ``executed_at``, regardless of
+      whether it was also stale. Staleness is still checked first (and, if
+      stale, the entry is left alone -- status stays ``approved`` -- and is
+      only noted in the returned report), but the master-path check itself
+      always runs, never short-circuited by the staleness result.
+
+    Each entry's actual delete attempt is isolated via a broad ``try/except
+    Exception`` -- deliberately wider than a plain ``OSError`` catch, and
+    the same broad-except precedent already used one level up by ``run()``'s
+    per-category loop (see that loop's ``except Exception`` and the
+    ``_execute_deletions``/docker-invocation broad catches) for exactly the
+    same reason: one entry's unexpected bug must not sink the rest of the
+    batch, and -- critically for ``delete`` specifically -- must never
+    prevent ``save_queue`` below from running. Without this, a delete that
+    actually *succeeds* on disk but is followed by some unrelated
+    non-OSError bug before ``entry.executed_at`` is durably saved would
+    leave the queue believing the entry was never executed at all; a later
+    run would then see the now-missing ``src`` and misreport it as merely
+    "stale, re-plan" rather than "already executed" -- effectively losing
+    the record of a real deletion that already happened.
+    """
+    path = queue_module.default_queue_path(adapter)
+    resolved_roots = [_resolve_loose(r) for r in roots]
+
+    def _under_a_root(src_path: Path) -> bool:
+        resolved_src = _resolve_loose(src_path)
+        return any(_is_relative_to_ci(resolved_src, root) for root in resolved_roots)
+
+    executed: list[dict] = []
+    stale: list[dict] = []
+    refused: list[dict] = []
+    failed: list[dict] = []
+
+    with queue_module.with_queue_lock(adapter, path):
+        entries = queue_module.load_queue(adapter, path)
+
+        qualifying = [
+            entry
+            for entry in entries
+            if entry.status == "approved"
+            and entry.action == "delete"
+            and _under_a_root(Path(entry.src))
+        ]
+
+        for entry in qualifying:
+            is_stale = queue_module.check_staleness(adapter, entry)
+            refusing_master_path = _master_path_refusal(config, Path(entry.src))
+
+            if refusing_master_path is not None:
+                refused.append(
+                    {
+                        "id": entry.id,
+                        "src": entry.src,
+                        "reason": MASTER_PATH_REFUSAL_REASON,
+                        "master_path": refusing_master_path.path,
+                    }
+                )
+                continue
+
+            if is_stale:
+                stale.append({"id": entry.id, "src": entry.src, "reason": "stale, re-plan"})
+                continue
+
+            now = datetime.now(timezone.utc).isoformat()
+            try:
+                adapter.delete(Path(entry.src), recursive=True)
+            except Exception as exc:  # noqa: BLE001 - one entry's bug must not sink the rest
+                entry.executed_at = now
+                entry.execution_error = str(exc)
+                failed.append({"id": entry.id, "src": entry.src, "error": str(exc)})
+            else:
+                entry.executed_at = now
+                entry.execution_error = None
+                executed.append({"id": entry.id, "src": entry.src})
+
+        queue_module.save_queue(adapter, entries, path)
+
+    return {
+        "queue_path": path,
+        "qualifying_count": len(qualifying),
+        "executed": executed,
+        "stale": stale,
+        "refused": refused,
+        "failed": failed,
+    }
+
+
 def run(adapter: OSAdapter, args=None) -> dict:
     """Reclaim disk space across build caches, OS junk, and (optionally) Docker.
 
@@ -447,14 +551,26 @@ def run(adapter: OSAdapter, args=None) -> dict:
     gated on an extra flag (``--docker``) and because its reclaimed-bytes
     figure is only knowable *after* running it, unlike every other
     category's pre-computed size.
+
+    ``args.from_queue`` takes an entirely separate path: instead of
+    computing/executing a fresh plan across categories, it executes every
+    already-*approved* ``delete`` entry in the approval queue whose ``src``
+    falls under one of the resolved roots, via ``_run_from_queue`` -- see
+    that helper's docstring for the master-path-refusal/staleness/isolation/
+    locking details.
     """
     raw_dirs = getattr(args, "dir", None) if args is not None else None
     go = bool(getattr(args, "go", False)) if args is not None else False
     docker_requested = bool(getattr(args, "docker", False)) if args is not None else False
+    from_queue = bool(getattr(args, "from_queue", False)) if args is not None else False
 
     config = config_module.load_config(adapter)
     roots = _resolve_roots(adapter, config, raw_dirs)
     downloads_dir = adapter.resolve_standard_dir("downloads")
+
+    if from_queue:
+        from_queue_report = _run_from_queue(adapter, config, roots)
+        return {"roots": roots, "go": go, "from_queue": from_queue_report}
 
     category_builders = (
         ("build_caches", lambda: _build_caches_category(adapter, config, roots)),

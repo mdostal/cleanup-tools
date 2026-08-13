@@ -22,8 +22,10 @@ so those assertions use plain ``==``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +34,8 @@ import pytest
 from cleanup_tools.adapters import MacOSAdapter
 from cleanup_tools.commands import reclaim
 from cleanup_tools.config import Config, DEFAULT_BUCKET_RULES, MasterPath, save_config
+from cleanup_tools import queue as queue_module
+from cleanup_tools.queue import QueueEntry, build_plan_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -751,3 +755,504 @@ def test_same_path_ci_and_is_relative_to_ci(tmp_path):
     sibling = tmp_path / "abc"
     short_parent = tmp_path / "ab"
     assert reclaim._is_relative_to_ci(sibling, short_parent) is False
+
+
+# ---------------------------------------------------------------------------
+# 8. --from-queue: executes only approved, queue-sourced ``delete`` entries
+#    under a resolved root. See reclaim._run_from_queue's docstring for the
+#    master-path-refusal/staleness/isolation/single-lock-cycle contract these
+#    tests pin down.
+#
+#    Section 8f below is the highest-stakes coverage in this file: it re-runs
+#    the exact master-path bypass regression fixtures from section 7 above,
+#    but drives them through an APPROVED queue entry + --from-queue instead
+#    of --go, proving the master-path refusal (the one non-negotiable safety
+#    rule in this whole module) is not accidentally bypassable just because
+#    the delete was requested via the queue path rather than a fresh plan.
+# ---------------------------------------------------------------------------
+
+
+def _seed_queue(adapter, entries: list[QueueEntry]) -> Path:
+    """Write ``entries`` straight to the (fake-home) default queue path."""
+    path = queue_module.default_queue_path(adapter)
+    queue_module.save_queue(adapter, entries, path)
+    return path
+
+
+def _reload_queue(adapter) -> list[QueueEntry]:
+    return queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
+
+
+# ---- 8a. Only approved delete entries execute. -----------------------------
+
+
+@pytest.mark.parametrize("status", ["pending", "approved", "rejected"])
+def test_from_queue_executes_only_approved_delete_entries(adapter, tmp_path, status):
+    root = tmp_path / "root"
+    nm = _mk_node_modules(root / "proj")
+
+    entry = QueueEntry(
+        action="delete", src=str(nm), status=status, plan_snapshot=build_plan_snapshot(nm)
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+    report = result["from_queue"]
+
+    if status == "approved":
+        assert report["qualifying_count"] == 1
+        assert report["executed"] == [{"id": entry.id, "src": str(nm)}]
+        assert not nm.exists()
+    else:
+        assert report["qualifying_count"] == 0
+        assert report["executed"] == []
+        assert nm.exists()
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == status
+
+
+def test_from_queue_ignores_approved_non_delete_action(adapter, tmp_path):
+    """An approved queue entry whose action isn't "delete" must never
+    execute through reclaim's --from-queue, confirming the "right action
+    type" half of the filter.
+    """
+    root = tmp_path / "root"
+    nm = _mk_node_modules(root / "proj")
+
+    entry = QueueEntry(
+        action="move",
+        src=str(nm),
+        dest=str(root / "elsewhere"),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(nm),
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["qualifying_count"] == 0
+    assert report["executed"] == []
+    assert nm.exists()
+
+
+# ---- 8b. Staleness: skipped, status/execution fields untouched, reported. --
+
+
+@pytest.mark.parametrize("stale_mode", ["changed", "deleted"])
+def test_from_queue_stale_entry_is_skipped_status_and_execution_fields_untouched(
+    adapter, tmp_path, stale_mode
+):
+    root = tmp_path / "root"
+    nm = _mk_node_modules(root / "proj")
+    snapshot = build_plan_snapshot(nm)
+
+    if stale_mode == "changed":
+        # A directory's plan_snapshot only records mtime (no content_hash),
+        # so an unambiguous, filesystem-resolution-proof mtime change is
+        # enough to make it stale.
+        os.utime(nm, (0, 0))
+    else:
+        adapter.delete(nm, recursive=True)
+
+    entry = QueueEntry(
+        action="delete", src=str(nm), status="approved", plan_snapshot=snapshot
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["qualifying_count"] == 1
+    assert report["executed"] == []
+    assert report["failed"] == []
+    assert report["refused"] == []
+    assert len(report["stale"]) == 1
+    assert report["stale"][0]["id"] == entry.id
+    assert report["stale"][0]["src"] == str(nm)
+
+    if stale_mode == "changed":
+        assert nm.exists()  # never touched
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"
+    assert reloaded.executed_at is None
+    assert reloaded.execution_error is None
+
+
+# ---- 8c. Successful execution: executed_at set, execution_error cleared,
+#          status unchanged. --------------------------------------------------
+
+
+def test_from_queue_successful_execution_sets_executed_at_and_clears_error(adapter, tmp_path):
+    root = tmp_path / "root"
+    nm = _mk_node_modules(root / "proj")
+
+    entry = QueueEntry(
+        action="delete", src=str(nm), status="approved", plan_snapshot=build_plan_snapshot(nm)
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+
+    assert result["from_queue"]["executed"] == [{"id": entry.id, "src": str(nm)}]
+    assert not nm.exists()
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"  # execution never touches status
+    assert reloaded.executed_at is not None
+    assert reloaded.execution_error is None
+    datetime.fromisoformat(reloaded.executed_at)  # real, parseable timestamp
+
+
+# ---- 8d. Failed execution: isolated per-entry, batch continues. -----------
+
+
+def test_from_queue_failed_execution_isolated_per_entry(adapter, tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    nm_good = _mk_node_modules(root / "proj1")
+    nm_bad = _mk_node_modules(root / "proj2")
+
+    good_entry = QueueEntry(
+        action="delete",
+        src=str(nm_good),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(nm_good),
+    )
+    bad_entry = QueueEntry(
+        action="delete",
+        src=str(nm_bad),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(nm_bad),
+    )
+    _seed_queue(adapter, [bad_entry, good_entry])
+
+    real_delete = adapter.delete
+
+    def flaky_delete(path, recursive=False):
+        if Path(path) == nm_bad:
+            raise OSError("permission denied (simulated)")
+        return real_delete(path, recursive=recursive)
+
+    monkeypatch.setattr(adapter, "delete", flaky_delete)
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)  # must not raise
+    report = result["from_queue"]
+
+    assert len(report["failed"]) == 1
+    assert report["failed"][0]["id"] == bad_entry.id
+    assert report["failed"][0]["error"] == "permission denied (simulated)"
+
+    assert len(report["executed"]) == 1
+    assert report["executed"][0]["id"] == good_entry.id
+
+    by_id = {e.id: e for e in _reload_queue(adapter)}
+
+    bad_reloaded = by_id[bad_entry.id]
+    assert bad_reloaded.status == "approved"
+    assert bad_reloaded.executed_at is not None  # set on failure too
+    assert bad_reloaded.execution_error == "permission denied (simulated)"
+    assert nm_bad.exists()  # never actually touched
+
+    good_reloaded = by_id[good_entry.id]
+    assert good_reloaded.status == "approved"
+    assert good_reloaded.executed_at is not None
+    assert good_reloaded.execution_error is None
+    assert not nm_good.exists()
+
+
+def test_from_queue_non_oserror_mid_batch_does_not_lose_prior_entrys_result(
+    adapter, tmp_path, monkeypatch
+):
+    """CRITICAL regression: a non-OSError exception raised while deleting one
+    entry must not prevent save_queue from persisting the outcome already
+    recorded on an *earlier* entry in the same batch.
+
+    This is the reclaim-specific worst case called out in the bug report: a
+    real deletion can succeed on disk, but if the exception that follows it
+    (for some other, unrelated entry) escapes uncaught, save_queue never
+    runs -- so a later run would see the first entry's now-missing src and
+    misreport it as merely "stale, re-plan" instead of "already executed",
+    permanently losing the record that the delete actually happened. Before
+    the fix, _run_from_queue only caught ``except OSError``, so a ValueError
+    (or any other non-OSError) would propagate straight out of the whole
+    function, past save_queue entirely.
+    """
+    root = tmp_path / "root"
+    nm_first = _mk_node_modules(root / "proj1")
+    nm_second = _mk_node_modules(root / "proj2")
+
+    first_entry = QueueEntry(
+        action="delete",
+        src=str(nm_first),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(nm_first),
+    )
+    second_entry = QueueEntry(
+        action="delete",
+        src=str(nm_second),
+        status="approved",
+        plan_snapshot=build_plan_snapshot(nm_second),
+    )
+    _seed_queue(adapter, [first_entry, second_entry])
+
+    real_delete = adapter.delete
+
+    def flaky_delete(path, recursive=False):
+        if Path(path) == nm_second:
+            raise ValueError("unexpected bug (simulated), not an OSError")
+        return real_delete(path, recursive=recursive)
+
+    monkeypatch.setattr(adapter, "delete", flaky_delete)
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)  # must not raise
+    report = result["from_queue"]
+
+    assert len(report["executed"]) == 1
+    assert report["executed"][0]["id"] == first_entry.id
+
+    assert len(report["failed"]) == 1
+    assert report["failed"][0]["id"] == second_entry.id
+    assert report["failed"][0]["error"] == "unexpected bug (simulated), not an OSError"
+
+    # The queue file was still saved -- the first entry's already-completed
+    # deletion is not lost just because the second entry blew up with
+    # something other than OSError.
+    by_id = {e.id: e for e in _reload_queue(adapter)}
+
+    first_reloaded = by_id[first_entry.id]
+    assert first_reloaded.status == "approved"
+    assert first_reloaded.executed_at is not None
+    assert first_reloaded.execution_error is None
+    assert not nm_first.exists()  # the deletion really happened
+
+    second_reloaded = by_id[second_entry.id]
+    assert second_reloaded.status == "approved"
+    assert second_reloaded.executed_at is not None
+    assert second_reloaded.execution_error == "unexpected bug (simulated), not an OSError"
+    assert nm_second.exists()  # never actually deleted
+
+
+# ---- 8e. Single lock/save cycle per invocation, regardless of entry count. -
+
+
+def test_from_queue_saves_queue_exactly_once_per_invocation(adapter, tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    entries = []
+    for i in range(4):
+        nm = _mk_node_modules(root / f"proj{i}")
+        entries.append(
+            QueueEntry(
+                action="delete",
+                src=str(nm),
+                status="approved",
+                plan_snapshot=build_plan_snapshot(nm),
+            )
+        )
+    _seed_queue(adapter, entries)
+
+    save_calls: list[list[QueueEntry]] = []
+    real_save = queue_module.save_queue
+
+    def spy_save(adapter_, entries_, path=None):
+        save_calls.append(list(entries_))
+        return real_save(adapter_, entries_, path)
+
+    monkeypatch.setattr(reclaim.queue_module, "save_queue", spy_save)
+
+    lock_calls: list[Path] = []
+    real_lock = queue_module.with_queue_lock
+
+    @contextlib.contextmanager
+    def spy_lock(adapter_, path):
+        lock_calls.append(path)
+        with real_lock(adapter_, path):
+            yield
+
+    monkeypatch.setattr(reclaim.queue_module, "with_queue_lock", spy_lock)
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+
+    assert result["from_queue"]["qualifying_count"] == 4
+    assert len(result["from_queue"]["executed"]) == 4
+    assert len(save_calls) == 1
+    assert len(lock_calls) == 1
+
+
+# ---- 8f. CRITICAL: the master-path bypass regression fixtures from section
+#          7, re-driven through --from-queue instead of --go. -------------
+
+
+def test_master_path_relative_and_dotdot_path_is_still_refused_via_from_queue(adapter, tmp_path):
+    """BUG 1 regression, via --from-queue: a master path configured as a
+    relative path (with ``..`` segments) that resolves to the exact same
+    directory as an approved queue entry's ``src`` must still be refused,
+    not silently executed because the two strings never compared equal.
+    """
+    root = tmp_path / "root"
+    nm = _mk_node_modules(root / "proj")  # absolute src, as an approved entry would carry
+
+    other_side = tmp_path / "elsewhere" / "unrelated"
+    other_side.mkdir(parents=True)
+    rel_master_path = os.path.relpath(nm, start=other_side)
+    assert not Path(rel_master_path).is_absolute()
+    assert ".." in Path(rel_master_path).parts
+    assert (other_side / rel_master_path).resolve() == nm.resolve()
+
+    config = Config(
+        bucket_rules=DEFAULT_BUCKET_RULES,
+        master_paths=[MasterPath(path=str(other_side / rel_master_path), backed_up=False)],
+    )
+    save_config(adapter, config)
+
+    entry = QueueEntry(
+        action="delete", src=str(nm), status="approved", plan_snapshot=build_plan_snapshot(nm)
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["executed"] == []
+    assert len(report["refused"]) == 1
+    assert report["refused"][0]["id"] == entry.id
+    assert report["refused"][0]["reason"] == reclaim.MASTER_PATH_REFUSAL_REASON
+    assert (
+        nm.exists()
+    ), "relative/..-path master path bypass: candidate must survive --from-queue"
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"
+    assert reloaded.executed_at is None
+    assert reloaded.execution_error is None
+
+
+def test_master_path_pure_relative_path_is_still_refused_via_from_queue(
+    adapter, tmp_path, monkeypatch
+):
+    """BUG 1 regression, the other half, via --from-queue: a master path
+    configured as a genuinely relative path string (resolved against the
+    process's cwd) must still be refused when it names the same directory as
+    an approved queue entry's ``src``.
+    """
+    root = tmp_path / "root"
+    nm = _mk_node_modules(root / "proj")
+
+    monkeypatch.chdir(tmp_path)
+    rel_master_path = os.path.relpath(nm, start=tmp_path)
+    assert not Path(rel_master_path).is_absolute()
+
+    config = Config(
+        bucket_rules=DEFAULT_BUCKET_RULES,
+        master_paths=[MasterPath(path=rel_master_path, backed_up=False)],
+    )
+    save_config(adapter, config)
+
+    entry = QueueEntry(
+        action="delete", src=str(nm), status="approved", plan_snapshot=build_plan_snapshot(nm)
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["executed"] == []
+    assert len(report["refused"]) == 1
+    assert report["refused"][0]["reason"] == reclaim.MASTER_PATH_REFUSAL_REASON
+    assert nm.exists(), "pure relative-path master path bypass: candidate must survive --from-queue"
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"
+    assert reloaded.executed_at is None
+
+
+def test_master_path_case_mismatch_on_disk_is_refused_via_from_queue(adapter, tmp_path):
+    """BUG 2 regression, via --from-queue: a master path configured with
+    different case than the real on-disk src must still be refused when the
+    filesystem is case-insensitive, since the two paths are the identical
+    directory on disk despite differing as strings. Skips on a
+    case-sensitive filesystem, mirroring section 7's on-disk repro (the
+    filesystem-independent unit coverage in
+    ``test_same_path_ci_and_is_relative_to_ci`` already covers the logic
+    unconditionally).
+    """
+    if not _is_case_insensitive_fs(tmp_path):
+        pytest.skip(
+            "filesystem is case-sensitive; this on-disk repro of bug 2 does "
+            "not apply here (see the helper-level unit test for coverage "
+            "that doesn't depend on filesystem case-folding)"
+        )
+
+    root = tmp_path / "root"
+    nm = _mk_node_modules(root / "proj")  # actual on-disk case: "node_modules"
+
+    mismatched_case_path = nm.parent / "NODE_MODULES"
+    assert mismatched_case_path.exists(), "sanity: case-insensitive fs must see it"
+    assert mismatched_case_path.samefile(nm), "sanity: same on-disk entry, different case"
+
+    config = Config(
+        bucket_rules=DEFAULT_BUCKET_RULES,
+        master_paths=[MasterPath(path=str(mismatched_case_path), backed_up=False)],
+    )
+    save_config(adapter, config)
+
+    entry = QueueEntry(
+        action="delete", src=str(nm), status="approved", plan_snapshot=build_plan_snapshot(nm)
+    )
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["executed"] == []
+    assert len(report["refused"]) == 1
+    assert report["refused"][0]["reason"] == reclaim.MASTER_PATH_REFUSAL_REASON
+    assert (
+        nm.exists()
+    ), "case-mismatched master path bypass: candidate must survive --from-queue"
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.status == "approved"
+    assert reloaded.executed_at is None
+
+
+def test_master_path_refusal_beats_staleness_via_from_queue(adapter, tmp_path):
+    """The master-path check always runs and always wins, even for an entry
+    that is ALSO stale -- refusal is unconditional and never short-circuited
+    by the staleness result (see _run_from_queue's docstring).
+    """
+    root = tmp_path / "root"
+    nm = _mk_node_modules(root / "proj")
+    snapshot = build_plan_snapshot(nm)
+    # Make it stale too.
+    os.utime(nm, (0, 0))
+
+    config = Config(
+        bucket_rules=DEFAULT_BUCKET_RULES,
+        master_paths=[MasterPath(path=str(nm), backed_up=False)],
+    )
+    save_config(adapter, config)
+
+    entry = QueueEntry(action="delete", src=str(nm), status="approved", plan_snapshot=snapshot)
+    _seed_queue(adapter, [entry])
+
+    args = SimpleNamespace(dir=[str(root)], go=False, docker=False, from_queue=True)
+    result = reclaim.run(adapter, args)
+    report = result["from_queue"]
+
+    assert report["executed"] == []
+    assert report["stale"] == []  # refusal took it before staleness was reported
+    assert len(report["refused"]) == 1
+    assert report["refused"][0]["id"] == entry.id
+    assert nm.exists()

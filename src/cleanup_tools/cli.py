@@ -49,6 +49,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Actually move files (default: dry-run, plan only).",
     )
+    sort_parser.add_argument(
+        "--from-queue",
+        action="store_true",
+        default=False,
+        help=(
+            "Execute already-approved 'move' entries from the approval queue "
+            "whose src falls under the target directory, instead of "
+            "computing a fresh plan."
+        ),
+    )
 
     reclaim_parser = subparsers.add_parser(
         "reclaim",
@@ -79,6 +89,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Also allow the Docker prune category to actually run -- only "
             "takes effect combined with --go."
+        ),
+    )
+    reclaim_parser.add_argument(
+        "--from-queue",
+        action="store_true",
+        default=False,
+        help=(
+            "Execute already-approved 'delete' entries from the approval "
+            "queue whose src falls under a resolved root, instead of "
+            "computing a fresh plan."
         ),
     )
 
