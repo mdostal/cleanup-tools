@@ -24,10 +24,13 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   files land here for a human decision.
 - **Dry-run / `--go`** — the safety convention for every destructive script: default run only prints
   what *would* change; the literal `--go` flag is required to actually act.
-- **Wallet finder** — `scripts/find-wallets.sh`: scans for crypto-wallet artifacts by filename
-  (`wallet.dat`, `keystore*`, `UTC--*`, `.kdbx`, seed/mnemonic files) and content signatures (BIP39
-  phrases, `xprv`, PEM private keys, Ethereum keystore JSON). **Paths-only** — never prints, logs, or
-  transmits the matched secret/key material.
+- **Wallet finder** — `scripts/find-wallets.sh`, ported as `cleanup find-wallets [root]`
+  (`src/cleanup_tools/commands/find_wallets.py`): scans for crypto-wallet artifacts by filename (14
+  patterns: `wallet.dat`, `keystore*`, `UTC--*`, `.kdbx`, seed/mnemonic files, and more) and content
+  signatures (BIP39 phrases, `xprv`, PEM private keys, Ethereum keystore JSON). **Paths-only** —
+  never prints, logs, or transmits the matched secret/key material; in the Python port this is
+  structural (the matched-content object is never bound to a name that outlives its truthiness
+  check), not just a convention.
 - **Dedupe** — `scripts/dedupe.sh`: lists duplicate files by size+hash so the user can decide what to
   remove; never auto-deletes.
 - **Keep-clean** — the not-yet-built recurring triage loop (see `docs/REQUIREMENTS.md`) that re-runs

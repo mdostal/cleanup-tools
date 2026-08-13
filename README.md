@@ -23,8 +23,12 @@ backup of masters" hard rule is now actually enforced in code, not just a conven
 orphaned-installer detection (`.dmg`/`.pkg` files whose app is already installed) is new, macOS-only
 for now; and GB-reclaimed reporting is new. See the callout below for a Docker-pruning gate change.
 `cleanup survey`, `cleanup sort`, and `cleanup reclaim` are now all real, working commands — the
-packaged CLI's first full round — while `find-wallets`, `dedupe`, and `corral-screenshots` remain
-bash-only for now, pending future epics. The CLI now reads (and creates, if absent) an optional
+packaged CLI's first full round. `cleanup find-wallets [root]` is now also a real, working ported
+command from `scripts/find-wallets.sh`: same 14 filename patterns and 4 content-signature
+alternatives, byte-for-byte, and the same read-only safety property (paths + which pattern
+matched only — matched secret content never appears anywhere in its output, by construction, not
+just by convention). `dedupe` and `corral-screenshots` remain bash-only for now, pending their own
+stories in this epic. The CLI now reads (and creates, if absent) an optional
 config file at `~/.config/cleanup-tools/config.yaml` for bucket rules, search roots, and master
 paths — sensible defaults apply if the file isn't there.
 
@@ -98,7 +102,7 @@ else in this tool makes a network call.
 | `corral-screenshots.sh` | Moves every screenshot → `~/Pictures/Screenshots` + stops new ones hitting the Desktop | move-only |
 | `safe-reclaim.sh [--go]` | Deletes node_modules, build caches, Docker layers, junk (`.DS_Store`, `~$*`, `$RECYCLE.BIN`) | **dry-run default**, needs `--go` |
 | `cleanup reclaim [--go] [--docker]` | Ported version of `safe-reclaim.sh` (see Status above): same categories plus new orphaned-installer detection (macOS-only) and GB-reclaimed reporting; refuses to delete any configured master path not marked `backed_up: true`; Docker pruning needs `--go` **and** `--docker` — see the callout above. | **dry-run default**, needs `--go` |
-| `find-wallets.sh [root]` | Finds crypto-wallet artifacts by filename + content; **prints paths only, never key material** | read-only |
+| `find-wallets.sh [root]` | Finds crypto-wallet artifacts by filename + content; **prints paths only, never key material**. Ported to the CLI as `cleanup find-wallets [root]` (see Status above) — behavior-identical. | read-only |
 | `dedupe.sh [dir]` | Lists duplicate files (size + hash) to reclaim | read-only |
 
 ## Workflow
@@ -112,11 +116,17 @@ else in this tool makes a network call.
 6. Then the plan's Desktop/Documents phases by hand.
 
 ## Wallet finding
-`find-wallets.sh` scans your machine for wallet files (`wallet.dat`, keystores, `UTC--*`, `.kdbx`,
-seed/mnemonic files) and content signatures (BIP39 phrases, `xprv`, PEM private keys, Ethereum keystore
-JSON). It **only lists candidate paths** — you open them. Once `sort-downloads.sh` has bucketed things,
-the wallet is far easier to spot in the `data`/`docs`/`archives` buckets.
+`find-wallets.sh` (or `cleanup find-wallets [root]`, now ported) scans your machine for wallet
+files (`wallet.dat`, keystores, `UTC--*`, `.kdbx`, seed/mnemonic files, and more — 14 filename
+patterns total) and content signatures (BIP39 phrases, `xprv`, PEM private keys, Ethereum keystore
+JSON) under `Documents`/`Desktop`/`Downloads`. It **only lists candidate paths** — you open them.
+Once `sort-downloads.sh` has bucketed things, the wallet is far easier to spot in the
+`data`/`docs`/`archives` buckets.
 
 > ⚠ The wallet finder is for **your own** machine/wallet. It never prints or transmits secrets — paths only.
+> In the ported CLI command this is a structural guarantee, not just a convention: the code path
+> that finds a content match never extracts or stores the matched text anywhere, so there is no
+> code path that *could* leak it, verified by both the implementer and an independent adversarial
+> review with real secret-shaped test fixtures.
 
 See `docs/CLEANUP-PLAN.md` for the full grounded plan and `docs/REQUIREMENTS.md` for the build-out spec.
