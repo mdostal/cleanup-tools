@@ -53,8 +53,10 @@ duplicate pending entries), and each pending entry gets a review card (thumbnail
 never the original full-resolution file) with approve/reject/undo. Approving or rejecting here
 only changes the entry's status — it does **not** execute anything; run `cleanup sort --from-queue`
 or `cleanup reclaim --from-queue` afterward, as a separate deliberate step, to actually act on
-approved entries. This story only covers single-entry review; bulk actions, keyboard shortcuts,
-and pagination are a follow-up.
+approved entries. The manual (no-AI) approvals UI is now **complete and usable at real scale**:
+`/queue` paginates (`?page=`/`?per_page=`), bulk-approve/bulk-reject act on an entire group_key
+(or an explicit id list) in one click, and keyboard shortcuts (`y`/`n`/`space`/arrow keys) let you
+triage a large plan fast without reaching for the mouse each time.
 
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
