@@ -59,12 +59,22 @@ approved entries. The manual (no-AI) approvals UI is now **complete and usable a
 triage a large plan fast without reaching for the mouse each time.
 
 An AI-provider layer (`src/cleanup_tools/ai/`) now exists — an Anthropic implementation of a
-narrow "given a filename, propose a bucket" interface — but it is **not wired into anything
-yet** (no CLI command, no UI button calls it). This preserves the "no ambient network calls"
-rule: nothing in this tool talks to the network unless a future story explicitly wires this in
-behind a deliberate user action. To use it once that wiring lands, set `ANTHROPIC_API_KEY` in
-your environment, or put the key in `~/.config/cleanup-tools/credentials` (created with `0600`
+narrow "given a filename, propose a bucket" interface. Set `ANTHROPIC_API_KEY` in your
+environment, or put the key in `~/.config/cleanup-tools/credentials` (created with `0600`
 permissions — the tool will correct the mode and warn if it finds that file less restrictive).
+
+**The epic is now complete end-to-end**: survey/sort/reclaim CLI, the approvals UI, and
+AI-assisted proposals all connect. `cleanup approve`'s "Propose with AI" button (or
+`cleanup propose-ai [dir] [--cap N]` from the CLI) reads the current sort plan's `other`-bucketed
+(ambiguous) files, asks the AI provider what bucket each belongs in, and stages successful
+proposals into the same approval queue manual staging uses — they show up in `/queue`
+identically to manually-staged entries (same approve/reject/undo/bulk/keyboard flow), tagged
+with an "AI-proposed" badge so you can tell them apart at a glance. The AI call-volume cap
+(default 20) is enforced **before** any calls are made, not by filtering results afterward — a
+misbehaving/fast provider genuinely cannot be called more than the cap allows. AI never talks
+to the network unless you explicitly click "Propose with AI" or run `propose-ai` — this is the
+one sanctioned exception to the "no ambient network calls" rule, and it stays that way: nothing
+else in this tool makes a network call.
 
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
