@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Review Queue - Cleanup Approvals{% endblock %}
+{% block content %}
+<h1>Review Queue <span style="font-weight:normal; color:#888;">({{ entries|length }} pending)</span></h1>
+
+{% for entry in entries %}
+<div class="entry-card" data-entry-id="{{ entry.id }}">
+  <!-- Bulk-select checkbox is a deliberate placeholder: disabled, and not
+       wired to any bulk-action form yet -- the follow-up story that adds
+       bulk actions/keyboard shortcuts can enable it and add a wrapping
+       form without restructuring this card. -->
+  <input type="checkbox" class="entry-select" data-id="{{ entry.id }}" disabled title="Bulk actions coming soon">
+
+  {% if is_image_entry(entry) %}
+  <img class="entry-thumb" src="{{ url_for('ui.thumbnail', entry_id=entry.id) }}" alt="thumbnail for {{ entry.src }}">
+  {% else %}
+  <div class="entry-thumb-placeholder">{{ entry.action }}</div>
+  {% endif %}
+
+  <div class="entry-body">
+    <p>
+      <strong>{{ entry.action }}</strong>
+      &middot; {{ entry.group_key or "ungrouped" }}
+      &middot; status: {{ entry.status }}
+    </p>
+    <p class="entry-path">src: {{ entry.src }}</p>
+    {% if entry.dest %}
+    <p class="entry-path">dest: {{ entry.dest }}</p>
+    {% endif %}
+
+    <div class="entry-actions">
+      <form method="post" action="{{ url_for('ui.approve_entry', entry_id=entry.id) }}">
+        <button type="submit">Approve</button>
+      </form>
+      <form method="post" action="{{ url_for('ui.reject_entry', entry_id=entry.id) }}">
+        <button type="submit">Reject</button>
+      </form>
+      <form method="post" action="{{ url_for('ui.undo_entry', entry_id=entry.id) }}">
+        <button type="submit">Undo</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% else %}
+<p>Nothing pending right now. Try <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a> or <a href="{{ url_for('ui.plan_reclaim') }}">Plan: Reclaim</a> to stage some.</p>
+{% endfor %}
+{% endblock %}

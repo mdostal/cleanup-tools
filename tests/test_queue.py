@@ -263,6 +263,33 @@ def test_set_status_unknown_entry_id_raises_value_error_naming_the_id(adapter, t
         set_status(adapter, "bogus-entry-id", "approved", path=path)
 
 
+def test_set_status_to_same_status_twice_does_not_duplicate_history_entry(adapter, tmp_path):
+    """A fast double-click on e.g. "Approve" (there's no client-side
+    debounce in the UI) calls set_status() with the same new_status twice
+    in a row. Before the fix, this pushed two consecutive identical
+    {"status": "approved", ...} records into status_history, so a single
+    undo() call only popped the duplicate and landed back on "approved"
+    instead of the true prior status ("pending").
+    """
+    path = tmp_path / "queue.yaml"
+    entry = QueueEntry(action="move", src="/tmp/a.png", status="pending")
+    entry.status_history = [{"status": "pending", "timestamp": "t0"}]
+    save_queue(adapter, [entry], path=path)
+
+    set_status(adapter, entry.id, "approved", path=path)
+    set_status(adapter, entry.id, "approved", path=path)  # the double-click
+
+    reloaded = load_queue(adapter, path=path)[0]
+    assert reloaded.status == "approved"
+    assert len(reloaded.status_history) == 2
+    assert [h["status"] for h in reloaded.status_history] == ["pending", "approved"]
+
+    # A single undo now correctly reverts to the true prior status.
+    reverted = undo(adapter, entry.id, path=path)
+    assert reverted.status == "pending"
+    assert len(reverted.status_history) == 1
+
+
 def test_set_status_does_not_affect_other_entries(adapter, tmp_path):
     path = tmp_path / "queue.yaml"
     entries = [QueueEntry(action="move", src=f"/tmp/e{i}.png") for i in range(3)]

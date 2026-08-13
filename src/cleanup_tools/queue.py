@@ -214,6 +214,14 @@ def set_status(
     isn't found), appends a ``{"status", "timestamp"}`` record to its
     ``status_history``, sets ``status`` to ``new_status``, saves, and
     returns the updated entry.
+
+    If ``new_status`` matches the most recent ``status_history`` record
+    (i.e. this is a repeat transition to the status the entry is already
+    in -- e.g. a fast double-click on "Approve" before the page redirects,
+    since there is no client-side debounce), no new history record is
+    appended. Without this, two consecutive identical history entries would
+    accumulate, and a single ``undo()`` call would only pop the duplicate
+    and land back on the same status instead of the true prior one.
     """
     if path is None:
         path = default_queue_path(adapter)
@@ -222,9 +230,13 @@ def set_status(
         entries = load_queue(adapter, path)
         entry = _find_entry(entries, entry_id, path)
 
-        entry.status_history.append(
-            {"status": new_status, "timestamp": datetime.now(timezone.utc).isoformat()}
+        already_there = (
+            entry.status_history and entry.status_history[-1]["status"] == new_status
         )
+        if not already_there:
+            entry.status_history.append(
+                {"status": new_status, "timestamp": datetime.now(timezone.utc).isoformat()}
+            )
         entry.status = new_status
 
         save_queue(adapter, entries, path)

@@ -1,13 +1,18 @@
 """Command-line entry point for cleanup-tools.
 
 Wires up a single top-level argparse parser with one subparser per command
-(``survey``, ``sort``, and ``reclaim`` so far). ``main()`` builds one
+(``survey``, ``sort``, ``reclaim``, and ``approve``). ``main()`` builds one
 :class:`~cleanup_tools.adapters.base.OSAdapter` for the whole invocation,
 dispatches to the matching command module's ``run(adapter, args)`` function
 -- passing the parsed argparse namespace so commands with options (e.g.
 ``sort``'s ``dir``/``--go``, ``reclaim``'s ``dir``/``--go``/``--docker``) can
 read them, while options-less commands (e.g. ``survey``) simply ignore
 ``args`` -- and prints the result as pretty-printed JSON.
+
+``approve`` is the one exception: it starts the localhost approvals UI (see
+:mod:`cleanup_tools.ui.app`) and blocks for as long as the server runs, so
+it is dispatched directly in ``main()`` rather than through ``COMMANDS`` /
+the JSON-printing convention every other subcommand follows.
 """
 
 from __future__ import annotations
@@ -102,6 +107,26 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    approve_parser = subparsers.add_parser(
+        "approve",
+        help=(
+            "Start the local approvals UI (binds to 127.0.0.1 only) and "
+            "open it in your default browser."
+        ),
+    )
+    approve_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to bind the approvals UI on (default: 5151).",
+    )
+    approve_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        default=False,
+        help="Don't automatically open the default web browser.",
+    )
+
     return parser
 
 
@@ -121,6 +146,20 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     adapter = adapters.get_adapter()
+
+    if args.command == "approve":
+        # The approvals UI is a long-running server, not a one-shot
+        # JSON-producing command like every other subcommand -- it is
+        # dispatched here directly rather than through COMMANDS/json.dumps.
+        from .ui.app import DEFAULT_PORT, run_server
+
+        run_server(
+            adapter,
+            port=args.port if args.port is not None else DEFAULT_PORT,
+            open_browser=not args.no_browser,
+        )
+        return 0
+
     command_fn = COMMANDS[args.command]
     result = command_fn(adapter, args)
 
