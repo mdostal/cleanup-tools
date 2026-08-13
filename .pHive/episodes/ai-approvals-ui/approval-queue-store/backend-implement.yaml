@@ -1,0 +1,14 @@
+step_id: backend-implement
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  write_file_atomic (tempfile.mkstemp + os.replace, cleans up on failure) and file_lock
+  (fcntl.flock on a sibling .lock file, polling with timeout, raises TimeoutError) added to
+  OSAdapter. queue.py created with full QueueEntry schema + load/save/stage/set_status/undo/
+  check_staleness. Smoke-tested ad hoc: dedup-on-stage, staleness true/false, undo chain,
+  undo-with-one-entry raises, missing-id raises, malformed YAML raises, file_lock timeout
+  verified against an externally-held lock, no leftover temp files. 146 existing tests still
+  pass. No formal pytest test file yet — that's next step.
+artifacts:
+  - src/cleanup_tools/adapters/base.py
+  - src/cleanup_tools/queue.py

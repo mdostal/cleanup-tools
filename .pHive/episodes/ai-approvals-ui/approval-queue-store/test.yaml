@@ -1,0 +1,13 @@
+step_id: test
+status: completed
+timestamp: "2026-08-12"
+test_results: "189 passed, 0 failed (146 prior + 31 queue + 17 adapter lock/atomic tests), confirmed clean across 10 consecutive runs"
+notes: >
+  Concurrency tests genuinely verified as non-vacuous: locking temporarily disabled (file_lock
+  made a no-op), all 4 real-thread queue concurrency tests + 4 of 6 file_lock tests failed
+  reliably with real evidence (assert 22==40, corrupted concurrent reads producing
+  ValueError). Reverted, confirmed 189/189 across 10 runs. Dedup semantic confirmed and tested
+  both ways: only pending entries block dedup, approved/rejected do not.
+artifacts:
+  - tests/test_queue.py
+  - tests/test_adapters.py

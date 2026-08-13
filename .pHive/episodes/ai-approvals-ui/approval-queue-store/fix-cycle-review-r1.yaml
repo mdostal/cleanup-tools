@@ -1,0 +1,14 @@
+step_id: fix-cycle-review
+round: 1
+status: completed
+timestamp: "2026-08-12"
+review_verdict: needs_revision
+review_passed: false
+review_findings: >
+  Both original criticals independently re-reproduced as genuinely fixed (in-batch dedup,
+  content-hash staleness). BUT the content-hash fix introduced a new regression: build_plan_snapshot/
+  check_staleness unconditionally open(path, "rb"), crashing with IsADirectoryError on directory
+  src paths — a real near-term consumer since reclaim.py already deletes directories
+  (node_modules etc.) that this queue is meant to eventually gate. Untested, will crash the
+  first directory-deletion approval. Needs another round.
+artifacts: []

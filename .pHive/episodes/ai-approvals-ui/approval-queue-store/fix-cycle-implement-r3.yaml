@@ -1,0 +1,14 @@
+step_id: fix-cycle-implement
+round: 3
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Generalized the directory-only fallback branch to `not path.is_file()` (covers FIFO/socket/
+  device/broken-symlink, not just directories) instead of adding a separate branch. Added
+  path.exists() guard before .stat() in build_plan_snapshot (broken symlink fix — .stat()
+  follows symlinks and raises, .exists() doesn't). check_staleness hardened defensively too.
+  200/200 tests pass (5 new). Both bugs independently re-reproduced against old vs fixed code
+  via a real subprocess call, confirmed resolved.
+artifacts:
+  - src/cleanup_tools/queue.py
+  - tests/test_queue.py

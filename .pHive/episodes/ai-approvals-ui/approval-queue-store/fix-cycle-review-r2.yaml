@@ -1,0 +1,16 @@
+step_id: fix-cycle-review
+round: 2
+status: completed
+timestamp: "2026-08-12"
+review_verdict: needs_revision
+review_passed: false
+review_findings: >
+  Directory crash from round 1 confirmed genuinely fixed. NEW finding this round: build_plan_snapshot
+  hangs INDEFINITELY (worse than a crash) on a FIFO (open() blocks waiting for a writer,
+  confirmed via 8s+ hang requiring force-kill), and crashes with FileNotFoundError on a broken
+  symlink (path.stat() follows symlinks, raises when the target doesn't exist). Neither
+  degrades gracefully like the directory case now does. Not yet wired into any command (no live
+  exploit today) but this is the foundational story other work builds on. Recommend guarding to
+  only attempt content-hashing on path.is_file(), treating FIFO/socket/device/broken-symlink
+  like the directory case. One fix round remains within the 3-round ceiling.
+artifacts: []
