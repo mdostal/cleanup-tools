@@ -1,0 +1,17 @@
+epic_id: ai-approvals-ui
+created: "2026-08-11"
+
+escalations:
+  - trigger: ui-scale-call
+    placement: pre-exec
+    severity: moderate
+    stories: [approvals-ui]
+    reason: >
+      ui-designer lens (step 4b collaborative review) called SCALE_CALL: pre-exec — the
+      approval-review interaction model (bulk actions, keyboard shortcuts, undo, pagination,
+      diff/before-after view) needs to be wireframed before story-writing locks in the
+      approval-queue schema, since these interaction needs shape that schema (status history
+      for undo, ordering/cursors for pagination, group-keys for bulk ops), not just the UI's
+      pixels.
+    raised_by: ui-designer
+    raised_at: "2026-08-11"

@@ -1,0 +1,111 @@
+id: ai-queue-wiring
+epic: ai-approvals-ui
+title: Wire AI proposals into the approval queue via a "Propose with AI" action
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [approval-queue-store, approvals-ui-triage-efficiency, ai-provider-layer]
+
+description: |
+  The epic's final story: connect the AI-provider layer to the approval queue. Read a sort
+  plan's "other"-bucketed files, call the AI provider per file (respecting a call-volume cap
+  enforced BEFORE calls are made, not filtered after), write successful proposals into the
+  queue as pending/source=ai:<provider> with the proposed bucket, surface failures without
+  creating queue entries. Add a "Propose with AI" UI button and/or CLI command. Once this
+  lands, the UI shows AI-sourced entries identically to manual ones — same approve/reject/
+  undo/bulk/keyboard flow, no special-casing.
+
+acceptance_criteria:
+  - "Given a sort plan with N 'other'-bucketed files and a call-volume cap of C (C < N), when
+    propose_for_other_bucket runs, then AT MOST C calls to the AI provider are made — verified
+    by asserting the mocked provider's call COUNT, not just the result count (a cap enforced
+    by filtering results after the fact would still make N calls and fail this)."
+  - "Given a successful AI proposal, when it completes, then a new queue entry is staged with
+    source='ai:anthropic', bucket=<the proposed bucket>, status='pending'."
+  - "Given an AI proposal that returns any non-success ProposalResult, when it completes, then
+    NO queue entry is created for that file, and the failure is surfaced in the return value's
+    failures list."
+  - "Given an AI-sourced queue entry appears in the approvals UI, when reviewed, then it looks
+    and behaves identically to a manual entry — approve/reject/undo/bulk-select/keyboard
+    shortcuts all work the same way, with source visibly distinguishable but not functionally
+    different."
+  - "Given an AI proposal is approved, when `sort --from-queue` executes it, then it moves the
+    file to the proposed bucket exactly as a manually-approved entry would."
+  - "Verify via: `pytest tests/test_ai_wiring.py -v` — all tests pass, mocked provider only."
+
+steps:
+  - id: research
+    description: |
+      Read the completed approval-queue-store (queue.py), ai-provider-layer (ai/base.py,
+      ai/anthropic_provider.py), and approvals-ui-triage-efficiency (routes.py) stories' final
+      APIs to confirm the exact integration points.
+    agent: researcher
+  - id: implement
+    description: |
+      Create src/cleanup_tools/ai/wiring.py: propose_for_other_bucket(adapter, config,
+      provider, cap=20) — runs sort.run (dry-run), filters to bucket=='other', enforces the cap
+      BEFORE calling the provider (not after), calls provider.propose_bucket per file up to the
+      cap, builds QueueEntry objects for successes via queue.stage_entries, collects failures.
+      Add POST /propose-ai route to routes.py and optionally a `cleanup propose-ai` CLI command.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_ai_wiring.py with a mocked provider: assert call count respects the cap
+      (not just result count), successes become correctly-shaped queue entries, failures
+      surface without creating entries. Manually (opt-in, real key) verify the full loop:
+      real UI, real "other"-bucketed fixture files, real Anthropic call, confirm the proposal
+      appears in the review queue and executes correctly via --from-queue once approved.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: is the cap enforced as a pre-call gate (asserted via call count) or
+      could a misbehaving/fast provider be called more than `cap` times before a post-hoc
+      filter catches it? Do AI-sourced entries genuinely require zero special-casing in the UI
+      routes from the triage-efficiency story?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/queue.py
+      purpose: "stage_entries — this story's proposals flow through the same function manual staging uses"
+    - path: src/cleanup_tools/ai/base.py
+      purpose: "AIProvider/ProposalResult from the completed ai-provider-layer story"
+
+files_to_modify:
+  - file: src/cleanup_tools/ai/wiring.py
+    change: "Create — propose_for_other_bucket connector"
+  - file: src/cleanup_tools/ui/routes.py
+    change: "Add POST /propose-ai route"
+  - file: src/cleanup_tools/cli.py
+    change: "Optionally add propose-ai CLI command"
+  - file: tests/test_ai_wiring.py
+    change: "Create — mocked wiring tests, cap-enforcement-by-call-count"
+
+design_decisions:
+  - decision: "Call-volume cap is a pre-call gate, not a post-call filter"
+    rationale: "Structured-outline's own elicitation named this exact failure mode: a misbehaving provider that returns instantly could be called far more than intended before a post-hoc filter catches up — the cap must stop calls from being MADE, not just stop results from being USED"
+  - decision: "AI-sourced entries require zero UI special-casing"
+    rationale: "The whole point of the shared queue design (approval-queue-store story) — the UI doesn't need to know or care whether a pending entry came from a human or a model"
+
+risks:
+  - severity: medium
+    description: "Call-volume cap enforced on results instead of calls, allowing more real (costly) API calls than intended"
+    mitigation: "Test asserts mocked provider's call count directly, not just the length of the returned entries list"
+
+references:
+  - path: .pHive/epics/ai-approvals-ui/docs/structured-outline.md
+    relevant_excerpt: |
+      Could silently break: the cap being enforced on the RESULT list instead of the CALL
+      count... must be a pre-call gate, not a post-call filter
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md and CONTEXT.md: document 'Propose with AI', the epic is now complete end-to-end (survey/sort/reclaim CLI + approvals UI + AI-assisted proposals)."

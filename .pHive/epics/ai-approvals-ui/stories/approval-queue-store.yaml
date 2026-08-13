@@ -1,0 +1,127 @@
+id: approval-queue-store
+epic: ai-approvals-ui
+title: Build the concurrency-safe approval queue store
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Build a standalone, atomically-written, file-locked approval queue store — NOT an extension
+  of config.py's Config (that would create a lost-update race once a UI process and CLI both
+  touch it, per design review). Add write_file_atomic() and file_lock() to OSAdapter first
+  (missing capability caught during structured-outline review), then build queue.py's schema
+  and operations on top of them. This story has no CLI/UI consumer yet — pure library code,
+  proven correct standalone, same role os-adapter played in the prior epic.
+
+acceptance_criteria:
+  - "Given OSAdapter, when write_file_atomic(path, content) is called, then the write is atomic
+    (temp file + os.replace) — verified by killing the process mid-write in a test and
+    confirming the original file is either fully old or fully new, never partial/corrupt."
+  - "Given OSAdapter, when file_lock(path) is used as a context manager by two concurrent
+    callers, then only one holds the lock at a time; the second blocks until the first exits,
+    or raises TimeoutError after the configured timeout rather than hanging forever."
+  - "Given no queue file exists, when load_queue(adapter) is called, then it returns an empty
+    list without error."
+  - "Given stage_entries is called twice with an entry for the same src path, when the second
+    call runs, then no duplicate pending entry is created for that src."
+  - "Given set_status(adapter, entry_id, 'approved') is called, when it completes, then the
+    entry's status is 'approved' and status_history has a new entry recording the transition."
+  - "Given undo(adapter, entry_id) is called on an entry with only one status_history entry,
+    when it runs, then it raises a clear error rather than silently no-op'ing or corrupting
+    history."
+  - "Given check_staleness(adapter, entry) is called after the entry's src file was deleted or
+    resized since plan_snapshot was captured, when it runs, then it returns True."
+  - "Given two threads/processes race stage_entries or set_status against the same queue file,
+    when both complete, then the final file is valid YAML with no entries lost (genuine
+    concurrency simulation, not sequential calls that happen to pass)."
+  - "Verify via: `pytest tests/test_queue.py tests/test_adapters.py -v` — all tests pass."
+
+steps:
+  - id: research
+    description: |
+      Read src/cleanup_tools/adapters/base.py (current write_file — plain overwrite, no
+      atomicity/locking) and src/cleanup_tools/config.py (the load/save pattern to mirror for
+      queue.py's I/O shape, but NOT its file — the queue is deliberately separate).
+    agent: researcher
+  - id: implement
+    description: |
+      Add write_file_atomic(path, content) and file_lock(path) as concrete, shared methods on
+      OSAdapter (base.py) — write_file_atomic via tempfile + os.replace; file_lock via
+      fcntl.flock (exclusive, blocking with a 5s timeout, raising TimeoutError on timeout).
+      Create src/cleanup_tools/queue.py: QueueEntry dataclass (id, action, src, dest, status,
+      source, status_history, group_key, created_at, plan_snapshot), load_queue/save_queue
+      (using the new adapter methods), with_queue_lock wrapper, stage_entries (with dedup on
+      src), set_status, undo, check_staleness.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write tests/test_queue.py and extend tests/test_adapters.py for the two new adapter
+      methods. Include a genuine concurrency simulation (real threads/processes racing
+      stage_entries/set_status), not just sequential calls. Run pytest for real.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: is the concurrency test genuinely adversarial (does it actually
+      race, or just call things in sequence)? Does write_file_atomic actually guarantee
+      atomicity (verify os.replace usage, not just a rename that could fail cross-filesystem)?
+      Does the dedup-on-stage logic correctly key on src path?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    language: python
+  key_files:
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "Where write_file_atomic/file_lock get added — read the existing 9 shared methods for style/pattern consistency"
+    - path: src/cleanup_tools/config.py
+      purpose: "The load/save shape to mirror (NOT the file — queue.py is its own store, deliberately not a Config extension)"
+
+files_to_modify:
+  - file: src/cleanup_tools/adapters/base.py
+    change: "Add write_file_atomic() and file_lock() as new concrete/shared OSAdapter methods"
+  - file: src/cleanup_tools/queue.py
+    change: "Create — QueueEntry schema, load/save/stage/set_status/undo/check_staleness"
+  - file: tests/test_queue.py
+    change: "Create — schema round-trip, dedup, status transitions, undo, staleness, concurrency"
+  - file: tests/test_adapters.py
+    change: "Add tests for write_file_atomic and file_lock"
+
+code_examples:
+  - title: "Existing shared-method pattern to follow for the two new adapter methods"
+    file: src/cleanup_tools/adapters/base.py
+    snippet: |
+      def dir_size_bytes(self, path: Path) -> int:
+          result = subprocess.run(["du", "-sk", str(path)], capture_output=True,
+                                   text=True, stderr=subprocess.DEVNULL)
+          # ... parses stdout, raises RuntimeError only if unparseable
+
+design_decisions:
+  - decision: "Atomicity + locking live on OSAdapter, not queue.py directly"
+    rationale: "Keeps the adapter as the single I/O boundary (consistent with config.py's existing pattern), and matches the prior epic's precedent of additively extending OSAdapter (list_subdirs, find_dirs, dir_size_bytes) when a real gap is found — this gap was caught during structured-outline review, not invented speculatively"
+  - decision: "Approval queue is its own file, not a Config extension"
+    rationale: "config.py's load_config/save_config do an unlocked, non-atomic full-file read-modify-write — safe only because exactly one process has ever touched it. This epic's whole premise (UI + CLI both touching queue state) would turn that into a lost-update race if folded into Config"
+
+risks:
+  - severity: high
+    description: "Queue file corruption or lost update under concurrent UI+CLI access — the epic's foundational risk"
+    mitigation: "Atomic write + file lock, with a genuine (not sequential-only) concurrency test — this is the single test in the epic that, if weak, could let a real data-integrity bug ship silently"
+
+references:
+  - path: .pHive/epics/ai-approvals-ui/docs/structured-outline.md
+    relevant_excerpt: |
+      Phase 1... write_file_atomic(path, content) -> None — write to a temp file in the same
+      directory, then os.replace(temp, path)... file_lock(path) context manager — fcntl.flock
+      (exclusive, blocking with a timeout, e.g. 5s, raising TimeoutError)
+
+cross_cutting:
+  - concern: documentation
+    action: "CONTEXT.md needs a new glossary entry for 'approval queue' once this story lands, distinguishing it clearly from config.yaml (different file, different concurrency guarantees)."

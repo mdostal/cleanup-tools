@@ -1,0 +1,107 @@
+id: cli-queue-integration
+epic: ai-approvals-ui
+title: Add --from-queue execution to sort and reclaim, additive to existing --go
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [approval-queue-store]
+
+description: |
+  Add `sort --from-queue`/`reclaim --from-queue`: execute only queue entries with
+  status=approved, re-verifying staleness immediately before acting, recording execution
+  outcomes. This is ADDITIVE — sort --go/reclaim --go from the prior epic must remain
+  byte-for-byte unchanged. reclaim --from-queue MUST reuse the existing private
+  _master_path_refusal helper (the epic's single highest-stakes correctness requirement,
+  per the prior epic's own "most serious finding" bug) rather than re-implementing the check.
+
+acceptance_criteria:
+  - "Given a queue with a mix of pending/approved/rejected entries, when `sort --from-queue` or
+    `reclaim --from-queue` runs, then ONLY approved entries are executed."
+  - "Given an approved queue entry whose src file has changed or vanished since it was staged,
+    when --from-queue executes, then that entry is skipped with a clear 'stale, re-plan'
+    outcome, not executed against wrong/missing data."
+  - "Given an approved delete-action entry whose src matches an unbacked-up master_path, when
+    `reclaim --from-queue` executes, then it is refused — verified using the SAME fixture
+    scenarios (relative path, path with .. segments, case-mismatched path) that caught the
+    original master-paths bypass bug in the prior epic, run against --from-queue specifically."
+  - "Given the prior epic's full test_sort.py and test_reclaim.py suites, when run against this
+    story's code, then all tests pass unmodified — zero regression to --go."
+  - "Given an approved entry executes successfully or fails, when --from-queue completes, then
+    the outcome is recorded via queue.set_status/execution fields, not silently dropped."
+  - "Verify via: `pytest tests/ -v` — full suite (including prior-epic sort/reclaim tests) passes."
+
+steps:
+  - id: research
+    description: |
+      Re-read src/cleanup_tools/commands/reclaim.py's _master_path_refusal function in full —
+      this story reuses it, does not reimplement it. Re-read sort.py/reclaim.py's existing
+      --go execution loops (per-entry try/except isolation pattern) to mirror for --from-queue.
+    agent: researcher
+  - id: implement
+    description: |
+      Add --from-queue handling to sort.run and reclaim.run: load the queue, filter to
+      approved entries under the target dir, check_staleness per entry (skip+record if stale),
+      execute via adapter.move/delete with the same per-entry error isolation --go uses,
+      calling reclaim's existing _master_path_refusal before any queue-sourced delete. Add
+      --from-queue flags to both subparsers in cli.py.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Write --from-queue test cases in test_sort.py/test_reclaim.py: status filtering,
+      staleness skip, master-paths refusal re-verified with the ORIGINAL bug's exact fixture
+      scenarios. Run the full prior-epic suites unmodified to confirm zero --go regression.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: does reclaim --from-queue call the EXISTING _master_path_refusal
+      helper (not a new implementation)? Are the relative-path/../case-mismatch fixture
+      scenarios from the prior epic's bug actually re-run here, not just asserted as covered?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/commands/reclaim.py
+      purpose: "_master_path_refusal helper — MUST be reused, not reimplemented. This is the epic's highest-priority correctness requirement."
+    - path: src/cleanup_tools/queue.py
+      purpose: "load_queue/check_staleness/set_status from the prior story — DO NOT modify the schema here"
+
+files_to_modify:
+  - file: src/cleanup_tools/commands/sort.py
+    change: "Add --from-queue execution path, additive to existing --go"
+  - file: src/cleanup_tools/commands/reclaim.py
+    change: "Add --from-queue execution path reusing _master_path_refusal, additive to existing --go"
+  - file: src/cleanup_tools/cli.py
+    change: "Add --from-queue flag to sort and reclaim subparsers"
+  - file: tests/test_sort.py
+    change: "Add --from-queue test cases"
+  - file: tests/test_reclaim.py
+    change: "Add --from-queue test cases, re-running the master-paths-bypass fixture scenarios"
+
+design_decisions:
+  - decision: "reclaim --from-queue calls the existing _master_path_refusal helper directly"
+    rationale: "Structured-outline review caught that vague 'same pattern' language risked a second, potentially weaker implementation of the epic's highest-stakes safety check. Reusing the already-hardened helper (fixed after a real bypass bug) is both less work and categorically safer."
+
+risks:
+  - severity: high
+    description: "reclaim --from-queue ships without, or with a weaker re-implementation of, the master-paths refusal check"
+    mitigation: "Explicit reuse of the existing helper (not new logic) + re-running the exact fixture scenarios that caught the original bug, specifically against --from-queue"
+
+references:
+  - path: .pHive/audits/post-run/harden-cleanup-cli-epic-close.yaml
+    relevant_excerpt: "the most serious finding of the epic"
+  - path: .pHive/epics/ai-approvals-ui/docs/structured-outline.md
+    relevant_excerpt: |
+      Phase 2 explicitly reuses reclaim.py's existing, already-hardened _master_path_refusal
+      helper rather than writing new logic
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md needs a note that --from-queue exists as a second execution path alongside --go, once this story lands."

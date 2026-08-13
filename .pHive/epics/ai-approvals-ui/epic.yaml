@@ -1,0 +1,63 @@
+name: ai-approvals-ui
+title: AI-provider integration + approvals UI
+description: >
+  Adds a concurrency-safe approval queue, a localhost-only Flask UI (dashboard, review,
+  bulk/keyboard/pagination triage), and a pluggable AI-provider layer (Anthropic first) that
+  proposes buckets for sort's "other"-bucketed files — on top of the completed
+  harden-cleanup-cli epic's survey/sort/reclaim CLI. Sequenced manual-UI-first / AI-second;
+  the manual UI (through approvals-ui-triage-efficiency) is real, standalone shippable value
+  even if the AI stories slip to a follow-on epic.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: none
+sidecar_retention: committed
+
+git_flow:
+  base_branch: feat/harden-cleanup-cli   # NOT main — this epic branches off the prior epic's
+                                          # branch since harden-cleanup-cli hasn't merged to
+                                          # main yet and this epic needs its completed CLI code.
+                                          # Override of the resolver's config-driven default
+                                          # ("main"), which doesn't account for stacked epics.
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [ai-provider-integration, approvals-ui, concurrency-safety, security-review]
+  roster: [researcher, technical-writer, tpm, architect, ui-designer, reviewer]
+  per_tag_reasoning:
+    ai-provider-integration: "Core ask — network-calling abstraction with its own error/retry/security/cost model"
+    approvals-ui: "First UI this project has ever had; explicit pre-exec wireframe escalation from ui-designer review"
+    concurrency-safety: "Approval queue must be safe under simultaneous UI-process + CLI-process access — new kind of risk for this codebase"
+    security-review: "API-key storage, localhost-only binding, AI SDK telemetry defaults — architect review surfaced these as real gaps in the original design"
+  confidence: high
+  gate_decisions:
+    grill: single-pass (loops.grill not configured; baseline default)
+    collaborative_review: enabled (hive.config.yaml planning.collaborative_review: true)
+    hv_planning: required (Large scope) — ran, caught 2 real issues (diff-view scope error, undersliced UI milestone), both fixed and user-signed-off
+    structured_outline: required (Large scope) — ran, caught 3 more real issues (missing adapter capability, underargued top risk with a since-corrected fabricated citation, incomplete elicitation answer), all fixed and user-signed-off
+    scope_addition_at_signoff: "user requested a DiskDrill-style overview dashboard be added to the floor (approvals-ui-core), not deferred; dedupe-style diff view confirmed OUT of scope, noted for a future epic"
+
+stories:
+  - id: approval-queue-store
+    title: Build the concurrency-safe approval queue store
+    complexity: medium
+    depends_on: []
+  - id: cli-queue-integration
+    title: Add --from-queue execution to sort and reclaim, additive to existing --go
+    complexity: medium
+    depends_on: [approval-queue-store]
+  - id: approvals-ui-core
+    title: Build the Flask approvals UI - core CRUD + overview dashboard
+    complexity: high
+    depends_on: [approval-queue-store]
+  - id: approvals-ui-triage-efficiency
+    title: Add bulk actions, keyboard shortcuts, and pagination to the approvals UI
+    complexity: medium
+    depends_on: [approvals-ui-core]
+  - id: ai-provider-layer
+    title: Build the AI-provider interface and Anthropic implementation
+    complexity: high
+    depends_on: []
+  - id: ai-queue-wiring
+    title: Wire AI proposals into the approval queue via a "Propose with AI" action
+    complexity: medium
+    depends_on: [approval-queue-store, approvals-ui-triage-efficiency, ai-provider-layer]
