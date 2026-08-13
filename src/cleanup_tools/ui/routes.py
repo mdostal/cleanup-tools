@@ -35,6 +35,7 @@ from .. import queue as queue_module
 from ..ai import CredentialsError, get_provider
 from ..ai.wiring import DEFAULT_CAP as DEFAULT_AI_CAP
 from ..ai.wiring import propose_for_other_bucket
+from ..commands import corral_screenshots as corral_screenshots_module
 from ..commands import reclaim as reclaim_module
 from ..commands import sort as sort_module
 
@@ -243,6 +244,33 @@ def _stage_reclaim_plan(adapter) -> list[queue_module.QueueEntry]:
     return queue_module.stage_entries(adapter, new_entries, _queue_path())
 
 
+def _stage_corral_screenshots_plan(adapter) -> list[queue_module.QueueEntry]:
+    """Dry-run cleanup_tools.commands.corral_screenshots across its default
+    roots, convert its plan into QueueEntry "move" proposals, and stage them.
+
+    Reuses corral_screenshots.run()'s own plan-building (args=None ->
+    dry-run against the default resolved roots, same defaults the
+    "corral-screenshots" CLI subcommand uses with no args) rather than
+    walking the filesystem again here -- structurally identical to
+    _stage_sort_plan above. args=None also means set_default_location is
+    never true, so this route can never trigger the OS-preference change --
+    only ever a dry-run plan.
+    """
+    result = corral_screenshots_module.run(adapter, args=None)
+    new_entries = [
+        queue_module.QueueEntry(
+            action="move",
+            src=str(item["src"]),
+            dest=str(item["dest"]),
+            source="ui-plan-corral-screenshots",
+            group_key="corral-screenshots",
+            plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+        )
+        for item in result.get("plan", [])
+    ]
+    return queue_module.stage_entries(adapter, new_entries, _queue_path())
+
+
 @bp.route("/plan/sort")
 def plan_sort():
     adapter = _adapter()
@@ -260,6 +288,16 @@ def plan_reclaim():
     adapter = _adapter()
     try:
         added = _stage_reclaim_plan(adapter)
+    except TimeoutError:
+        return redirect(url_for("ui.dashboard", plan_error=QUEUE_BUSY_MESSAGE))
+    return redirect(url_for("ui.dashboard", staged=len(added)))
+
+
+@bp.route("/plan/corral-screenshots")
+def plan_corral_screenshots():
+    adapter = _adapter()
+    try:
+        added = _stage_corral_screenshots_plan(adapter)
     except TimeoutError:
         return redirect(url_for("ui.dashboard", plan_error=QUEUE_BUSY_MESSAGE))
     return redirect(url_for("ui.dashboard", staged=len(added)))

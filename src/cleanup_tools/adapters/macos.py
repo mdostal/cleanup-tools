@@ -8,6 +8,7 @@ This module only supplies the one genuinely macOS-specific method,
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from .base import OSAdapter
@@ -49,3 +50,35 @@ class MacOSAdapter(OSAdapter):
                 return True
 
         return False
+
+    def set_screenshot_save_location(self, path: Path) -> None:
+        """Point macOS's built-in screenshot tool at ``path`` going forward.
+
+        Two ``subprocess.run`` calls, mirroring ``reclaim.py``'s
+        ``_run_docker`` calling convention (list-form argv, no
+        ``shell=True``, output captured rather than left to inherit the
+        caller's stdout/stderr): first ``defaults write
+        com.apple.screencapture location <path>`` writes the actual
+        preference -- this one uses ``check=True`` because a failure here
+        means the preference was never actually changed, which is a real
+        error the caller needs to see, not something to swallow. Then
+        ``killall SystemUIServer`` restarts the process that reads that
+        preference, so the new location takes effect immediately instead of
+        only after the next login; this second call is deliberately NOT
+        ``check=True`` -- SystemUIServer might not be running (uncommon but
+        possible), and failing to restart it is a cosmetic inconvenience
+        (the new location still takes effect after the next login) rather
+        than a reason to report the whole operation as failed.
+        """
+        path = Path(path)
+        subprocess.run(
+            ["defaults", "write", "com.apple.screencapture", "location", str(path)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        subprocess.run(
+            ["killall", "SystemUIServer"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )

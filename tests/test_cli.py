@@ -350,6 +350,81 @@ def test_main_propose_ai_passes_explicit_dir_as_target_dir(monkeypatch, capsys, 
     assert captured_call["target_dir"] == target
 
 
+# ---------------------------------------------------------------------------
+# "corral-screenshots" subcommand: parses dir (nargs="*")/--go/--from-queue/
+# --set-default-location, dispatches through cli.COMMANDS like sort/reclaim.
+# cli.COMMANDS binds corral_screenshots.run at import time, so (as with the
+# other subcommands above) the stub must replace the dict entry via
+# monkeypatch.setitem(cli.COMMANDS, "corral-screenshots", fake_run) rather
+# than patching corral_screenshots.run directly.
+# ---------------------------------------------------------------------------
+
+
+def test_build_parser_recognizes_corral_screenshots_with_dirs_and_flags():
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        [
+            "corral-screenshots",
+            "/some/dir",
+            "/other/dir",
+            "--go",
+            "--from-queue",
+            "--set-default-location",
+        ]
+    )
+    assert args.command == "corral-screenshots"
+    assert args.dir == ["/some/dir", "/other/dir"]
+    assert args.go is True
+    assert args.from_queue is True
+    assert args.set_default_location is True
+
+
+def test_build_parser_corral_screenshots_defaults_dir_empty_and_flags_false():
+    parser = cli.build_parser()
+    args = parser.parse_args(["corral-screenshots"])
+    assert args.command == "corral-screenshots"
+    assert args.dir == []
+    assert args.go is False
+    assert args.from_queue is False
+    assert args.set_default_location is False
+
+
+def test_main_corral_screenshots_subcommand_prints_valid_json_and_returns_0(
+    monkeypatch, capsys
+):
+    fake_result = {"roots": ["/some/dir"], "go": True, "plan": [], "moved_count": 0}
+    monkeypatch.setitem(cli.COMMANDS, "corral-screenshots", lambda adapter, args: fake_result)
+
+    exit_code = cli.main(["corral-screenshots", "/some/dir", "--go"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+
+    parsed = json.loads(captured.out)
+    assert parsed == fake_result
+
+
+def test_main_corral_screenshots_passes_args_with_dir_and_flags_to_run(monkeypatch, capsys):
+    received = {}
+
+    def fake_run(adapter, args):
+        received["args"] = args
+        return {}
+
+    monkeypatch.setitem(cli.COMMANDS, "corral-screenshots", fake_run)
+
+    exit_code = cli.main(
+        ["corral-screenshots", "/some/dir", "--go", "--set-default-location"]
+    )
+
+    assert exit_code == 0
+    assert received["args"].dir == ["/some/dir"]
+    assert received["args"].go is True
+    assert received["args"].from_queue is False
+    assert received["args"].set_default_location is True
+    capsys.readouterr()
+
+
 def test_main_propose_ai_no_api_key_fails_gracefully_not_traceback(monkeypatch, capsys, tmp_path):
     """No API key configured anywhere is a routine, expected condition (see
     ai/__init__.py's CredentialsError) -- it must print a clean one-line

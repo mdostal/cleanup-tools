@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 from . import adapters
-from .commands import dedupe, find_wallets, reclaim, sort, survey
+from .commands import corral_screenshots, dedupe, find_wallets, reclaim, sort, survey
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -117,6 +117,50 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    corral_screenshots_parser = subparsers.add_parser(
+        "corral-screenshots",
+        help=(
+            "Move loose screenshot files into ~/Pictures/Screenshots, and "
+            "(with --set-default-location) stop new ones landing on the "
+            "Desktop (dry-run unless --go)."
+        ),
+    )
+    corral_screenshots_parser.add_argument(
+        "dir",
+        nargs="*",
+        default=None,
+        help=(
+            "Root directories to scan (default: configured search_roots, "
+            "else Desktop, Downloads, and Documents)."
+        ),
+    )
+    corral_screenshots_parser.add_argument(
+        "--go",
+        action="store_true",
+        default=False,
+        help="Actually move files (default: dry-run, plan only).",
+    )
+    corral_screenshots_parser.add_argument(
+        "--from-queue",
+        action="store_true",
+        default=False,
+        help=(
+            "Execute already-approved 'move' entries from the approval "
+            "queue whose src falls under a resolved root, instead of "
+            "computing a fresh plan."
+        ),
+    )
+    corral_screenshots_parser.add_argument(
+        "--set-default-location",
+        action="store_true",
+        default=False,
+        help=(
+            "Also set the macOS default screenshot save location to "
+            "~/Pictures/Screenshots. Independent of --go/--from-queue -- "
+            "never triggered by either of them alone."
+        ),
+    )
+
     find_wallets_parser = subparsers.add_parser(
         "find-wallets",
         help=(
@@ -193,6 +237,7 @@ COMMANDS = {
     "survey": survey.run,
     "sort": sort.run,
     "reclaim": reclaim.run,
+    "corral-screenshots": corral_screenshots.run,
     "find-wallets": find_wallets.run,
     "dedupe": dedupe.run,
 }

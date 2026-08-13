@@ -33,3 +33,20 @@ class ArchLinuxAdapter(OSAdapter):
             "tracks installed state, so there is no equivalent 'orphaned "
             "installer file' to detect here."
         )
+
+    def set_screenshot_save_location(self, path: Path) -> None:
+        """Not applicable on Arch Linux.
+
+        There is no single system-wide "default screenshot save location"
+        preference on Arch the way macOS's screencapture utility has one --
+        that's a property of whichever screenshot tool (flameshot, grim,
+        GNOME Screenshot, ...) happens to be installed and configured, each
+        with its own config format, not something this adapter can set
+        uniformly. Out of scope for v1.
+        """
+        raise NotImplementedError(
+            "set_screenshot_save_location is a macOS-only concept for v1: "
+            "it maps directly onto `defaults write com.apple.screencapture "
+            "location`. Arch Linux has no single system-wide screenshot "
+            "tool/preference to target the same way."
+        )
