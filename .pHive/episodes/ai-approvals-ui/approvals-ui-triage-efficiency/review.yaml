@@ -1,0 +1,16 @@
+step_id: review
+status: completed
+timestamp: "2026-08-12"
+review_verdict: findings_required_fix_cycle
+notes: >
+  Independent reviewer re-reproduced group scoping (incl. substring/superstring decoy group
+  keys), pagination boundaries, and the keyboard-shortcut walkthrough via its own Playwright
+  MCP session against a live server and live queue file, plus an XSS spot-check on raw wire
+  bytes (Jinja autoescaping confirmed). Reproduced the self-reported partial-bulk-on-lock-
+  contention behavior directly (monkeypatched TimeoutError mid-loop) and independently
+  judged it acceptable as-is: 503 not 500, no corruption, retry-idempotent. Found one new
+  minor bug not on the original checklist: unhandled 500 on a malformed JSON entry_ids
+  scalar (bare int/float/bool) in _extract_bulk_request. Also flagged a stray
+  .playwright-mcp/ dir risk (from the review session's own tooling, not left behind by the
+  implementer) and recommended a .gitignore entry.
+artifacts: []

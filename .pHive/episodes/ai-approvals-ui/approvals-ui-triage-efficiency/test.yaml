@@ -1,0 +1,13 @@
+step_id: test
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  17 new automated tests (bulk group-exact-match incl. decoy near-match group_key, id-list
+  path, pagination boundaries incl. exact-multiple/one-more/one-less/out-of-range/clamping).
+  Real-browser keyboard-shortcut walkthrough performed via Playwright MCP against a live
+  server and a 120-entry real fixture: arrow-key focus movement, y/n approve/reject
+  confirmed against the on-disk queue file, group-scoped bulk approve confirmed to leave
+  the other group fully untouched. Not merely claimed -- independently re-reproduced during
+  the review step below. Full suite 248 -> 265 (implement) -> 266 (post-fix-cycle).
+artifacts:
+  - tests/test_ui_routes.py

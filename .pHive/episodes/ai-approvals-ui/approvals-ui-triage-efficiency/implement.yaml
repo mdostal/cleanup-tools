@@ -1,0 +1,15 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-12"
+notes: >
+  Added POST /queue/bulk-approve, POST /queue/bulk-reject (exact group_key match or explicit
+  id list, both scoped strictly to pending entries), ?page=/?per_page= pagination on GET
+  /queue (per_page defaults 25, capped 200, out-of-range clamped not 500'd), and
+  static/keyboard.js (y/n/space/arrow-key handling with a client-side focused-entry model,
+  real POSTs to the existing approve/reject routes). Updated queue.html/base.html for
+  bulk-select checkboxes, action bar, and pagination controls.
+artifacts:
+  - src/cleanup_tools/ui/routes.py
+  - src/cleanup_tools/ui/templates/queue.html
+  - src/cleanup_tools/ui/templates/base.html
+  - src/cleanup_tools/ui/static/keyboard.js
