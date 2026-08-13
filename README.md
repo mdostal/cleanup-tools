@@ -44,6 +44,18 @@ refusal described above (configured masters refused from deletion until marked `
 applies to `cleanup reclaim --from-queue` exactly as it does to `cleanup reclaim --go` — queue
 approval does not bypass it.
 
+`cleanup approve` is now a real command: it starts a small localhost-only (`127.0.0.1`, never
+reachable from another machine — hardcoded, not configurable) Flask review UI and opens your
+browser to it. The dashboard gives a DiskDrill-style overview of the approval queue (counts and
+total size per bucket/category, plus a per-status breakdown), `/plan/sort` and `/plan/reclaim`
+stage new proposed moves/deletes into the queue (idempotent — re-hitting either doesn't create
+duplicate pending entries), and each pending entry gets a review card (thumbnail for images,
+never the original full-resolution file) with approve/reject/undo. Approving or rejecting here
+only changes the entry's status — it does **not** execute anything; run `cleanup sort --from-queue`
+or `cleanup reclaim --from-queue` afterward, as a separate deliberate step, to actually act on
+approved entries. This story only covers single-entry review; bulk actions, keyboard shortcuts,
+and pagination are a follow-up.
+
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
 > **previews by default** and needs `--go` to actually move files. If you're used to running the bash
