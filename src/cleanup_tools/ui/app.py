@@ -76,6 +76,14 @@ def run_server(
     if open_browser:
         webbrowser.open(f"http://{host}:{port}/")
 
-    app.run(host=host, port=port, debug=False, use_reloader=False)
+    # threaded=True lets Werkzeug's dev server handle more than one request
+    # at a time (each on its own thread) -- without it, a single slow
+    # request (e.g. a /plan/reclaim background job's underlying work, or
+    # even just one request holding the queue file lock) would otherwise
+    # queue up every other connection, INCLUDING a /status/<job_id> poll
+    # meant to report progress on that very job, behind it. That would
+    # defeat the whole point of jobs.py's background-thread design: the
+    # poll needs to be answered promptly while the job is still running.
+    app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
 
     return {"host": host, "port": port}

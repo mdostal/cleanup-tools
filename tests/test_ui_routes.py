@@ -63,6 +63,28 @@ def _reload_queue(adapter) -> list[QueueEntry]:
     return queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
 
 
+def _poll_job_until_terminal(client, job_id: str, timeout: float = 5.0) -> dict:
+    """Poll GET /status/<job_id> until it reports "done" or "error".
+
+    /plan/reclaim now kicks off a background job (see cleanup_tools.ui.jobs)
+    instead of blocking the request, so tests that need the plan to have
+    actually finished poll for it here rather than asserting on the
+    (now-immediate) response to /plan/reclaim itself.
+    """
+    import time
+
+    deadline = time.time() + timeout
+    payload = None
+    while time.time() < deadline:
+        resp = client.get(f"/status/{job_id}")
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        if payload["status"] in ("done", "error"):
+            return payload
+        time.sleep(0.01)
+    raise AssertionError(f"job {job_id} did not reach a terminal status within {timeout}s: {payload}")
+
+
 # ---------------------------------------------------------------------------
 # 1. Dashboard: groups by group_key, sizes/counts, and per-status counts.
 # ---------------------------------------------------------------------------
@@ -201,7 +223,10 @@ def test_plan_reclaim_stages_entries_and_is_idempotent(adapter, client, home):
     (documents / ".DS_Store").write_bytes(b"junk")
 
     resp1 = client.get("/plan/reclaim")
-    assert resp1.status_code == 302
+    assert resp1.status_code == 200
+    job_id_1 = resp1.get_json()["job_id"]
+    result_1 = _poll_job_until_terminal(client, job_id_1)
+    assert result_1["status"] == "done"
 
     entries_after_first = _reload_queue(adapter)
     junk_entries = [e for e in entries_after_first if e.action == "delete"]
@@ -210,7 +235,10 @@ def test_plan_reclaim_stages_entries_and_is_idempotent(adapter, client, home):
     assert len(ds_store_entries) == 1
 
     resp2 = client.get("/plan/reclaim")
-    assert resp2.status_code == 302
+    assert resp2.status_code == 200
+    job_id_2 = resp2.get_json()["job_id"]
+    result_2 = _poll_job_until_terminal(client, job_id_2)
+    assert result_2["status"] == "done"
 
     entries_after_second = _reload_queue(adapter)
     ds_store_entries_2 = [
@@ -237,7 +265,9 @@ def test_plan_reclaim_does_not_stage_master_path_refused_candidates(adapter, cli
     )
     config_module.save_config(adapter, config)
 
-    client.get("/plan/reclaim")
+    resp = client.get("/plan/reclaim")
+    job_id = resp.get_json()["job_id"]
+    _poll_job_until_terminal(client, job_id)
 
     entries = _reload_queue(adapter)
     assert not any(e.src == str(junk) for e in entries)
@@ -287,6 +317,267 @@ def test_plan_corral_screenshots_no_matches_stages_nothing_without_crashing(
     resp = client.get("/plan/corral-screenshots")
     assert resp.status_code == 302
     assert _reload_queue(adapter) == []
+
+
+# ---------------------------------------------------------------------------
+# 2b. Background jobs: /plan/reclaim's job_id + /status/<job_id> polling
+#     (cleanup_tools.ui.jobs), plus /healthz.
+# ---------------------------------------------------------------------------
+
+
+def test_plan_reclaim_responds_immediately_without_blocking(adapter, client, home):
+    """The route itself must return fast (job_id only) regardless of how
+    long the underlying plan-building work takes -- proven here by how
+    quickly client.get() returns, well under any real du-backed sizing
+    work, even before the background job has finished.
+    """
+    import time
+
+    documents = home / "Documents"
+    documents.mkdir()
+    (documents / ".DS_Store").write_bytes(b"junk")
+
+    start = time.time()
+    resp = client.get("/plan/reclaim")
+    elapsed = time.time() - start
+
+    assert resp.status_code == 200
+    assert resp.is_json
+    payload = resp.get_json()
+    assert "job_id" in payload and payload["job_id"]
+    assert elapsed < 1.0
+
+    # Clean up the still-running (or just-finished) background job so it
+    # doesn't linger past this test.
+    _poll_job_until_terminal(client, payload["job_id"])
+
+
+def test_status_poll_while_job_running_reports_real_increasing_progress(
+    adapter, client, home, monkeypatch
+):
+    """current/total must be genuine, observed progress -- not a fixed
+    placeholder -- proven by making dir_size_bytes deliberately slow (a real
+    sleep before each real call) so polling mid-job can catch current at
+    more than one distinct value as successive candidate directories get
+    sized.
+    """
+    import time
+
+    documents = home / "Documents"
+    documents.mkdir()
+    for i in range(4):
+        proj_modules = documents / f"proj{i}" / "node_modules"
+        proj_modules.mkdir(parents=True)
+        (proj_modules / "pkg.json").write_text("{}")
+
+    real_dir_size_bytes = MacOSAdapter.dir_size_bytes
+
+    def slow_dir_size_bytes(self, path):
+        time.sleep(0.15)
+        return real_dir_size_bytes(self, path)
+
+    monkeypatch.setattr(MacOSAdapter, "dir_size_bytes", slow_dir_size_bytes)
+
+    resp = client.get("/plan/reclaim")
+    job_id = resp.get_json()["job_id"]
+
+    seen_current = []
+    deadline = time.time() + 10
+    status = "running"
+    while time.time() < deadline:
+        status_resp = client.get(f"/status/{job_id}")
+        assert status_resp.status_code == 200
+        payload = status_resp.get_json()
+        seen_current.append(payload["current"])
+        assert isinstance(payload["total"], int)
+        status = payload["status"]
+        if status != "running":
+            break
+        time.sleep(0.02)
+
+    assert status == "done"
+    # current must have taken on more than one distinct value across polls
+    # -- proof it's real, observed progress rather than a constant/fake
+    # placeholder.
+    assert len(set(seen_current)) > 1
+    assert max(seen_current) >= 2
+
+
+def test_status_poll_after_success_matches_synchronous_stage_result(adapter, client, home):
+    documents = home / "Documents"
+    documents.mkdir()
+    (documents / ".DS_Store").write_bytes(b"junk")
+
+    resp = client.get("/plan/reclaim")
+    job_id = resp.get_json()["job_id"]
+    payload = _poll_job_until_terminal(client, job_id)
+
+    assert payload["status"] == "done"
+    result = payload["result"]
+
+    staged = _reload_queue(adapter)
+    assert result["count"] == len(staged) == 1
+
+    entry_dict = result["entries"][0]
+    staged_entry = staged[0]
+    assert entry_dict["id"] == staged_entry.id
+    assert entry_dict["action"] == staged_entry.action == "delete"
+    assert entry_dict["src"] == staged_entry.src
+    assert entry_dict["src"].endswith(".DS_Store")
+    assert entry_dict["source"] == staged_entry.source == "ui-plan-reclaim"
+    assert entry_dict["status"] == staged_entry.status == "pending"
+
+
+def test_status_poll_after_reclaim_run_raises_timeout_lands_as_terminal_error(
+    adapter, client, home, monkeypatch
+):
+    """Mirrors the existing TimeoutError-from-the-queue-lock case every other
+    route in this file already handles (see QUEUE_BUSY_MESSAGE) -- except
+    here the job runs on a background thread, so the assertion is that the
+    job's terminal status becomes "error" (never an uncaught exception that
+    leaves it stuck at "running"), carrying the same friendly message.
+    """
+    from cleanup_tools.commands import reclaim as reclaim_module
+    from cleanup_tools.ui.routes import QUEUE_BUSY_MESSAGE
+
+    def raise_timeout(adapter_arg, args=None):
+        raise TimeoutError("Timed out after 5.0s waiting for lock on /some/queue.yaml.lock")
+
+    monkeypatch.setattr(reclaim_module, "run", raise_timeout)
+
+    resp = client.get("/plan/reclaim")
+    job_id = resp.get_json()["job_id"]
+    payload = _poll_job_until_terminal(client, job_id)
+
+    assert payload["status"] == "error"
+    assert payload["error"] == QUEUE_BUSY_MESSAGE
+    assert "result" not in payload
+
+
+def test_status_unknown_job_id_returns_404_not_500(client):
+    resp = client.get("/status/this-job-id-does-not-exist")
+    assert resp.status_code == 404
+
+
+def test_healthz_returns_200_with_small_json_body(client):
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.is_json
+    payload = resp.get_json()
+    assert payload == {"status": "ok"}
+
+
+def test_healthz_never_touches_the_queue(client, monkeypatch):
+    """/healthz must be a genuinely cheap liveness check -- not a
+    repurposing of "/" (which does real queue-loading/grouping work).
+    Proven here by making queue_module.load_queue blow up: if /healthz
+    called it (directly or via _load_entries), this would surface as a
+    500, not a clean 200.
+    """
+
+    def blow_up(*args, **kwargs):
+        raise AssertionError("healthz must never call queue_module.load_queue")
+
+    monkeypatch.setattr(queue_module, "load_queue", blow_up)
+
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+
+
+def test_threaded_dev_server_answers_a_cheap_poll_without_blocking_behind_a_slow_request(
+    adapter, home, monkeypatch
+):
+    """End-to-end proof that run_server()'s threaded=True does something
+    real: binds an actual socket via cleanup_tools.ui.app.run_server (the
+    exact function/engine the "cleanup approve" CLI subcommand uses) and
+    issues two REAL HTTP requests against it with http.client -- not
+    Flask's test_client(), which never models concurrent connection
+    handling at all, only sequential in-process calls.
+
+    One connection hits "/" with queue_module.load_queue patched to sleep
+    for a while (standing in for any slow synchronous request-handling
+    work); a second, concurrent connection hits the cheap /healthz route
+    and must come back promptly rather than queueing up behind the first
+    on Werkzeug's dev server. Removing threaded=True from app.py's
+    app.run(...) call makes this test hang/fail (verified manually during
+    development -- see the task's self-review step).
+    """
+    import http.client
+    import socket
+    import threading
+    import time
+
+    from cleanup_tools.ui.app import run_server
+
+    documents = home / "Documents"
+    documents.mkdir()
+
+    real_load_queue = queue_module.load_queue
+    entered_slow_call = threading.Event()
+
+    def slow_load_queue(adapter_arg, path=None):
+        entered_slow_call.set()
+        time.sleep(1.0)
+        return real_load_queue(adapter_arg, path)
+
+    monkeypatch.setattr(queue_module, "load_queue", slow_load_queue)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    server_thread = threading.Thread(
+        target=run_server,
+        kwargs=dict(adapter=adapter, queue_path=None, host="127.0.0.1", port=port, open_browser=False),
+        daemon=True,
+    )
+    server_thread.start()
+
+    def _get(path: str, timeout: float = 5.0):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            resp.read()
+            return resp.status
+        finally:
+            conn.close()
+
+    # Wait for the real server to actually come up.
+    deadline = time.time() + 5
+    up = False
+    while time.time() < deadline:
+        try:
+            if _get("/healthz") == 200:
+                up = True
+                break
+        except OSError:
+            time.sleep(0.05)
+    assert up, "server never came up"
+
+    slow_request_status = {}
+
+    def _slow_request():
+        slow_request_status["status"] = _get("/", timeout=10)
+
+    slow_thread = threading.Thread(target=_slow_request, daemon=True)
+    slow_thread.start()
+
+    # Wait until the slow request has genuinely entered the slow call, so
+    # the concurrent poll below overlaps with it for real.
+    assert entered_slow_call.wait(timeout=5)
+
+    start = time.time()
+    status = _get("/healthz")
+    elapsed = time.time() - start
+
+    assert status == 200
+    # Well under the slow request's 1.0s sleep -- proof this connection was
+    # served concurrently, not queued up behind the in-flight "/" request.
+    assert elapsed < 0.5
+
+    slow_thread.join(timeout=5)
+    assert slow_request_status.get("status") == 200
 
 
 # ---------------------------------------------------------------------------
@@ -948,3 +1239,90 @@ def test_queue_view_includes_keyboard_js_and_bulk_scaffolding(adapter, client, t
     assert 'data-action="approve"' in html
     assert 'data-action="reject"' in html
     assert "bulk-selected-count" in html
+
+
+# ---------------------------------------------------------------------------
+# 10. "Plan: Reclaim" links get real click-intercept + polling wiring (see
+#     static/plan-reclaim.js). /plan/reclaim moved from a synchronous
+#     redirect to an async job (job_id + /status/<job_id> polling), but the
+#     plain <a href="/plan/reclaim"> links in base.html's nav, dashboard.html's
+#     empty state, and queue.html's empty state were never updated -- a real
+#     browser clicking one would just navigate to a bare JSON blob. These
+#     tests assert on the actual rendered HTML (not just that the route still
+#     works) so they genuinely catch the regression: the click-intercept
+#     wiring must actually be present in the markup a browser receives.
+#     "Plan: Sort" and "Plan: Corral Screenshots" are still synchronous and
+#     must stay completely untouched -- plain links, no new JS wrapping them.
+# ---------------------------------------------------------------------------
+
+
+def _plan_reclaim_link_block(html: str) -> str:
+    """Isolate the first "Plan: Reclaim" anchor tag's own attributes out of a
+    rendered page, so assertions check what's actually on that element
+    rather than merely "this string appears somewhere on the page".
+    """
+    before = html.split(">Plan: Reclaim<")[0]
+    return before.rsplit("<a", 1)[-1]
+
+
+def test_static_plan_reclaim_js_is_served(client):
+    resp = client.get("/static/plan-reclaim.js")
+    assert resp.status_code == 200
+    assert b"plan-reclaim-link" in resp.data
+    # Polls /status/<job_id> using the server-rendered template attribute
+    # (data-status-url-template), never a hardcoded path here.
+    assert b"statusUrlTemplate" in resp.data
+
+
+def test_dashboard_nav_plan_reclaim_link_has_click_intercept_wiring(client):
+    resp = client.get("/")
+    html = resp.data.decode()
+
+    assert "plan-reclaim.js" in html
+    assert 'id="plan-reclaim-status"' in html
+
+    link_attrs = _plan_reclaim_link_block(html)
+    assert 'class="plan-reclaim-link"' in link_attrs
+    assert 'href="/plan/reclaim"' in link_attrs
+    assert "data-status-url-template=" in link_attrs
+    assert "__JOB_ID__" in link_attrs
+    assert 'data-dashboard-url="/"' in link_attrs
+
+
+def test_dashboard_empty_state_plan_reclaim_link_is_also_wired(client):
+    # An empty queue renders dashboard.html's own "No queue entries yet..."
+    # fallback paragraph, which has a SECOND, separate "Plan: Reclaim" link
+    # (in addition to the nav one) -- that one must be wired up too.
+    resp = client.get("/")
+    html = resp.data.decode()
+    assert html.count('class="plan-reclaim-link"') == 2
+
+
+def test_queue_empty_state_plan_reclaim_link_is_also_wired(client):
+    resp = client.get("/queue")
+    html = resp.data.decode()
+    assert b"Nothing pending" in resp.data
+    assert html.count('class="plan-reclaim-link"') == 2  # nav + empty-state
+
+
+def test_queue_nonempty_still_has_nav_plan_reclaim_link_wired(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.txt")
+    _seed_queue(adapter, [entry])
+
+    resp = client.get("/queue")
+    html = resp.data.decode()
+    # Only the nav link renders once entries exist -- no "Nothing pending"
+    # empty-state fallback to duplicate it.
+    assert html.count('class="plan-reclaim-link"') == 1
+    link_attrs = _plan_reclaim_link_block(html)
+    assert "data-status-url-template=" in link_attrs
+
+
+def test_plan_sort_and_corral_screenshots_links_remain_plain_navigation(client):
+    resp = client.get("/")
+    html = resp.data.decode()
+
+    # Exact, unwrapped anchor tags -- no class, no data-* attributes, no new
+    # JS touching either of these. Both routes are still fully synchronous.
+    assert '<a href="/plan/sort">Plan: Sort</a>' in html
+    assert '<a href="/plan/corral-screenshots">Plan: Corral Screenshots</a>' in html

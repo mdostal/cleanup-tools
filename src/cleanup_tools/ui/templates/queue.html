@@ -95,7 +95,12 @@
   </div>
 </div>
 {% else %}
-<p>Nothing pending right now. Try <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a> or <a href="{{ url_for('ui.plan_reclaim') }}">Plan: Reclaim</a> or <a href="{{ url_for('ui.plan_corral_screenshots') }}">Plan: Corral Screenshots</a> to stage some.</p>
+<p>Nothing pending right now. Try <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a> or <a
+    href="{{ url_for('ui.plan_reclaim') }}"
+    class="plan-reclaim-link"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+  >Plan: Reclaim</a> or <a href="{{ url_for('ui.plan_corral_screenshots') }}">Plan: Corral Screenshots</a> to stage some.</p>
 {% endfor %}
 
 {% if pagination.total > 0 %}
