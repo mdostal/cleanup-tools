@@ -12,6 +12,12 @@ dependencies = ["PyYAML", "Flask", "Pillow", "anthropic"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# Build-time only -- needed to freeze packaging/pyinstaller/cleanup_ui.spec
+# into a standalone binary (see that spec file's docstring). NOT a runtime
+# dependency: end users of the frozen binary never need Python or these
+# packages installed at all, and the app's own runtime `dependencies` above
+# must stay exactly what PyInstaller bundles, nothing more.
+build = ["pyinstaller", "pyinstaller-hooks-contrib"]
 
 [project.scripts]
 cleanup = "cleanup_tools.cli:main"
