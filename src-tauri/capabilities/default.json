@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. Grants ONLY permission to execute the bundled cleanup-ui sidecar (by its registered externalBin name, sidecar-scoped, with a fixed argument list) plus Tauri's own default core permissions (window/event/webview management etc). No filesystem, no HTTP/network plugin, no shell access beyond this one named sidecar, no updater, no analytics/telemetry.",
+  "description": "Capability for the main window. Grants permission to execute the bundled cleanup-ui sidecar (by its registered externalBin name, sidecar-scoped, with a fixed argument list) plus Tauri's own default core permissions (window/event/webview management etc), plus three narrowly-scoped macOS commands used only by the icon-picker's Finder-icon swap: reading CFBundleIconFile out of the running .app's Info.plist (read-only), touching the .app bundle path to nudge Finder's icon cache, and an admin-prompted `osascript`/`do shell script` fallback used only when the plain filesystem copy is denied (e.g. the app is installed in /Applications). No filesystem plugin, no HTTP/network plugin, no shell access beyond these four named commands, no updater, no analytics/telemetry.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -12,6 +12,28 @@
           "name": "cleanup-ui-sidecar",
           "sidecar": true,
           "args": ["5151", "127.0.0.1"]
+        },
+        {
+          "name": "icon-plist-read",
+          "cmd": "/usr/libexec/PlistBuddy",
+          "args": [
+            "-c",
+            { "validator": "^Print :CFBundleIconFile$" },
+            { "validator": "^/.*Info\\.plist$" }
+          ]
+        },
+        {
+          "name": "icon-bundle-touch",
+          "cmd": "touch",
+          "args": [{ "validator": "^/.*\\.app$" }]
+        },
+        {
+          "name": "icon-bundle-swap-elevated",
+          "cmd": "osascript",
+          "args": [
+            "-e",
+            { "validator": "^do shell script .+ with administrator privileges$" }
+          ]
         }
       ]
     }

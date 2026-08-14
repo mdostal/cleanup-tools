@@ -219,6 +219,221 @@ fn spawn_sidecar_in_background(app: AppHandle, state: SidecarState) {
     });
 }
 
+// ─── icon picker ────────────────────────────────────────────────────────
+//
+// Lets the user swap the app's icon at runtime (Settings page in the
+// Flask UI, `POST /settings/icon` -> `window.__TAURI__.core.invoke(...)`
+// -> `apply_icon_choice` below). Two things happen on every choice:
+//
+// 1. Cross-platform: the *running* window/Dock/taskbar icon updates
+//    immediately via `WebviewWindow::set_icon`. This alone is the entire
+//    Windows/Linux implementation -- deliberately. A persistent Windows
+//    Start-Menu-shortcut rewrite or a Linux `.desktop` `Icon=` rewrite
+//    would need real test hardware this project doesn't have (the
+//    existing Arch PKGBUILD is already flagged "reviewed, never
+//    build-tested" for the same reason), so neither is attempted here.
+// 2. macOS only: the actual installed `.app` bundle's Finder icon is
+//    rewritten too, via `swap_macos_bundle_icon` below -- with a plain
+//    filesystem copy first, falling back to an admin-prompted
+//    `osascript`/`do shell script` only if that's denied (e.g. installed
+//    under /Applications).
+//
+// `icon_choice` is persisted by the Python side in
+// `~/.config/cleanup-tools/config.yaml` (see `src/cleanup_tools/config.py`)
+// -- the one piece of state both languages need to read, unlike the
+// theme picker (pure browser `localStorage`, no server/Rust visibility
+// needed at all).
+
+/// Valid icon-choice slugs. Must match `icon_choice`'s allowed values in
+/// `src/cleanup_tools/config.py` and the folder names under
+/// `icons/alternates/` (bundled via `tauri.conf.json`'s `bundle.resources`)
+/// -- same cross-language "must match by hand" convention as
+/// `SIDECAR_PORT` above.
+const ICON_CHOICES: &[&str] = &[
+    "broom-folder",
+    "broom-sparkle",
+    "tidy-folder-check",
+    "recycle-folder",
+];
+/// Matches `Config.icon_choice`'s default in `src/cleanup_tools/config.py`
+/// -- also what's baked into the build via `bundle.icon` in
+/// `tauri.conf.json`, so re-applying it at startup would be a harmless
+/// no-op skipped for that reason, not a correctness requirement.
+const DEFAULT_ICON_CHOICE: &str = "broom-folder";
+
+fn is_valid_icon_choice(choice: &str) -> bool {
+    ICON_CHOICES.contains(&choice)
+}
+
+/// Resolves a file inside the bundled `icons/alternates/<choice>/`
+/// resource tree for an already-validated choice.
+fn alternate_icon_path(
+    app: &AppHandle,
+    choice: &str,
+    filename: &str,
+) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .resource_dir()
+        .map(|dir| {
+            dir.join("icons")
+                .join("alternates")
+                .join(choice)
+                .join(filename)
+        })
+        .map_err(|err| format!("failed to resolve resource dir: {err}"))
+}
+
+/// Cross-platform live icon update -- see the module-level doc comment
+/// above for why this is the entire Windows/Linux implementation.
+fn apply_live_icon(app: &AppHandle, choice: &str) -> Result<(), String> {
+    let icon_path = alternate_icon_path(app, choice, "icon.png")?;
+    let image = tauri::image::Image::from_path(&icon_path)
+        .map_err(|err| format!("failed to load {}: {err}", icon_path.display()))?;
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window
+        .set_icon(image)
+        .map_err(|err| format!("failed to set window icon: {err}"))
+}
+
+/// POSIX single-quote shell-argument quoting: wraps in `'...'`, escaping
+/// any embedded `'` as `'\''`. Used only to build the one `cp <src> <dst>`
+/// string handed to `osascript ... do shell script` in
+/// `swap_macos_bundle_icon` -- kept as a small pure/testable function
+/// rather than inlined so its escaping behavior has a unit test.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// Parses `PlistBuddy -c "Print :CFBundleIconFile"`'s stdout (just the
+/// value, e.g. `"icon.icns\n"`) into the plain filename, or `None` for
+/// empty/unreadable output. Pure and OS-independent on purpose -- it has
+/// no macOS-specific behavior of its own, only its caller does.
+fn parse_cfbundle_icon_file(plistbuddy_stdout: &str) -> Option<String> {
+    let trimmed = plistbuddy_stdout.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Reads and validates `icon_choice` from
+/// `~/.config/cleanup-tools/config.yaml` (see `src/cleanup_tools/config.py`
+/// for the Python-side reader/writer). Tolerant of every other key in the
+/// file -- deserializes into a loose `serde_yaml::Value` rather than a
+/// full struct mirroring Python's `Config`, so this stays decoupled from
+/// that schema's other fields. `None` for a missing file, unreadable YAML,
+/// a missing/non-string `icon_choice` key, or a value outside
+/// `ICON_CHOICES` -- all treated as "nothing to re-apply", not an error
+/// worth surfacing.
+fn read_icon_choice_from_config() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::Path::new(&home)
+        .join(".config")
+        .join("cleanup-tools")
+        .join("config.yaml");
+    let contents = std::fs::read_to_string(path).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&contents).ok()?;
+    let choice = value.get("icon_choice")?.as_str()?.to_string();
+    is_valid_icon_choice(&choice).then_some(choice)
+}
+
+/// macOS-only: rewrites the *installed* `.app` bundle's Finder icon, not
+/// just the live in-memory window icon `apply_live_icon` already handled.
+/// Tries a plain filesystem copy first (works whenever the bundle is
+/// user-writable, e.g. installed under `~/Applications`); falls back to
+/// an admin-prompted `osascript ... do shell script ... with
+/// administrator privileges` copy only if that's denied (e.g. installed
+/// under `/Applications`, owned by another user). `touch`es the bundle
+/// afterward to nudge Finder's icon cache -- a Finder relaunch may still
+/// be needed for it to show up everywhere immediately; this deliberately
+/// never force-quits the user's Finder to avoid that wait.
+#[cfg(target_os = "macos")]
+async fn swap_macos_bundle_icon(app: &AppHandle, choice: &str) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|err| format!("current_exe: {err}"))?;
+    let bundle_root = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .ok_or_else(|| "could not resolve .app bundle root from current_exe".to_string())?;
+    if bundle_root.extension().and_then(|ext| ext.to_str()) != Some("app") {
+        // Not actually running from an installed .app bundle (e.g. `cargo
+        // tauri dev`) -- nothing to swap, not an error.
+        return Ok(());
+    }
+
+    let info_plist = bundle_root.join("Contents").join("Info.plist");
+    let plist_output = app
+        .shell()
+        .command("/usr/libexec/PlistBuddy")
+        .args([
+            "-c",
+            "Print :CFBundleIconFile",
+            &info_plist.to_string_lossy(),
+        ])
+        .output()
+        .await
+        .map_err(|err| format!("PlistBuddy failed: {err}"))?;
+    let icon_filename = parse_cfbundle_icon_file(&String::from_utf8_lossy(&plist_output.stdout))
+        .ok_or_else(|| "could not read CFBundleIconFile from Info.plist".to_string())?;
+
+    let dest = bundle_root
+        .join("Contents")
+        .join("Resources")
+        .join(&icon_filename);
+    let source = alternate_icon_path(app, choice, "icon.icns")?;
+
+    if std::fs::copy(&source, &dest).is_err() {
+        // Most likely PermissionDenied -- retry with an OS admin prompt.
+        let cp_cmd = format!(
+            "cp {} {}",
+            shell_quote(&source.to_string_lossy()),
+            shell_quote(&dest.to_string_lossy())
+        );
+        let script = format!(
+            "do shell script {} with administrator privileges",
+            shell_quote(&cp_cmd)
+        );
+        let result = app
+            .shell()
+            .command("osascript")
+            .args(["-e", &script])
+            .output()
+            .await
+            .map_err(|err| format!("osascript failed: {err}"))?;
+        if !result.status.success() {
+            return Err(format!(
+                "elevated icon copy failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            ));
+        }
+    }
+
+    let _ = app
+        .shell()
+        .command("touch")
+        .args([bundle_root.to_string_lossy().to_string()])
+        .output()
+        .await;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn apply_icon_choice(app: AppHandle, choice: String) -> Result<(), String> {
+    if !is_valid_icon_choice(&choice) {
+        return Err(format!("unknown icon choice: {choice}"));
+    }
+    apply_live_icon(&app, &choice)?;
+    #[cfg(target_os = "macos")]
+    {
+        swap_macos_bundle_icon(&app, &choice).await?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let sidecar_state = SidecarState::default();
@@ -226,6 +441,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar_state.clone())
+        .invoke_handler(tauri::generate_handler![apply_icon_choice])
         .setup(move |app| {
             // Must return immediately -- see spawn_sidecar_in_background's
             // doc comment. The window is created before/around this
@@ -233,6 +449,21 @@ pub fn run() {
             // starts polling on its own timeline, independent of when (or
             // whether) this background thread finishes.
             spawn_sidecar_in_background(app.handle().clone(), sidecar_state.clone());
+
+            // Re-apply a previously saved icon choice so the Dock/taskbar
+            // icon matches it from the first frame, not just after the
+            // next manual pick -- only the live-icon step needs to re-run
+            // per launch, the macOS bundle-Resources copy already
+            // persisted physically the last time it changed.
+            if let Some(choice) = read_icon_choice_from_config() {
+                if choice != DEFAULT_ICON_CHOICE {
+                    if let Err(err) = apply_live_icon(&app.handle().clone(), &choice) {
+                        eprintln!(
+                            "cleanup-tools: failed to apply saved icon choice at startup: {err}"
+                        );
+                    }
+                }
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -364,5 +595,57 @@ mod tests {
     fn sidecar_state_take_returns_none_when_empty() {
         let state = SidecarState::default();
         assert!(state.take().is_none());
+    }
+
+    #[test]
+    fn valid_icon_choices_are_accepted() {
+        for choice in ICON_CHOICES {
+            assert!(is_valid_icon_choice(choice));
+        }
+    }
+
+    #[test]
+    fn unknown_icon_choice_is_rejected() {
+        assert!(!is_valid_icon_choice("not-a-real-choice"));
+        assert!(!is_valid_icon_choice(""));
+    }
+
+    #[test]
+    fn default_icon_choice_is_itself_valid() {
+        assert!(is_valid_icon_choice(DEFAULT_ICON_CHOICE));
+    }
+
+    #[test]
+    fn parse_cfbundle_icon_file_trims_plistbuddy_output() {
+        assert_eq!(
+            parse_cfbundle_icon_file("icon.icns\n"),
+            Some("icon.icns".to_string())
+        );
+        assert_eq!(
+            parse_cfbundle_icon_file("  icon  \n"),
+            Some("icon".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_cfbundle_icon_file_none_on_empty() {
+        assert_eq!(parse_cfbundle_icon_file(""), None);
+        assert_eq!(parse_cfbundle_icon_file("   \n"), None);
+    }
+
+    #[test]
+    fn shell_quote_wraps_plain_paths() {
+        assert_eq!(
+            shell_quote("/Applications/Foo.app"),
+            "'/Applications/Foo.app'"
+        );
+    }
+
+    #[test]
+    fn shell_quote_escapes_embedded_single_quotes() {
+        // A pathologically-named path -- verifies the escaping is correct
+        // even though real bundle/resource paths in this project never
+        // contain a literal `'`.
+        assert_eq!(shell_quote("it's/here"), r"'it'\''s/here'");
     }
 }

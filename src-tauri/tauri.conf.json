@@ -33,7 +33,8 @@
     ],
     "externalBin": ["binaries/cleanup-ui-sidecar"],
     "resources": {
-      "resources/cleanup-ui-onedir": "cleanup-ui-onedir"
+      "resources/cleanup-ui-onedir": "cleanup-ui-onedir",
+      "icons/alternates": "icons/alternates"
     },
     "linux": {
       "deb": {

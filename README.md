@@ -95,6 +95,14 @@ headings), Sonar (dark, monospace-forward), and Tide (cool/light, rounded) — c
 (no server-side state, no account), so it persists across page navigations and browser restarts,
 and is applied before first paint (no flash of the wrong theme on load).
 
+A new **Settings** page (`/settings`) lets you pick which app icon the desktop build uses, from
+four bundled concepts. Unlike the theme picker, this choice is saved server-side (`config.yaml`'s
+`icon_choice`) since the Tauri shell needs to read it too: picking one updates the running
+Dock/taskbar icon immediately, and on macOS also rewrites the installed app's actual Finder icon
+(a password prompt may appear if it's installed somewhere you don't own, e.g. `/Applications`).
+Windows/Linux currently only get the live taskbar/window icon, not a persistent shortcut/`.desktop`
+rewrite — see `.pHive/CONTEXT.md` for why.
+
 An AI-provider layer (`src/cleanup_tools/ai/`) now exists — an Anthropic implementation of a
 narrow "given a filename, propose a bucket" interface. Set `ANTHROPIC_API_KEY` in your
 environment, or put the key in `~/.config/cleanup-tools/credentials` (created with `0600`

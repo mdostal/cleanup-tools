@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Settings - Cleanup Approvals{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<section aria-label="App icon">
+  <h2>App icon</h2>
+  <p class="meta">
+    Pick the icon this app uses. Updates the Dock/taskbar icon immediately when running as the
+    desktop app, and (on macOS) the installed app's own Finder icon too -- macOS may ask for
+    your password if the app isn't in a location you can write to. In a plain browser tab
+    (no desktop shell), the choice is still saved and takes effect next time the desktop app
+    launches.
+  </p>
+  <div
+    class="group-grid"
+    id="icon-choice-grid"
+    data-endpoint="{{ url_for('ui.set_icon_choice') }}"
+  >
+    {% for slug, label in icon_choices.items() %}
+    <button
+      type="button"
+      class="icon-choice-card{% if slug == current_icon_choice %} selected{% endif %}"
+      data-icon-choice="{{ slug }}"
+    >
+      <img src="{{ url_for('static', filename='icon-choices/' ~ slug ~ '.png') }}" alt="{{ label }} icon preview">
+      <h3>{{ label }}</h3>
+      {% if slug == current_icon_choice %}<span class="icon-choice-current">Current</span>{% endif %}
+    </button>
+    {% endfor %}
+  </div>
+  <p id="icon-choice-status" class="meta" role="status" aria-live="polite"></p>
+</section>
+{% endblock %}

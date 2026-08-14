@@ -107,6 +107,21 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   real Arch/Linux hardware: no Linux-target PyInstaller onedir sidecar *binary* exists yet (only the
   stub *script* that would locate and exec it) — see README.md's Arch Linux section for the exact
   manual build/verification steps still needed from the project owner.
+- **Icon picker** (`GET /settings`, `POST /settings/icon`, `src-tauri/src/lib.rs`'s
+  `apply_icon_choice` command) — lets the user swap the app icon at runtime among four bundled
+  concepts (`broom-folder` default, `broom-sparkle`, `tidy-folder-check`, `recycle-folder`; full
+  icon sets under `src-tauri/icons/alternates/<slug>/`, shipped via `bundle.resources`, thumbnails
+  at `src/cleanup_tools/ui/static/icon-choices/*.png`). Persisted in `config.yaml`'s `icon_choice`
+  field (`src/cleanup_tools/config.py`) rather than the theme picker's browser-only `localStorage`,
+  since the Rust side also needs to read it — same cross-language "must match by hand" list
+  (`ICON_CHOICES`) duplicated in both `routes.py` and `lib.rs`, mirroring `SIDECAR_PORT`'s existing
+  convention. **Deliberately platform-asymmetric, by explicit decision, not an oversight:** macOS
+  gets the full treatment — the *installed* `.app` bundle's Finder icon is actually rewritten (plain
+  copy first, falling back to an admin-prompted `osascript`/`do shell script` if the install
+  location isn't user-writable). Windows/Linux only get the live taskbar/window icon via Tauri's
+  cross-platform `set_icon` — no Start-Menu-shortcut or `.desktop` `Icon=` rewrite, for the same
+  "no test hardware" reason the Arch PKGBUILD above is flagged reviewed-never-built. If that ever
+  changes, this is the natural next extension point.
 
 ## Conventions
 

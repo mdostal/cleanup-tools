@@ -44,6 +44,12 @@ class Config:
     bucket_rules: list[BucketRule]
     search_roots: list[str] = field(default_factory=list)
     master_paths: list[MasterPath] = field(default_factory=list)
+    # One of the slugs in ``cleanup_tools.ui.routes.ICON_CHOICES`` -- that
+    # module owns validating the allowed set (and the desktop shell's
+    # ``ICON_CHOICES`` in ``src-tauri/src/lib.rs`` mirrors it by hand, same
+    # "must match" convention as that file's ``SIDECAR_PORT``). This field
+    # is just a plain string: config.py doesn't know or enforce the set.
+    icon_choice: str = "broom-folder"
 
 
 # Order matters: rules are checked in sequence and the first match wins, so
@@ -228,10 +234,13 @@ def load_config(adapter: OSAdapter, path: Path | None = None) -> Config:
             f"required key {exc}"
         ) from exc
 
+    icon_choice = parsed.get("icon_choice") or "broom-folder"
+
     return Config(
         bucket_rules=bucket_rules,
         search_roots=search_roots,
         master_paths=master_paths,
+        icon_choice=icon_choice,
     )
 
 
@@ -255,6 +264,7 @@ def save_config(adapter: OSAdapter, config: Config, path: Path | None = None) ->
         "bucket_rules": [_bucket_rule_to_dict(r) for r in config.bucket_rules],
         "search_roots": list(config.search_roots),
         "master_paths": [_master_path_to_dict(m) for m in config.master_paths],
+        "icon_choice": config.icon_choice,
     }
 
     path.parent.mkdir(parents=True, exist_ok=True)

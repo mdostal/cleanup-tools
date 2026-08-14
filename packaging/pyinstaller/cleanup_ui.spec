@@ -126,9 +126,27 @@ datas = [
     (os.path.join(UI_TEMPLATES, "base.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_TEMPLATES, "dashboard.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_TEMPLATES, "queue.html"), "cleanup_tools/ui/templates"),
+    (os.path.join(UI_TEMPLATES, "settings.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_STATIC, "keyboard.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "plan-trigger.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "theme.js"), "cleanup_tools/ui/static"),
+    (os.path.join(UI_STATIC, "settings.js"), "cleanup_tools/ui/static"),
+    (
+        os.path.join(UI_STATIC, "icon-choices", "broom-folder.png"),
+        "cleanup_tools/ui/static/icon-choices",
+    ),
+    (
+        os.path.join(UI_STATIC, "icon-choices", "broom-sparkle.png"),
+        "cleanup_tools/ui/static/icon-choices",
+    ),
+    (
+        os.path.join(UI_STATIC, "icon-choices", "tidy-folder-check.png"),
+        "cleanup_tools/ui/static/icon-choices",
+    ),
+    (
+        os.path.join(UI_STATIC, "icon-choices", "recycle-folder.png"),
+        "cleanup_tools/ui/static/icon-choices",
+    ),
 ]
 
 hiddenimports = [

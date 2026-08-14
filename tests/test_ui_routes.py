@@ -21,6 +21,7 @@ from cleanup_tools.adapters import MacOSAdapter
 from cleanup_tools import queue as queue_module
 from cleanup_tools.queue import QueueEntry, build_plan_snapshot
 from cleanup_tools.ui.app import create_app
+from cleanup_tools.ui.routes import DEFAULT_ICON_CHOICE, ICON_CHOICES
 
 
 def _make_fake_adapter(home: Path) -> MacOSAdapter:
@@ -1732,3 +1733,92 @@ def test_plan_links_never_carry_active_page_treatment(client):
         link = _nav_link_block(html, text)
         assert "nav-link" not in link
         assert "aria-current" not in link
+
+
+# ---------------------------------------------------------------------------
+# 12. Settings: the icon picker. Persisted via config.yaml's icon_choice
+#     field (see cleanup_tools.config), unlike the theme picker, so the
+#     Tauri/Rust shell can read the same choice cross-process -- see
+#     routes.py's module docstring on this section.
+# ---------------------------------------------------------------------------
+
+def _icon_choice_card_block(html: str, slug: str) -> str:
+    """Isolate one icon-choice <button>'s full markup (attributes and
+    inner content), regardless of attribute order -- data-icon-choice
+    comes AFTER class= in settings.html's source, so a naive forward split
+    on the data-icon-choice marker (the way _nav_link_block's caller uses
+    a trailing `>text<` marker) would miss the class="...selected" bit.
+    """
+    marker = f'data-icon-choice="{slug}"'
+    idx = html.index(marker)
+    start = html.rindex("<button", 0, idx)
+    end = html.index("</button>", idx)
+    return html[start:end]
+
+
+def test_settings_renders_all_icon_choices_with_default_selected(client):
+    resp = client.get("/settings")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+
+    assert 'id="icon-choice-grid"' in html
+    for slug, label in ICON_CHOICES.items():
+        assert f'data-icon-choice="{slug}"' in html
+        # Jinja auto-escapes "&" to "&amp;" in rendered HTML.
+        assert label.replace("&", "&amp;") in html
+
+    default_card = _icon_choice_card_block(html, DEFAULT_ICON_CHOICE)
+    assert "selected" in default_card
+    assert "Current" in default_card
+
+
+def test_settings_nav_link_marked_current_on_settings_view(client):
+    resp = client.get("/settings")
+    html = resp.data.decode()
+
+    settings_link = _nav_link_block(html, "Settings")
+    assert 'class="nav-link"' in settings_link
+    assert 'aria-current="page"' in settings_link
+
+    dashboard_link = _nav_link_block(html, "Dashboard")
+    assert "aria-current" not in dashboard_link
+
+
+def test_set_icon_choice_valid_slug_persists_via_config(adapter, client):
+    from cleanup_tools import config as config_module
+
+    resp = client.post("/settings/icon", json={"choice": "recycle-folder"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"choice": "recycle-folder"}
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.icon_choice == "recycle-folder"
+
+
+def test_set_icon_choice_reflected_as_selected_on_next_settings_load(client):
+    client.post("/settings/icon", json={"choice": "broom-sparkle"})
+
+    resp = client.get("/settings")
+    html = resp.data.decode()
+    card = _icon_choice_card_block(html, "broom-sparkle")
+    assert "selected" in card
+    assert "Current" in card
+
+    default_card = _icon_choice_card_block(html, DEFAULT_ICON_CHOICE)
+    assert "selected" not in default_card
+
+
+def test_set_icon_choice_unknown_slug_returns_400_and_does_not_persist(adapter, client):
+    from cleanup_tools import config as config_module
+
+    resp = client.post("/settings/icon", json={"choice": "not-a-real-icon"})
+    assert resp.status_code == 400
+    assert "not-a-real-icon" in resp.get_json()["error"]
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.icon_choice == DEFAULT_ICON_CHOICE
+
+
+def test_set_icon_choice_missing_body_returns_400(client):
+    resp = client.post("/settings/icon", json={})
+    assert resp.status_code == 400

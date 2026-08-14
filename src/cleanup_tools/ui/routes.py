@@ -795,6 +795,66 @@ def undo_entry(entry_id):
 
 
 # ---------------------------------------------------------------------------
+# Settings. Currently just the desktop-app icon picker. Persisted via
+# config.py's ``icon_choice`` field (``~/.config/cleanup-tools/config.yaml``)
+# rather than the theme picker's plain browser ``localStorage`` -- the
+# Tauri/Rust shell also needs to read this choice (to re-apply it as the
+# live Dock/taskbar icon at every launch, and to swap the installed .app
+# bundle's Finder icon on macOS), which localStorage can't cross into.
+# ``ICON_CHOICES`` here is the single place this route module treats as
+# authoritative for the allowed set; ``src-tauri/src/lib.rs``'s own
+# ``ICON_CHOICES`` mirrors the same four slugs by hand -- same
+# cross-language "must match" convention as that file's ``SIDECAR_PORT``.
+# ---------------------------------------------------------------------------
+
+ICON_CHOICES = {
+    "broom-folder": "Broom & Folder",
+    "broom-sparkle": "Broom & Sparkle",
+    "tidy-folder-check": "Tidy Folder",
+    "recycle-folder": "Recycle Folder",
+}
+DEFAULT_ICON_CHOICE = "broom-folder"
+
+
+@bp.route("/settings")
+def settings():
+    config = config_module.load_config(_adapter())
+    return render_template(
+        "settings.html",
+        icon_choices=ICON_CHOICES,
+        current_icon_choice=config.icon_choice,
+    )
+
+
+@bp.route("/settings/icon", methods=["POST"])
+def set_icon_choice():
+    """Persist the chosen icon slug to ``config.yaml``.
+
+    JSON in/out (not a form POST) so the client can apply the live
+    Tauri-side icon swap in the same interaction without a page reload --
+    see ``static/settings.js``. Runs identically whether or not a Tauri
+    shell is actually wrapping this page (the plain-browser ``cleanup
+    approve`` case): the config write always happens here; the live
+    in-process icon swap is a separate step the client only attempts when
+    ``window.__TAURI__`` is present.
+    """
+    data = request.get_json(silent=True) or {}
+    choice = data.get("choice")
+    if choice not in ICON_CHOICES:
+        return jsonify({"error": f"unknown icon choice: {choice!r}"}), 400
+
+    adapter = _adapter()
+    # dataclasses.replace, not an in-place `config.icon_choice = choice`
+    # mutation: when no config.yaml exists yet, load_config() returns the
+    # module-level DEFAULT_CONFIG singleton BY REFERENCE (see config.py) --
+    # mutating it in place would corrupt that shared "constant" for every
+    # other request/test in the process, not just this one.
+    config = dataclasses.replace(config_module.load_config(adapter), icon_choice=choice)
+    config_module.save_config(adapter, config)
+    return jsonify({"choice": choice})
+
+
+# ---------------------------------------------------------------------------
 # Thumbnails. This is the ONLY route that ever reads image bytes off disk
 # for HTTP serving, and it never returns the original file: the source is
 # always opened, downscaled to at most THUMBNAIL_MAX_PX on its long edge,

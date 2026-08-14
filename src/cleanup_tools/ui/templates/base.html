@@ -292,6 +292,35 @@
   .group-card h3 { margin: 0 0 0.4rem; font-family: var(--font-mono); font-size: 0.95rem; color: var(--ink); }
   .group-card .meta { color: var(--ink-soft); margin: 0 0 0.5rem; }
 
+  /* Settings > App icon: a selectable card per bundled icon choice,
+     reusing .group-grid's layout. A thicker border (rather than a new
+     color token) marks the hovered/selectable affordance so this still
+     reads correctly across all three themes without new tokens. */
+  .icon-choice-card {
+    background: var(--surface);
+    border: 2px solid var(--line);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    padding: 1rem;
+    cursor: pointer;
+    text-align: center;
+    font: inherit;
+    font-family: var(--font-ui);
+    color: var(--ink);
+    width: 100%;
+  }
+  .icon-choice-card:hover { border-color: var(--accent); }
+  .icon-choice-card.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .icon-choice-card img { width: 72px; height: 72px; border-radius: 16px; margin-bottom: 0.5rem; }
+  .icon-choice-card h3 { margin: 0; font-family: var(--font-mono); font-size: 0.9rem; }
+  .icon-choice-current {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--accent);
+    margin-top: 0.4rem;
+  }
+
   /* Chip/pill styling for every .badge -- real padding, a bit of
      font-weight and letter-spacing, and a background/foreground color pair
      drawn from the active theme's tokens (see badge-ai/badge-manual and
@@ -497,6 +526,11 @@
     {% if request.endpoint == 'ui.queue_view' %}aria-current="page"{% endif %}
   >Review Queue</a>
   <a
+    href="{{ url_for('ui.settings') }}"
+    class="nav-link"
+    {% if request.endpoint == 'ui.settings' %}aria-current="page"{% endif %}
+  >Settings</a>
+  <a
     href="{{ url_for('ui.plan_sort') }}"
     class="plan-trigger-link"
     data-plan-kind="sort"
@@ -544,5 +578,6 @@
 {% block content %}{% endblock %}
 <script src="{{ url_for('static', filename='plan-trigger.js') }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}"></script>
+<script src="{{ url_for('static', filename='settings.js') }}"></script>
 </body>
 </html>
