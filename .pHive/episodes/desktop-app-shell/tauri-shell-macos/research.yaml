@@ -1,0 +1,9 @@
+step_id: research
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Research via research-brief.md and design-discussion.md (sole prior art, zero internal
+  precedent) plus targeted current Tauri v2 docs lookups (versions resolved live via
+  cargo add, not hand-guessed). Read app.py's DEFAULT_PORT/LOCALHOST constants and
+  run_server's host guard to confirm the exact port/host contract.
+artifacts: []

@@ -1,0 +1,6 @@
+step_id: integrate
+status: completed
+timestamp: "2026-08-13"
+commit_ref: "fbaf27a"
+notes: "438/438 tests pass. Committed locally on feat/desktop-app-shell. Not pushed. Build artifacts (packaging/build, packaging/dist) correctly gitignored via existing build/ and dist/ patterns."
+artifacts: []

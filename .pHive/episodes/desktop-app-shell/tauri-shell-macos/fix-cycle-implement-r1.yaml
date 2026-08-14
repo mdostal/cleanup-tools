@@ -1,0 +1,21 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Added an ad-hoc codesign post-build step (packaging/tauri/post-build.sh) and documented
+  the real working personal-install step (xattr -d com.apple.quarantine before first
+  launch) in README.md, including a newly-discovered gotcha that macOS caches a bad
+  Gatekeeper verdict per file location after one blocked launch attempt. Diagnosed the
+  headless-hang finding as a genuine macOS/Gatekeeper-level block before the app's own code
+  ever runs (confirmed via sample showing the process parked at _dyld_start) -- documented
+  as a known side effect rather than force-fitting a Rust-side fix for an OS-level
+  behavior. Fixed the stale loading.html comment. Added a real, scoped CSP (self + the
+  local Flask origin) instead of leaving it null. Verified: 7/7 cargo tests, 437/437 python
+  tests, quit-cycle re-verified clean, codesign/quarantine behavior re-confirmed on a fresh
+  quarantined copy.
+artifacts:
+  - packaging/tauri/post-build.sh
+  - README.md
+  - frontend/loading.html
+  - src-tauri/tauri.conf.json

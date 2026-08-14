@@ -24,10 +24,11 @@ against the existing per-entry approve/reject forms (each tagged with a
 
 from __future__ import annotations
 
+import dataclasses
 import io
 from pathlib import Path
 
-from flask import Blueprint, Response, abort, current_app, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, current_app, jsonify, redirect, render_template, request, url_for
 from PIL import Image, UnidentifiedImageError
 
 from .. import config as config_module
@@ -38,6 +39,7 @@ from ..ai.wiring import propose_for_other_bucket
 from ..commands import corral_screenshots as corral_screenshots_module
 from ..commands import reclaim as reclaim_module
 from ..commands import sort as sort_module
+from . import jobs
 
 bp = Blueprint("ui", __name__, template_folder="templates")
 
@@ -215,7 +217,44 @@ def _stage_sort_plan(adapter) -> list[queue_module.QueueEntry]:
     return queue_module.stage_entries(adapter, new_entries, _queue_path())
 
 
-def _stage_reclaim_plan(adapter) -> list[queue_module.QueueEntry]:
+class _DirSizeProgressAdapter:
+    """Thin proxy around an ``OSAdapter`` that reports progress per call to
+    ``dir_size_bytes`` -- the one call reclaim.py's category builders make
+    per candidate directory, and the slow (``du -sk`` shell-out) part of
+    ``/plan/reclaim``'s ~2-minute worst case.
+
+    Every other attribute access (``find_dirs``, ``list_dir``,
+    ``file_lock``, ...) is forwarded unchanged to the wrapped adapter via
+    ``__getattr__``, so this can stand in for a real adapter anywhere
+    reclaim.py or queue.py expects one -- it only ever intercepts
+    ``dir_size_bytes``.
+
+    There is no way to know the *total* number of ``dir_size_bytes`` calls
+    a given ``reclaim.run()`` invocation will make ahead of time (candidate
+    directories are discovered and sized category-by-category, not all
+    upfront) -- so ``total`` is reported equal to ``current`` on every call,
+    i.e. "N of at least N directories sized so far". This is real,
+    monotonically-increasing progress driven entirely by actual
+    ``dir_size_bytes`` calls, not a fixed/fake placeholder; it just means
+    the fraction isn't meaningful as a percentage until the job finishes.
+    """
+
+    def __init__(self, wrapped, progress_callback):
+        self._wrapped = wrapped
+        self._progress_callback = progress_callback
+        self._count = 0
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def dir_size_bytes(self, path):
+        size = self._wrapped.dir_size_bytes(path)
+        self._count += 1
+        self._progress_callback(self._count, self._count)
+        return size
+
+
+def _stage_reclaim_plan(adapter, queue_path, progress_callback=None) -> list[queue_module.QueueEntry]:
     """Dry-run cleanup_tools.commands.reclaim across its default roots,
     convert every non-refused candidate into a QueueEntry "delete"
     proposal, and stage them.
@@ -224,8 +263,24 @@ def _stage_reclaim_plan(adapter) -> list[queue_module.QueueEntry]:
     ``MASTER_PATH_REFUSAL_REASON``) are never staged -- there is nothing to
     approve for a candidate reclaim.py itself refuses to ever delete, even
     under --go.
+
+    ``queue_path`` is taken explicitly (rather than resolved via
+    ``_queue_path()`` internally) because this is called from a background
+    job thread (see ``plan_reclaim`` below) that has no Flask request/app
+    context to resolve ``current_app`` against -- the caller must resolve
+    it while still inside the request and pass it in.
+
+    If ``progress_callback`` is given, ``reclaim_module.run`` is called
+    against a ``_DirSizeProgressAdapter`` wrapping ``adapter`` instead of
+    ``adapter`` directly, so every ``dir_size_bytes`` call along the way
+    reports real progress. ``stage_entries`` at the end always uses the
+    real ``adapter`` (staging is fast queue-file I/O, not worth wrapping).
     """
-    result = reclaim_module.run(adapter, args=None)
+    run_adapter = adapter
+    if progress_callback is not None:
+        run_adapter = _DirSizeProgressAdapter(adapter, progress_callback)
+
+    result = reclaim_module.run(run_adapter, args=None)
     new_entries = []
     for category_name, category in result.get("categories", {}).items():
         for item in category.get("entries", []):
@@ -241,7 +296,7 @@ def _stage_reclaim_plan(adapter) -> list[queue_module.QueueEntry]:
                     plan_snapshot=queue_module.build_plan_snapshot(item["path"]),
                 )
             )
-    return queue_module.stage_entries(adapter, new_entries, _queue_path())
+    return queue_module.stage_entries(adapter, new_entries, queue_path)
 
 
 def _stage_corral_screenshots_plan(adapter) -> list[queue_module.QueueEntry]:
@@ -283,14 +338,95 @@ def plan_sort():
     return redirect(url_for("ui.dashboard", staged=len(added)))
 
 
+def _reclaim_job(adapter, queue_path, progress_callback) -> list[queue_module.QueueEntry]:
+    """The ``target_fn`` run on ``/plan/reclaim``'s background job thread.
+
+    Just ``_stage_reclaim_plan`` with progress reporting wired up, except a
+    ``TimeoutError`` from the queue lock is re-raised carrying
+    ``QUEUE_BUSY_MESSAGE`` -- mirroring every other route in this file that
+    catches a bare ``TimeoutError`` and substitutes the friendly, non-leaky
+    wording -- rather than whatever raw "Timed out after 5.0s waiting for
+    lock on ..." message ``adapter.file_lock`` itself raises. ``jobs.py``'s
+    generic ``except Exception`` in ``start_job`` then records this message
+    verbatim as the job's terminal ``error``.
+    """
+    try:
+        return _stage_reclaim_plan(adapter, queue_path, progress_callback)
+    except TimeoutError as exc:
+        raise TimeoutError(QUEUE_BUSY_MESSAGE) from exc
+
+
+def _serialize_staged_entries(entries: list[queue_module.QueueEntry]) -> dict:
+    """JSON-safe shape for a list of staged ``QueueEntry``s, for ``/status``'s
+    ``result`` field -- the same list ``_stage_reclaim_plan`` would have
+    returned synchronously, just turned into plain dicts via
+    ``dataclasses.asdict`` so Flask's ``jsonify`` can serialize it.
+    """
+    return {
+        "count": len(entries),
+        "entries": [dataclasses.asdict(e) for e in entries],
+    }
+
+
 @bp.route("/plan/reclaim")
 def plan_reclaim():
+    """Kick off reclaim planning/staging on a background job thread and
+    return its ``job_id`` immediately (HTTP 200 JSON), instead of blocking
+    the request -- and the whole single-threaded dev server -- for as long
+    as ``_stage_reclaim_plan`` takes (up to ~2 minutes on a real machine
+    with a lot of ``node_modules`` directories; see
+    ``adapters.base.OSAdapter.dir_size_bytes``).
+
+    ``adapter``/``queue_path`` are resolved here, while still inside the
+    request's app context, and passed explicitly into the job -- the
+    background thread has no request/app context of its own, so it can't
+    call ``_adapter()``/``_queue_path()`` (both read ``current_app``).
+
+    Callers poll ``GET /status/<job_id>`` (below) for progress/outcome.
+    Unlike ``plan_sort``/``plan_corral_screenshots``, which still run
+    synchronously and redirect back to the dashboard, this route never
+    redirects and never blocks until the plan finishes.
+    """
     adapter = _adapter()
-    try:
-        added = _stage_reclaim_plan(adapter)
-    except TimeoutError:
-        return redirect(url_for("ui.dashboard", plan_error=QUEUE_BUSY_MESSAGE))
-    return redirect(url_for("ui.dashboard", staged=len(added)))
+    queue_path = _queue_path()
+    job_id = jobs.start_job(_reclaim_job, adapter, queue_path)
+    return jsonify({"job_id": job_id})
+
+
+@bp.route("/status/<job_id>")
+def job_status(job_id):
+    """Poll a background job's current state.
+
+    Unknown ``job_id`` -> HTTP 404 (never a 500, never a misleading
+    running/done payload) -- a job that never existed, or that existed in a
+    now-restarted process (this registry is in-memory only, see jobs.py),
+    looks identical from here: "no such job".
+    """
+    job = jobs.get_job(job_id)
+    if job is None:
+        abort(404, description=f"No such job: {job_id!r}")
+
+    payload: dict = {"status": job.status, "current": job.current, "total": job.total}
+    if job.status == jobs.STATUS_DONE:
+        payload["result"] = _serialize_staged_entries(job.result)
+    elif job.status == jobs.STATUS_ERROR:
+        payload["error"] = job.error
+    return jsonify(payload)
+
+
+@bp.route("/healthz")
+def healthz():
+    """A deliberately cheap liveness check -- NOT a repurposing of ``/``
+    (which does real queue-loading/grouping work via ``_load_entries``).
+
+    Makes ZERO queue or filesystem I/O calls: no ``queue_module.load_queue``
+    (or anything that reaches it, like ``_load_entries``/``_adapter``'s
+    config lookups), just a static JSON body. This exists so a native
+    desktop-app shell (or anything else) can cheaply poll "is the server up
+    and responsive" without that poll itself being slow enough to look like
+    the thing it's trying to detect.
+    """
+    return jsonify({"status": "ok"}), 200
 
 
 @bp.route("/plan/corral-screenshots")

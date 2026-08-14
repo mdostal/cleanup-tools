@@ -1,0 +1,184 @@
+id: arch-linux-packaging
+epic: desktop-app-shell
+title: Build a local-only Arch Linux PKGBUILD for the Tauri shell, honest about what can and can't be verified without Arch hardware
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [tauri-shell-macos]
+
+description: |
+  Builds a local-only PKGBUILD (build-from-source style: `makedepends` on `cargo`, `nodejs`, and
+  the JS package manager Tauri's frontend uses) that, run via `makepkg -si` on the project owner's
+  own Arch machine, produces a working Tauri shell + PyInstaller sidecar package with the correct
+  Arch runtime deps (`webkit2gtk-4.1`, `gtk3`, `cairo`) and `options=('!strip')` (or the equivalent
+  makepkg option) so the bundled PyInstaller sidecar binary isn't stripped in a way that breaks it.
+  Not published to the public AUR -- no AUR-maintainer obligations (SSH-key auth, `.SRCINFO`
+  generation, ongoing update responsibility) are taken on; per decision 7, this stays permanently
+  out of scope, not deferred.
+
+  `depends_on: [tauri-shell-macos]` directly implements design-discussion §6's explicit
+  recommendation: prove the full shell+sidecar+health-check pattern end-to-end on ONE platform
+  (macOS, the primary work machine) before parallelizing the second platform's packaging story --
+  otherwise two platforms would be debugging the same unproven Rust/Tauri pattern simultaneously,
+  which is harder to reason about than validating once and replicating. This story reuses the
+  process-lifecycle code (sidecar spawn, healthz-poll-then-navigate, crash/quit handling,
+  port-collision detection) the macOS story already built and proved -- it does not re-derive or
+  redesign any of that logic, only wraps it in Arch-specific packaging config and a Linux-target
+  PyInstaller binary (built following pyinstaller-sidecar-build's already-settled onefile/onedir
+  decision, applied to the Linux target).
+
+  **Critical constraint, stated explicitly per the epic task brief: nobody in this planning/
+  execution process has access to a real Arch Linux machine to actually run or test this.** This
+  story's acceptance criteria are therefore split cleanly into two categories: what this story's
+  own automated process CAN verify without Arch hardware (PKGBUILD syntax/structure, any
+  Python-side platform-detection logic, code review of the shell commands against documented
+  Arch/makepkg conventions), and what explicitly REQUIRES the project owner to run `makepkg -si` on
+  their own Arch box and report back. No acceptance criterion in this story claims the latter was
+  tested end-to-end by this story's own process -- that would misrepresent what actually happened.
+
+acceptance_criteria:
+  - "Given the PKGBUILD file is inspected, when reviewed for structure, then it declares
+    pkgname/pkgver/pkgrel/pkgdesc/arch=('x86_64')/url/license, makedepends including cargo, nodejs,
+    and the JS package manager Tauri's frontend uses, depends including webkit2gtk-4.1, gtk3,
+    cairo, a source= array pointing at this project's own repo/tag (not a third-party mirror), and
+    build()/package() functions that run the Tauri build and install its output -- all checkable by
+    reading the file, no Arch machine required."
+  - "Given `namcap` or an equivalent PKGBUILD linter is NOT assumed to be installed (since this
+    process has no Arch machine), when the PKGBUILD's syntax is instead checked via a plain shell
+    syntax check (`bash -n` on any embedded shell logic, or a manual field-by-field review against
+    the Arch Wiki's documented PKGBUILD conventions), then no syntax errors or missing required
+    fields are found -- this IS something this story's own process can and does verify."
+  - "Given options=('!strip') (or the equivalent makepkg option protecting binary bundles from
+    stripping) is checked, when reviewed, then it is present in the PKGBUILD and its presence is
+    justified in this story's own text by the same reasoning research-brief.md/design-discussion.md
+    give (protecting the bundled PyInstaller sidecar binary from being stripped in a way that
+    breaks it)."
+  - "Given any Python-side platform-detection logic this story touches (if the sidecar entrypoint
+    or Tauri Rust code branches on OS at all) is inspected, when reviewed, then Arch/Linux is
+    handled correctly in that logic by code review alone (e.g. confirming no macOS-only path
+    assumption leaks into a supposedly-cross-platform branch) -- this is verifiable via static
+    review without running the code on Arch."
+  - "Given this story's implementation is otherwise complete, when the final verification step is
+    reached, then the story's own record EXPLICITLY states (not implies) that `makepkg -si` has NOT
+    been run by this story's automated process, and that a separate, clearly-labeled manual step
+    is required: the project owner runs `makepkg -si` on their own real Arch machine and reports
+    back whether the build succeeds, the package installs, and the resulting app launches, spawns
+    its sidecar, and reaches the real UI -- this criterion is about the STORY'S OWN HONESTY about
+    its verification boundary, not about the build actually succeeding (that's the owner's report)."
+  - "Verify via: a review checklist (not `pytest`, since there is no Arch runtime to exercise) that
+    walks through every structural/syntax/convention check above and records its findings in the
+    story's own notes, explicitly distinguished from the separate owner-run manual verification
+    step -- this story's 'tests' are a documented review pass, not an automated pass/fail suite."
+
+steps:
+  - id: research
+    description: |
+      Research via research-brief.md §4 (already answers the AUR-vs-local-only, build-from-source-
+      vs-prebuilt-binary, and AppImage-vs-PKGBUILD questions -- do not re-litigate) plus targeted
+      web lookups of the CURRENT Tauri v2 AUR distribution guide (v2.tauri.app/distribute/aur/)
+      and the Arch Wiki's PKGBUILD conventions page, since neither this project nor this
+      planning/execution process has any internal Arch precedent (this is the second and last
+      Rust/Tauri-adjacent story in the epic, following tauri-shell-macos's pattern rather than
+      inventing a new one). Read tauri-shell-macos's finished src-tauri/tauri.conf.json and
+      capabilities/default.json to confirm what, if anything, needs an Arch-specific override
+      (e.g. bundle.linux config) versus what carries over unchanged from the macOS config.
+    agent: researcher
+  - id: implement
+    description: |
+      Write the PKGBUILD (pkgname/pkgver/pkgrel/pkgdesc/arch/url/license/makedepends/depends/
+      source/build()/package()), add any Tauri bundle.linux config needed (targets, WebKitGTK
+      version pin), and add options=('!strip') protecting the bundled PyInstaller sidecar binary.
+      Reuse tauri-shell-macos's process-lifecycle Rust code entirely -- do not fork or duplicate
+      the sidecar-spawn/healthz-poll/crash-quit/port-collision logic for Linux; only the packaging
+      layer (this PKGBUILD, plus whatever bundle.linux config Tauri needs) is new. If any
+      Linux-target build of the PyInstaller sidecar binary is needed for local testing, follow
+      pyinstaller-sidecar-build's already-settled onefile/onedir decision rather than re-deciding
+      it for this platform.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Run the structural/syntax review checklist described in this story's acceptance criteria:
+      field-by-field PKGBUILD review against Arch Wiki conventions, bash -n on any embedded shell
+      logic, confirmation of options=('!strip')'s presence and correct syntax, and a code-review
+      pass over any platform-detection branches touched by this story. Record every finding.
+      EXPLICITLY document, in this step's own output, that makepkg -si has not been run as part of
+      this automated process, and write the exact manual-verification request the project owner
+      needs to carry out (run makepkg -si, confirm build/install/launch/sidecar-spawn/UI-reachable,
+      report back).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Review specifically: does any acceptance criterion or story note anywhere imply that
+      makepkg -si was actually run and succeeded, when it wasn't? (This is the single most
+      important thing to catch in this story's review -- a false claim of end-to-end Arch
+      verification would be actively misleading to the project owner.) Are the runtime deps
+      (webkit2gtk-4.1, gtk3, cairo) correct and complete per Tauri's own documented Linux
+      requirements, not guessed? Does the PKGBUILD avoid publishing/pushing anything to
+      aur.archlinux.org (grep for any git-remote or AUR-upload step that shouldn't exist)?
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: |
+      Commit and push to feature branch. Include, in the commit/PR notes, the explicit
+      manual-verification request for the project owner (run makepkg -si on their Arch machine,
+      report back build/install/launch/sidecar/UI results) -- this is the story's actual
+      completion condition for real end-to-end confidence, separate from and in addition to the
+      code being merged.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  tech_stack:
+    packaging: "Arch Linux PKGBUILD/makepkg, Tauri v2's Linux bundler (WebKitGTK-based)"
+  key_files:
+    - path: .pHive/epics/desktop-app-shell/stories/tauri-shell-macos.yaml
+      purpose: "The story whose finished src-tauri/ Rust code (sidecar spawn, healthz-poll, crash/quit, port-collision) this story reuses unchanged -- this story's own scope is packaging config only"
+    - path: .pHive/epics/desktop-app-shell/stories/pyinstaller-sidecar-build.yaml
+      purpose: "The already-settled onefile/onedir decision this story applies to a Linux-target build, rather than re-deciding per platform"
+
+files_to_modify:
+  - file: packaging/arch/PKGBUILD
+    change: "Create -- local-only, build-from-source PKGBUILD"
+  - file: src-tauri/tauri.conf.json
+    change: "Modify -- add bundle.linux config if needed (targets, WebKitGTK version pin), additive to the existing macOS bundle config, not a replacement of it"
+
+design_decisions:
+  - decision: "depends_on: [tauri-shell-macos], not depends_on: []"
+    rationale: "design-discussion §6's explicit recommendation: prove the shell+sidecar+health-check pattern on one platform before parallelizing the second, so two platforms aren't debugging the same unproven Rust/Tauri pattern simultaneously -- this story's own packaging-only scope (no new process-lifecycle logic) is a direct consequence of that sequencing"
+  - decision: "Local-only PKGBUILD, never published to the public AUR"
+    rationale: "Decision 7 (task brief) / research-brief.md §4: publishing takes on real AUR-maintainer obligations (SSH-key auth, .SRCINFO generation, ongoing update responsibility) this personal-tool epic doesn't need; build-from-source is more idiomatic Arch practice than trusting a prebuilt binary artifact for a tool the owner fully controls"
+  - decision: "This story's acceptance criteria and verification are explicitly split into 'this story's own process verified' vs. 'requires the owner's manual makepkg -si run and report'"
+    rationale: "Task brief's explicit constraint: nobody in this planning/execution process has access to real Arch hardware. Writing an acceptance criterion that implied end-to-end automated verification would be false; the review step exists specifically to catch that kind of overclaim before it ships"
+
+risks:
+  - severity: high
+    description: "The PKGBUILD looks syntactically correct but fails on a real Arch machine in a way this process has no ability to detect (missing a dep, an Arch-specific makepkg behavior, a WebKitGTK version mismatch)"
+    mitigation: "This is the structural reason this story's acceptance criteria explicitly do NOT claim end-to-end verification -- the owner's manual makepkg -si run and report-back is the only thing that can actually close this risk, and the story is written to make that gap visible rather than papered over"
+  - severity: medium
+    description: "options=('!strip') or an equivalent protection is omitted or has the wrong syntax, and the bundled PyInstaller sidecar binary gets stripped in a way that breaks it -- undetectable without a real build"
+    mitigation: "Explicit acceptance criterion + review-step check for its presence and correct syntax, cross-referenced against research-brief.md/design-discussion.md's stated reasoning, even though the actual runtime effect can't be confirmed without Arch hardware"
+  - severity: low
+    description: "Reusing tauri-shell-macos's process-lifecycle code unchanged assumes it's genuinely platform-agnostic; a Linux-specific behavior difference (e.g. WebKitGTK's process model vs. macOS's WebKit) could surface only at runtime"
+    mitigation: "Flagged explicitly in this story's own risk list rather than assumed away; the manual owner-run verification step is exactly where this would first be caught, and any fix would be an additive platform-conditional in the Rust code, not a rewrite"
+
+references:
+  - path: .pHive/epics/desktop-app-shell/docs/research-brief.md
+    relevant_excerpt: |
+      Since the AUR requires nothing be *published* publicly-discoverable to be usable (a personal
+      PKGBUILD can also just be built locally with `makepkg -si` and never pushed to the public AUR
+      at all)... The latter is simpler and sufficient for a personal tool... `options=('!strip'
+      '!debug')`/`!emptydirs` commonly needed to avoid stripping the bundled Python sidecar binary
+      in ways that break it.
+  - path: .pHive/epics/desktop-app-shell/docs/design-discussion.md
+    relevant_excerpt: |
+      Recommend proving the full shell+sidecar+health-check pattern end-to-end on one platform first
+      (macOS, being the primary work machine) before parallelizing the second platform's packaging
+      story -- otherwise two platforms are debugging the same unproven pattern simultaneously, which
+      is harder to reason about than validating once and replicating.
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md needs an Arch Linux install section pointing at packaging/arch/PKGBUILD and explicitly instructing `makepkg -si`, plus a clear note that this PKGBUILD is local-only (not on the public AUR) and has only been structurally reviewed, not build-tested, by the automated process. .pHive/CONTEXT.md's Key paths section should add an entry for packaging/arch/PKGBUILD with the same caveat."

@@ -1,0 +1,9 @@
+step_id: research
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Read app.py's run_server and bare app.run() call, routes.py's _stage_reclaim_plan and
+  plan_reclaim, queue.py's with_queue_lock (confirming the job thread must go through the
+  same locking path, not a new one), and test_ui_routes.py's fake-home-adapter fixture
+  pattern to follow exactly.
+artifacts: []

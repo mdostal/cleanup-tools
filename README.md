@@ -69,7 +69,11 @@ duplicate pending entries), and each pending entry gets a review card (thumbnail
 never the original full-resolution file) with approve/reject/undo. Approving or rejecting here
 only changes the entry's status — it does **not** execute anything; run `cleanup sort --from-queue`
 or `cleanup reclaim --from-queue` afterward, as a separate deliberate step, to actually act on
-approved entries. The manual (no-AI) approvals UI is now **complete and usable at real scale**:
+approved entries. `/plan/reclaim`'s trigger (the "Plan: Reclaim" link) no longer blocks the UI
+silently for as long as the underlying scan takes — it kicks off the plan/stage work on a
+background job and reports live progress ("Staging reclaim plan... (current/total)") while polling,
+then lands back on the dashboard with the same "Staged N entries" result the old synchronous
+version showed. The manual (no-AI) approvals UI is now **complete and usable at real scale**:
 `/queue` paginates (`?page=`/`?per_page=`), bulk-approve/bulk-reject act on an entire group_key
 (or an explicit id list) in one click, and keyboard shortcuts (`y`/`n`/`space`/arrow keys) let you
 triage a large plan fast without reaching for the mouse each time.
@@ -91,6 +95,109 @@ misbehaving/fast provider genuinely cannot be called more than the cap allows. A
 to the network unless you explicitly click "Propose with AI" or run `propose-ai` — this is the
 one sanctioned exception to the "no ambient network calls" rule, and it stays that way: nothing
 else in this tool makes a network call.
+
+**Desktop app packaging is in progress** (`packaging/pyinstaller/`): the Flask UI now freezes into
+a standalone binary via PyInstaller — no Python install required on the end user's machine — as
+the first step toward a real double-clickable app (Tauri, macOS + Arch Linux) instead of
+`cleanup approve` typed into a terminal. Build it with
+`pip install -e '.[build]' && pyinstaller packaging/pyinstaller/cleanup_ui.spec`; smoke-test the
+result with `python3 scripts/smoke_test_sidecar.py <path-to-binary>`. Ships as a directory
+(`--onedir`, the default), not a single file — a single-file build was measured to leave an
+orphaned server process holding the port if the OS ever has to force-kill it (`SIGKILL`), since
+that signal can't reach the real process behind PyInstaller's single-file bootloader; the directory
+build doesn't have this problem and is worth the extra size (~67MB vs. ~31MB).
+
+**Building/running the macOS Tauri shell** (`src-tauri/`): `npm install`, then `npm run tauri dev`
+for a live dev build or `npm run tauri:build` for a real `.app`/`.dmg` (both land under
+`src-tauri/target/{debug,release}/bundle/`). `npm run tauri:build` runs `tauri build` and then
+`packaging/tauri/post-build.sh`, which ad-hoc-signs the resulting `.app` (`codesign --force --deep
+-s -`) — this makes `codesign --verify` pass and is worth doing for free, but **it does not make
+Gatekeeper happy**; see the warning below before handing a built copy to anyone (including
+yourself, on a second Mac).
+
+> ⚠ **This build is unsigned. A downloaded/AirDropped/copied `.app` or `.dmg` will show "'Cleanup
+> Tools' is damaged and can't be opened. You should move it to the Trash" — there is no
+> right-click → Open bypass offered.** Older Gatekeeper docs (including this project's own earlier
+> design notes) describe an "unidentified developer" dialog with a right-click-Open escape hatch;
+> that is NOT what happens on this build/macOS version. It was tested directly: ad-hoc codesigning
+> the app (above) produces a technically valid signature but does **not** clear the "damaged"
+> dialog for a quarantined copy — only removing the quarantine flag does. The real, working fix for
+> a personal install:
+> ```
+> xattr -d com.apple.quarantine "Cleanup Tools.app"   # or the .dmg you downloaded
+> ```
+> Run this **before the first time you open the app/dmg** — it must be the first launch attempt.
+> If you already double-clicked a quarantined copy once and hit the "damaged" dialog (or it just
+> sat there doing nothing), removing the attribute from that same copy afterward does not reliably
+> un-stick it: macOS appears to cache a bad Gatekeeper verdict per file location once a quarantined
+> launch has been attempted. Delete that copy, get/copy a fresh one, and run `xattr -d
+> com.apple.quarantine` on the fresh copy *before* opening it.
+>
+> **Known side effect of a quarantined open attempt: an orphaned headless process.** If you do
+> open a quarantined, unsigned copy (hitting the "damaged" dialog), macOS also launches a
+> `cleanup-desktop` process in the background that never finishes starting — `sample <pid> 1`
+> shows it permanently parked at `_dyld_start`, i.e. it never reaches this app's Rust `main()` at
+> all. This is confirmed to be a macOS/Gatekeeper-level block (dyld/syspolicyd refusing to let a
+> quarantined, non-Developer-ID-signed binary finish loading), not something this app's own code
+> can detect or clean up — there is no app code running yet for it to run in. The process doesn't
+> exit on its own; force-quit it (Activity Monitor, or `kill -9 <pid>`) or restart. Removing
+> quarantine *before* first launch (per above) avoids ever triggering this in the first place.
+
+**Arch Linux packaging** (`packaging/arch/PKGBUILD`): a local-only, build-from-source PKGBUILD —
+run `makepkg -si` directly from your own clone of this repo to build and install the Tauri desktop
+shell. It is **not published to the public AUR** (`aur.archlinux.org`) — no AUR-maintainer
+obligations (SSH-key auth, `.SRCINFO` generation, ongoing update responsibility) are taken on; this
+is a deliberate, permanent decision (see `.pHive/epics/desktop-app-shell/docs/design-discussion.md`
+§e/§f), not a "not yet published" placeholder. `makedepends` covers `cargo`, `nodejs`, `npm`;
+`depends` covers `webkit2gtk-4.1`, `gtk3`, `cairo`, and the rest of Tauri's own documented
+WebKitGTK runtime dependency list; `options=('!strip')` protects the bundled PyInstaller sidecar
+binary from being stripped in a way that breaks it.
+
+> ⚠ **This PKGBUILD has only been structurally reviewed, never build-tested.** Nobody working on
+> this project has access to a real Arch Linux machine. Everything in the PKGBUILD has been checked
+> by reading it (field-by-field against the Arch Wiki's PKGBUILD conventions) and by running
+> `bash -n` against its `build()`/`package()` shell functions (a real syntax check, but not a real
+> build) — `makepkg -si` itself has **never been run**.
+>
+> **The sidecar stub-script portability gap is now closed** (was previously listed here as an open
+> item): `src-tauri/binaries/cleanup-ui-sidecar-stub-linux.sh` is a Linux counterpart of the macOS
+> `cleanup-ui-sidecar-stub.sh`, adapted to Tauri's Debian bundler layout (main binary + sidecars in
+> `/usr/bin/`, `bundle.resources` under `/usr/lib/<productName>/` — read directly from
+> `tauri-bundler`'s Debian-bundler source, with a defensive fallback candidate since that reading is
+> itself unverified on real hardware), copied byte-for-byte to
+> `src-tauri/binaries/cleanup-ui-sidecar-x86_64-unknown-linux-gnu` (the exact per-target-triple
+> filename Tauri's `externalBin` resolution requires on Linux x86_64). This is still
+> **structurally reviewed only, never build-tested** — same caveat as the rest of this section — but
+> the macOS-only-hardcoded-paths gap that would have made the stub itself wrong on Linux no longer
+> exists. **Note:** like everything else this PKGBUILD's `git+file://` source pulls in, these new
+> files need to be `git commit`-ted (or at least staged) before `makepkg -si` will see them — see the
+> PKGBUILD's own `source=` caveat comment.
+>
+> One thing is still known, not just suspected, to need attention before `makepkg -si` can actually
+> succeed:
+> 1. **No Linux-target PyInstaller sidecar *binary* exists in this repo yet** (only the stub *script*
+>    above, which locates and `exec`s that binary — not the binary itself). `src-tauri/resources/`
+>    currently only has the macOS onedir build. You'll need to build a Linux onedir sidecar binary
+>    on your own Arch box (`ONEFILE=0 pyinstaller packaging/pyinstaller/cleanup_ui.spec`, per
+>    `packaging/pyinstaller/cleanup_ui.spec`'s onedir-vs-onefile rationale) and place the resulting
+>    output at `src-tauri/resources/cleanup-ui-onedir/` (mirroring the existing macOS layout) before
+>    `tauri build` can produce a working sidecar on Linux. `packaging/arch/PKGBUILD`'s `build()` now
+>    checks for this file explicitly and fails with this same explanation if it's missing, rather
+>    than failing deeper inside `tauri build` with a more generic error.
+> 2. `npm run tauri:build`'s `packaging/tauri/post-build.sh` step is macOS-only (ad-hoc codesign of
+>    a `.app` bundle) — the PKGBUILD deliberately calls `npx tauri build -b deb` directly instead,
+>    not `npm run tauri:build`, to avoid that script hard-failing on Linux.
+>
+> **What you need to do**: after building the Linux sidecar binary in (1) above and committing it
+> (and the new stub files) into the repo, run `makepkg -si` from `packaging/arch/PKGBUILD` on your
+> real Arch machine, then report back:
+> - Did `makepkg -si` complete without error?
+> - Did the package install cleanly via `pacman`?
+> - Does the installed app launch, spawn its sidecar, pass the healthz check, and reach the real
+>   Flask UI (the same end-to-end behavior already proven on macOS)? If the sidecar fails to start,
+>   check whether `cleanup-ui-sidecar-stub-linux.sh`'s resource-path guess was wrong (its own error
+>   message tells you how to check with `dpkg -L`) — that's the one part of this closed gap that
+>   couldn't be confirmed without a real install.
 
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`

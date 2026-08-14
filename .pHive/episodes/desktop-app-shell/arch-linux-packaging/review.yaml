@@ -1,0 +1,18 @@
+step_id: review
+status: completed
+timestamp: "2026-08-13"
+review_verdict: findings_required_fix_cycle
+notes: >
+  Independent review treated documentation honesty as the single most important property
+  of this story (given no Arch hardware exists to actually verify against) and confirmed
+  no location claims or implies makepkg -si was run/succeeded. Independently re-verified
+  bash -n, field-by-field PKGBUILD structure, the depends list against Tauri's documented
+  Linux requirements, and the platform-agnostic Rust code claim. Found the macOS-hardcoded
+  stub-script gap was real and, since it doesn't require Arch hardware to fix correctly,
+  closed it as follow-up work: wrote a genuine Linux-target stub script, going as far as
+  fetching Tauri's actual bundler source for the correct Debian resource-path convention
+  and defensively hedging (three candidate paths, actionable diagnostic on failure) since
+  that reading is itself unverified on real hardware. Precisely updated the remaining-gap
+  language: only the Linux PyInstaller binary itself (which the stub locates but doesn't
+  produce) remains a genuine owner-only prerequisite.
+artifacts: []

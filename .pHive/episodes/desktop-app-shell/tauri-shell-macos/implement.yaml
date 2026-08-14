@@ -1,0 +1,19 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Scaffolded src-tauri/ (Cargo package, tauri.conf.json, capabilities/default.json scoped
+  to exactly one sidecar binary, main.rs/lib.rs). Solved the onedir/externalBin integration
+  gap (externalBin only accepts one file per target triple, onedir is a directory) via a
+  shell-script stub that execs the real executable -- process-image replacement, so the
+  tracked PID stays the real Flask process. Implemented non-blocking setup(), port-collision
+  detection via a /healthz check before spawning, crash detection with Rust-driven webview
+  navigation to an error state, and quit handling. Added frontend/loading.html and macOS
+  packaging config. Real hands-on testing (not just code review) found and fixed 3 bugs: a
+  CORS-caused silent healthz-poll failure, a crash-page query-param mismatch, and a real
+  orphaned-process bug where a normal Cmd+Q never fires ExitRequested on this macOS, only a
+  bare Exit -- the most consequential fix in the story.
+artifacts:
+  - src-tauri/
+  - frontend/loading.html
+  - package.json

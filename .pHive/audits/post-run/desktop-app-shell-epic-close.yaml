@@ -1,0 +1,50 @@
+run_id: desktop-app-shell-epic-close
+skill: execute
+timestamp: "2026-08-13"
+epic_id: desktop-app-shell
+stories_completed: [flask-progress-reporting, pyinstaller-sidecar-build, tauri-shell-macos, arch-linux-packaging]
+stories_failed: []
+version_bump: none
+gate_lift_fired: false
+methodology: classic
+total_tests: 437
+commits_on_branch: 13
+nonsensical_defaults: []
+warnings_emitted: 0
+notes: >
+  Full epic complete, all 4 stories. The project's first pivot from "reliable local tool"
+  (three prior epics) into "packaging/distribution for other users," per the north_star's
+  own explicit sequencing. First Rust/Tauri code in this project's history, first real
+  per-platform build-machine requirement, first background-thread concurrency shape in the
+  Flask backend.
+
+  Every story went through independent adversarial review with real reproductions, not code
+  reading alone. flask-progress-reporting: reviewer found a critical regression (the "Plan:
+  Reclaim" UI link broke when the route's response shape changed from a redirect to JSON),
+  fixed and verified via a real Playwright browser session. pyinstaller-sidecar-build: the
+  onefile-vs-onedir decision was settled by real forensic evidence (SIGKILL orphaning a
+  listening process on onefile, confirmed via lsof/netstat on actual built binaries), and
+  review found a coordination gap with the concurrent flask-progress-reporting story (a new
+  static file missed by the PyInstaller spec's datas= list) plus added a durable drift-check
+  test. tauri-shell-macos, the epic's largest and riskiest story: real hands-on testing found
+  and fixed three genuine bugs, most consequentially a real orphaned-process bug where a
+  normal Cmd+Q never fires Tauri's ExitRequested event on this macOS at all -- independent
+  review pressure-tested the fix with 19 quit cycles including races at 150ms post-launch and
+  found zero orphans. Review also found the unsigned-distribution design assumption didn't
+  hold on current macOS (a "damaged" dialog, not right-click-Open) -- fixed with an ad-hoc
+  codesign step plus documentation of the real working install step
+  (xattr -d com.apple.quarantine). arch-linux-packaging: explicitly and honestly scoped as
+  structural-review-only (no Arch hardware available anywhere in this process) -- review
+  confirmed no documentation location claims or implies makepkg -si was actually run, and
+  closed one real, avoidable portability gap (a Linux sidecar stub script) without needing
+  Arch hardware, precisely scoping the one genuine remaining owner-only prerequisite (the
+  Linux PyInstaller binary itself).
+
+  **This epic's real completion condition is not fully closed by this commit alone**: the
+  Arch Linux packaging story requires the project owner to run `makepkg -si` on their own
+  real Arch machine (after first building the Linux-target PyInstaller sidecar binary there)
+  and report back whether the build succeeds, installs, and the resulting app launches,
+  spawns its sidecar, and reaches the real UI. The macOS side is fully verified end-to-end by
+  both the implementer and independent review through real, hands-on testing on this actual
+  machine. No push, no PR opened yet -- awaiting user decision (solo project,
+  task_tracking.adapter unset).

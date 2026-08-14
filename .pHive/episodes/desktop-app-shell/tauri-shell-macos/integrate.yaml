@@ -1,0 +1,6 @@
+step_id: integrate
+status: completed
+timestamp: "2026-08-13"
+commit_ref: "c8cc10f"
+notes: "7/7 cargo tests, 437/437 python tests. Committed locally on feat/desktop-app-shell. Not pushed. Build outputs (node_modules/, src-tauri/target/, src-tauri/resources/cleanup-ui-onedir/) correctly gitignored with a regeneration recipe documented inline."
+artifacts: []

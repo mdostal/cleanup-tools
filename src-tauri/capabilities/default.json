@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window. Grants ONLY permission to execute the bundled cleanup-ui sidecar (by its registered externalBin name, sidecar-scoped, with a fixed argument list) plus Tauri's own default core permissions (window/event/webview management etc). No filesystem, no HTTP/network plugin, no shell access beyond this one named sidecar, no updater, no analytics/telemetry.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "cleanup-ui-sidecar",
+          "sidecar": true,
+          "args": ["5151", "127.0.0.1"]
+        }
+      ]
+    }
+  ]
+}

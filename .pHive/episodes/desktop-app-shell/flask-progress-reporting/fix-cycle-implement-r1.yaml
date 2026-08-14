@@ -1,0 +1,20 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Added src/cleanup_tools/ui/static/plan-reclaim.js: intercepts clicks on the Plan: Reclaim
+  links, fetches the job, polls /status/<job_id> with a visible progress indicator, navigates
+  to the dashboard with ?staged=N on success (mirroring the old synchronous end state) or
+  shows a clear error on failure. Wired into base.html/dashboard.html/queue.html. Plan: Sort
+  and Plan: Corral Screenshots left completely untouched -- verified via a real Playwright
+  browser session with captured network traffic. Also completed the story's missed
+  documentation cross-cutting concern (README.md, CONTEXT.md). 430 -> 436 tests pass.
+artifacts:
+  - src/cleanup_tools/ui/static/plan-reclaim.js
+  - src/cleanup_tools/ui/templates/base.html
+  - src/cleanup_tools/ui/templates/dashboard.html
+  - src/cleanup_tools/ui/templates/queue.html
+  - tests/test_ui_routes.py
+  - README.md
+  - .pHive/CONTEXT.md

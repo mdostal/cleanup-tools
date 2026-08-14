@@ -1,0 +1,10 @@
+step_id: integrate
+status: completed
+timestamp: "2026-08-13"
+commit_ref: "7e4cae4"
+notes: >
+  7/7 cargo tests, 437/437 python tests pass. Committed locally on feat/desktop-app-shell.
+  Not pushed. This story's real completion condition (per its own acceptance criteria) is
+  not just this commit -- it's the project owner running makepkg -si on their own Arch
+  machine and reporting back build/install/launch/sidecar/UI results.
+artifacts: []

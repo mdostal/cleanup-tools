@@ -1,0 +1,8 @@
+step_id: doc-check
+status: completed
+timestamp: "2026-08-13"
+commit_ref: "c8cc10f, fef3f4c"
+doc_update_plan: "README.md gained a full Tauri shell build/run section plus the unsigned-distribution/quarantine warning and the headless-hang side effect note (done as part of the fix-cycle round). CONTEXT.md's Key paths gained a src-tauri/ entry and the no-telemetry Conventions entry was extended to cover the Tauri lockfiles."
+artifacts:
+  - README.md
+  - .pHive/CONTEXT.md

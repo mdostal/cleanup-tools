@@ -1,0 +1,18 @@
+step_id: review
+status: completed
+timestamp: "2026-08-13"
+review_verdict: findings_required_fix_cycle
+notes: >
+  Independent review reproduced the threaded=True load-bearing claim with its own real-socket
+  timing thresholds (1.21s blocked vs 0.0006s unblocked), stress-tested the job registry with
+  8 concurrent readers against 2000 rapid progress writes (zero torn state), confirmed
+  /healthz's zero-I/O claim by line tracing and real timing (~400x cheaper than dashboard),
+  confirmed progress values are genuinely real via a monkeypatched-slow fixture, and confirmed
+  concurrent /plan/reclaim requests are safe (existing dedup + file lock prevent double-
+  staging). Found one critical bug: the "Plan: Reclaim" links across all three templates were
+  never updated for the new JSON/polling response shape, so a real browser click landed on a
+  bare JSON blob instead of the old redirect-to-dashboard flow -- a regression against the
+  only UI actually reachable in a browser today, invisible to the test suite since every new
+  test drove the route directly rather than through the rendered template. Also flagged the
+  story's documentation cross-cutting concern was never done.
+artifacts: []

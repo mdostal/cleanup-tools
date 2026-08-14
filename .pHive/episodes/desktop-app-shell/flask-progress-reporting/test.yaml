@@ -1,0 +1,11 @@
+step_id: test
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  8 new tests in test_jobs.py, 8 new in test_ui_routes.py including a real-socket
+  concurrency test proving threaded=True is load-bearing (red/green verified: reverted to
+  threaded=False, confirmed the test fails with a real timing assertion, restored, confirmed
+  pass). 414 -> 430 tests pass.
+artifacts:
+  - tests/test_jobs.py
+  - tests/test_ui_routes.py

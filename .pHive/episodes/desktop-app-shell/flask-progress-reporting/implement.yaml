@@ -1,0 +1,13 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Created src/cleanup_tools/ui/jobs.py (in-memory lock-guarded JobState registry,
+  start_job/get_job, guaranteed terminal status on any Exception). Modified plan_reclaim to
+  start a background job and return {job_id} immediately; added GET /status/<job_id> (404 on
+  unknown) and GET /healthz (zero I/O). Added threaded=True to run_server's app.run() call.
+  A _DirSizeProgressAdapter proxy reports real per-du-call progress.
+artifacts:
+  - src/cleanup_tools/ui/jobs.py
+  - src/cleanup_tools/ui/routes.py
+  - src/cleanup_tools/ui/app.py

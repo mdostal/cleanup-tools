@@ -154,6 +154,12 @@
   }
   .pagination-disabled { color: #8886; }
   .pagination-info { color: #888; font-size: 0.9rem; }
+
+  /* Live status area for the async "Plan: Reclaim" job -- see
+     static/plan-reclaim.js. Empty (and so invisible) until a reclaim job
+     is actually in flight. */
+  .plan-reclaim-status { color: #888; font-size: 0.9rem; }
+  .plan-reclaim-status-error { color: #c33; }
 </style>
 </head>
 <body>
@@ -161,13 +167,24 @@
   <a href="{{ url_for('ui.dashboard') }}">Dashboard</a>
   <a href="{{ url_for('ui.queue_view') }}">Review Queue</a>
   <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a>
-  <a href="{{ url_for('ui.plan_reclaim') }}">Plan: Reclaim</a>
+  <a
+    href="{{ url_for('ui.plan_reclaim') }}"
+    class="plan-reclaim-link"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+  >Plan: Reclaim</a>
   <a href="{{ url_for('ui.plan_corral_screenshots') }}">Plan: Corral Screenshots</a>
   <form method="post" action="{{ url_for('ui.propose_ai') }}">
     <button type="submit" title="Ask the configured AI provider to bucket ambiguous ('other') files">Propose with AI</button>
   </form>
+  <!-- Populated by static/plan-reclaim.js while a "Plan: Reclaim" background
+       job (see /plan/reclaim, /status/<job_id>) is running or has just
+       failed -- role="status"/aria-live so screen readers announce updates
+       without the page navigating away. -->
+  <span id="plan-reclaim-status" class="plan-reclaim-status" role="status" aria-live="polite"></span>
 </nav>
 <hr>
 {% block content %}{% endblock %}
+<script src="{{ url_for('static', filename='plan-reclaim.js') }}"></script>
 </body>
 </html>
