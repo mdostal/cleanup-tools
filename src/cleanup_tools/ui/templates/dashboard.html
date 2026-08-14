@@ -11,17 +11,28 @@
 {% endif %}
 
 <h2>Status</h2>
-<div class="status-bar">
+<!-- A prominent headline stat, not a small easy-to-miss tile row -- at real
+     scale (thousands of entries, the overwhelming majority "pending" until
+     reviewed) this needs to read as "N pending · M approved · ..." at a
+     glance, since it's the one place on the dashboard that communicates
+     both total scale and triage progress. Each status gets a token-driven
+     color pairing (see badge-status-* below) so pending/approved/rejected
+     are visually distinct even though they're plain numbers here, not
+     badges. -->
+<div class="status-summary">
   {% for status, count in overall_status_counts.items() %}
-  <div class="status-tile"><strong>{{ count }}</strong>{{ status }}</div>
+  <div class="status-summary-item status-summary-{{ status }}">
+    <strong>{{ "{:,}".format(count) }}</strong>
+    <span>{{ status }}</span>
+  </div>
   {% else %}
-  <div class="status-tile">Queue is empty.</div>
+  <div class="status-summary-item">Queue is empty.</div>
   {% endfor %}
 </div>
 
 {% if groups %}
 <div class="dashboard-chart">
-  <canvas id="dashboard-chart" width="180" height="180" role="img" aria-label="Storage used per group"></canvas>
+  <canvas id="dashboard-chart" width="160" height="160" role="img" aria-label="Storage used per group"></canvas>
   <div id="dashboard-chart-legend" class="dashboard-chart-legend"></div>
 </div>
 <!-- Real data for the canvas chart above, drawn by static/theme.js
@@ -44,7 +55,7 @@
     <p class="meta">{{ g.count }} item{{ "s" if g.count != 1 else "" }} &middot; {{ "%.1f"|format(g.total_size / 1048576) }} MB</p>
     <div>
       {% for status, count in g.status_counts.items() %}
-      <span class="badge">{{ status }}: {{ count }}</span>
+      <span class="badge badge-status-{{ status }}">{{ status }}: {{ count }}</span>
       {% endfor %}
       {% if g.ai_count %}
       <span class="badge badge-ai">AI-proposed: {{ g.ai_count }}</span>

@@ -1326,3 +1326,63 @@ def test_plan_sort_and_corral_screenshots_links_remain_plain_navigation(client):
     # JS touching either of these. Both routes are still fully synchronous.
     assert '<a href="/plan/sort">Plan: Sort</a>' in html
     assert '<a href="/plan/corral-screenshots">Plan: Corral Screenshots</a>' in html
+
+
+# ---------------------------------------------------------------------------
+# 11. Nav "current page" indicator: only Dashboard/Review Queue (real pages)
+#     ever get aria-current="page" -- the Plan: links are one-shot actions
+#     that redirect back to the dashboard, not destinations, and must never
+#     show a stuck active state.
+# ---------------------------------------------------------------------------
+
+
+def _nav_link_block(html: str, link_text: str) -> str:
+    """Isolate a nav anchor's own opening-tag attributes, the same way
+    _plan_reclaim_link_block does above, so assertions check what's
+    actually on that element rather than merely "this string appears
+    somewhere on the page".
+    """
+    before = html.split(f">{link_text}<")[0]
+    return before.rsplit("<a", 1)[-1]
+
+
+def test_dashboard_nav_link_marked_current_dashboard_view(client):
+    resp = client.get("/")
+    html = resp.data.decode()
+
+    dashboard_link = _nav_link_block(html, "Dashboard")
+    assert 'class="nav-link"' in dashboard_link
+    assert 'aria-current="page"' in dashboard_link
+
+    queue_link = _nav_link_block(html, "Review Queue")
+    assert 'class="nav-link"' in queue_link
+    assert "aria-current" not in queue_link
+
+
+def test_queue_nav_link_marked_current_on_queue_view(client):
+    resp = client.get("/queue")
+    html = resp.data.decode()
+
+    queue_link = _nav_link_block(html, "Review Queue")
+    assert 'class="nav-link"' in queue_link
+    assert 'aria-current="page"' in queue_link
+
+    dashboard_link = _nav_link_block(html, "Dashboard")
+    assert 'class="nav-link"' in dashboard_link
+    assert "aria-current" not in dashboard_link
+
+
+def test_plan_links_never_carry_active_page_treatment(client):
+    # Even on the dashboard (where Plan: Sort/Reclaim/Corral Screenshots
+    # visually sit right next to the real aria-current="page" Dashboard
+    # link), the Plan: links themselves must never pick up nav-link or
+    # aria-current -- they're actions, not pages you "are on".
+    resp = client.get("/")
+    html = resp.data.decode()
+
+    assert '<a href="/plan/sort">Plan: Sort</a>' in html
+    assert '<a href="/plan/corral-screenshots">Plan: Corral Screenshots</a>' in html
+
+    plan_reclaim_link = _nav_link_block(html, "Plan: Reclaim")
+    assert "nav-link" not in plan_reclaim_link
+    assert "aria-current" not in plan_reclaim_link

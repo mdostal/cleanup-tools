@@ -151,6 +151,23 @@
     font-family: var(--font-ui);
     color: var(--accent);
   }
+  /* Current-page indicator: only ever applied to Dashboard/Review Queue
+     (see base.html's nav below) -- those are the only two links that are
+     actual pages you can "be on". The Plan: links are one-shot actions
+     that redirect back to the dashboard, not destinations, so they never
+     carry .nav-link/aria-current and never show a stuck active state. */
+  nav a.nav-link {
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+  nav a.nav-link:hover { background: var(--surface-2); }
+  nav a.nav-link[aria-current="page"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+    box-shadow: var(--shadow-card);
+  }
+  nav a.nav-link[aria-current="page"]:hover { background: var(--accent-soft); }
   nav form { display: inline; margin-right: 1.25rem; }
   nav form button {
     border: none;
@@ -185,16 +202,43 @@
     padding: 0.25rem 0.5rem;
   }
 
-  .status-bar { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1rem 0 1.5rem; }
-  .status-tile {
+  /* Headline stat row: "N pending · M approved · ..." -- prominent by
+     design, since at real scale (thousands of entries) this is the one
+     place that communicates both total scale and triage progress at a
+     glance. Each status gets a colored count (see .status-summary-pending
+     etc.) drawn from the same theme tokens as badge-status-* below, so the
+     two stay visually consistent with each other. */
+  .status-summary {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    column-gap: 2rem;
+    row-gap: 0.5rem;
+    margin: 1rem 0 1.5rem;
+    padding: 1.1rem 1.4rem;
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-card);
-    padding: 0.5rem 1rem;
-    min-width: 90px;
   }
-  .status-tile strong { display: block; font-size: 1.4rem; font-family: var(--font-mono); }
+  .status-summary-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    font-family: var(--font-ui);
+    font-size: 1rem;
+    color: var(--ink-soft);
+  }
+  .status-summary-item strong {
+    font-family: var(--font-mono);
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .status-summary-pending strong { color: var(--pending); }
+  .status-summary-approved strong { color: var(--good); }
+  .status-summary-rejected strong { color: var(--ink-soft); }
 
   .dashboard-chart {
     display: flex;
@@ -248,11 +292,20 @@
   .group-card h3 { margin: 0 0 0.4rem; font-family: var(--font-mono); font-size: 0.95rem; color: var(--ink); }
   .group-card .meta { color: var(--ink-soft); margin: 0 0 0.5rem; }
 
+  /* Chip/pill styling for every .badge -- real padding, a bit of
+     font-weight and letter-spacing, and a background/foreground color pair
+     drawn from the active theme's tokens (see badge-ai/badge-manual and
+     badge-status-* below), rather than one flat neutral color for
+     everything. */
   .badge {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
     font-family: var(--font-ui);
-    font-size: 0.72rem;
-    padding: 0.1rem 0.5rem;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1.3;
+    padding: 0.2rem 0.65rem;
     border-radius: 999px;
     background: var(--surface-2);
     border: 1px solid var(--line);
@@ -320,7 +373,16 @@
      implying any functional difference -- approve/reject/undo/bulk/
      keyboard all treat both identically. */
   .badge-ai { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-  .badge-manual { background: var(--surface-2); color: var(--ink-soft); }
+  .badge-manual { background: var(--surface-2); border-color: var(--line); color: var(--ink-soft); }
+
+  /* Per-status chip coloring for the dashboard's group status-count badges
+     (e.g. "approved: 3") -- drawn from the same soft/solid token pairs as
+     the status-summary headline above, so a status reads the same color
+     everywhere it appears. Falls back to the neutral .badge styling above
+     for any status this doesn't recognize. */
+  .badge-status-pending { background: var(--pending-soft); border-color: var(--pending); color: var(--pending); }
+  .badge-status-approved { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+  .badge-status-rejected { background: var(--surface-2); border-color: var(--line-strong); color: var(--ink-soft); }
 
   .entry-card.focused {
     border-color: var(--accent);
@@ -376,8 +438,24 @@
 </head>
 <body>
 <nav>
-  <a href="{{ url_for('ui.dashboard') }}">Dashboard</a>
-  <a href="{{ url_for('ui.queue_view') }}">Review Queue</a>
+  <!-- "Current page" indicator: request.endpoint (Flask injects `request`
+       into every template's context by default, no routes.py change
+       needed) tells us which of these two is the actual page being
+       viewed. Only Dashboard/Review Queue ever get .nav-link +
+       aria-current="page" -- the Plan: links below are one-shot actions
+       that redirect back to the dashboard, not pages you "are on", so they
+       deliberately never carry this treatment (and never show a stuck
+       active state after being clicked). -->
+  <a
+    href="{{ url_for('ui.dashboard') }}"
+    class="nav-link"
+    {% if request.endpoint == 'ui.dashboard' %}aria-current="page"{% endif %}
+  >Dashboard</a>
+  <a
+    href="{{ url_for('ui.queue_view') }}"
+    class="nav-link"
+    {% if request.endpoint == 'ui.queue_view' %}aria-current="page"{% endif %}
+  >Review Queue</a>
   <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a>
   <a
     href="{{ url_for('ui.plan_reclaim') }}"

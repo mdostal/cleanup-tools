@@ -66,9 +66,16 @@
 
   <div class="entry-body">
     <p>
+      <!-- No per-card status badge here on purpose: /queue (see routes.py's
+           queue_view -> _pending_entries()) only ever lists pending
+           entries, so "status: pending" repeated on every single card --
+           at real scale, potentially thousands of times -- is pure noise
+           that's 100% implied by the page's own premise (and by the
+           "N pending" count in the <h1> above). The AI-vs-manual source
+           badge below is kept, since unlike status it genuinely varies
+           per card. -->
       <strong>{{ entry.action }}</strong>
       &middot; {{ entry.group_key or "ungrouped" }}
-      &middot; status: {{ entry.status }}
       &middot;
       {% if is_ai_source(entry.source) %}
       <span class="badge badge-ai" title="Proposed by {{ entry.source }}">AI-proposed</span>

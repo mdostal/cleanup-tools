@@ -84,17 +84,53 @@
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
+  // Logical (CSS-pixel) side length of the chart -- kept separate from the
+  // canvas element's actual drawing-buffer resolution (see below) so the
+  // geometry math and the display size can each be reasoned about on their
+  // own terms.
+  var CHART_SIZE = 160;
+
   function drawDashboardChart() {
     var canvas = document.getElementById("dashboard-chart");
     if (!canvas || !canvas.getContext) {
       return;
     }
+
+    // A <canvas> has two independent sizes: the `width`/`height` HTML
+    // attributes (the actual drawing-buffer resolution) and the CSS
+    // width/height (the on-screen display size). Setting only one of them
+    // desyncs the two, which is exactly what produced the "wheel getting
+    // cut off" bug this function used to have (see below). Here, both are
+    // driven from the same `size`/`dpr` values every draw, so they can
+    // never disagree: the CSS size is fixed at CHART_SIZE regardless of
+    // display density, and the backing buffer is scaled up by
+    // devicePixelRatio for crisp rendering on retina/high-DPI screens.
+    var size = CHART_SIZE;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.style.width = size + "px";
+    canvas.style.height = size + "px";
+    canvas.width = Math.round(size * dpr);
+    canvas.height = Math.round(size * dpr);
+
     var ctx = canvas.getContext("2d");
-    var size = canvas.width;
+    // All drawing below is expressed in CSS-pixel coordinates (0..size);
+    // this transform maps that 1:1 onto the (possibly larger) backing
+    // buffer instead of every coordinate needing its own *dpr.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
     var cx = size / 2;
     var cy = size / 2;
-    var radius = size / 2 - 10;
-    var thickness = Math.max(10, radius * 0.34);
+    // The stroke is centered ON the arc path, so its OUTER edge sits at
+    // `radius + thickness / 2` -- previously this could exceed the
+    // canvas's half-size (e.g. radius 80 + thickness/2 13.6 = 93.6, inside
+    // a 180x180 canvas whose usable half-size was only 90), clipping the
+    // ring flat against the canvas edge. `maxOuterRadius` is the hard cap
+    // on that outer edge, and `radius` is solved backwards from it so the
+    // full ring -- including its outer edge -- always stays within bounds.
+    var padding = 12;
+    var maxOuterRadius = size / 2 - padding;
+    var thickness = Math.max(10, maxOuterRadius * 0.34);
+    var radius = maxOuterRadius - thickness / 2;
 
     ctx.clearRect(0, 0, size, size);
 
