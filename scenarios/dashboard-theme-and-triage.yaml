@@ -1,0 +1,77 @@
+# Simulated-manual validation pass for the desktop UI polish work (3-theme
+# system + chart clipping fix + badge polish + nav active-state + pending-noise
+# fix). Run against an isolated fixture server, never the real approval queue.
+#
+# Run:  simman run scenarios/dashboard-theme-and-triage.yaml --base-url http://127.0.0.1:5960
+
+id: dashboard-theme-and-triage
+baseUrl: http://127.0.0.1:5960
+
+steps:
+  - action: Open the dashboard
+    expected: The overview page loads with a status summary and a group breakdown
+    do: { goto: "/" }
+
+  - action: Look at the space-usage chart
+    expected: A complete, fully-drawn ring/donut chart is visible, with no flat-cut or clipped edge anywhere on its circumference
+    do: { vision: "the donut/ring chart showing disk usage by group" }
+
+  - action: Check the current-page indicator
+    expected: The "Dashboard" nav link is visually highlighted as the active page, distinct from the other nav links
+    do: { vision: "the Dashboard nav link shown as the active/current page" }
+
+  - action: Open the theme dropdown
+    expected: The theme selector opens, showing Ledger/Sonar/Tide options
+    do: { tapRole: { role: "combobox", name: "Color theme" } }
+
+  - action: Choose the Sonar theme
+    expected: The page immediately re-skins to a dark background with a cyan/teal accent color
+    do: { tapText: "Sonar" }
+
+  - action: Confirm the Sonar theme is genuinely applied
+    expected: The page background is near-black and headings/UI text lean monospace, with visible cyan accent color on active elements
+    do: { vision: "a dark, near-black page background with a cyan-teal accent color" }
+
+  - action: Reload the page
+    expected: The Sonar theme is still active after reload -- no flash of a different theme, and the choice persisted
+    do: { goto: "/" }
+
+  - action: Confirm the theme persisted across reload
+    expected: The page is still dark/Sonar-themed immediately after reload
+    do: { vision: "a dark, near-black page background, confirming the theme choice survived the reload" }
+
+  - action: Open the theme dropdown again
+    expected: The theme selector opens, currently showing Sonar as selected
+    do: { tapRole: { role: "combobox", name: "Color theme" } }
+
+  - action: Choose the Tide theme
+    expected: The page re-skins to a light, cool sage-green background with rounded UI elements
+    do: { tapText: "Tide" }
+
+  - action: Confirm Tide is genuinely applied
+    expected: The page shows a light cool-green/sage background with generously rounded cards and buttons
+    do: { vision: "a light, cool sage-green page background with rounded, soft-shadowed cards" }
+
+  - action: Navigate to the Review Queue
+    expected: The queue page loads and the "Review Queue" nav link becomes the active indicator instead of Dashboard
+    do: { tapText: "Review Queue" }
+
+  - action: Confirm Review Queue is now the active nav page
+    expected: The "Review Queue" nav link is highlighted as active; "Dashboard" is no longer highlighted
+    do: { vision: "the Review Queue nav link shown as the active/current page, not Dashboard" }
+
+  - action: Look at the entry cards
+    expected: Status/source badges render as distinct, colored pill/chip shapes -- not flat undifferentiated grey text
+    do: { vision: "colored pill-shaped badges on the queue entry cards, such as an AI-proposed badge and a bucket/group badge" }
+
+  - action: Approve one pending entry
+    expected: The entry's approve action fires and its status changes server-side
+    do: { tapRole: { role: "button", name: "^Approve$" } }
+    truth:
+      kind: network
+      match: /approve
+      method: POST
+
+  - action: Confirm the approved entry no longer appears in the pending list
+    expected: The queue view no longer shows that entry, since /queue only lists pending entries
+    do: { vision: "the review queue list, now with one fewer pending card than before" }
