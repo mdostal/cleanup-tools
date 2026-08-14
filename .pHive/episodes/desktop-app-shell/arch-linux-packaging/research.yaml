@@ -1,0 +1,10 @@
+step_id: research
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Research via research-brief.md §4 (AUR-vs-local-only, build-from-source-vs-prebuilt
+  already answered) plus current Tauri v2 AUR guide and Arch Wiki PKGBUILD conventions
+  (fetched via GitHub raw source and man.archlinux.org after the live pages blocked
+  WebFetch with a bot-check). Read tauri-shell-macos's finished tauri.conf.json/
+  capabilities/default.json to confirm what needs an Arch-specific override.
+artifacts: []

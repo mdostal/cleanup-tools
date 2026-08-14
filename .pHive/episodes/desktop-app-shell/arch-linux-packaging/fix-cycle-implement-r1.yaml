@@ -1,0 +1,17 @@
+step_id: fix-cycle-implement
+round: 1
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Added src-tauri/binaries/cleanup-ui-sidecar-stub-linux.sh and its per-target-triple
+  copy cleanup-ui-sidecar-x86_64-unknown-linux-gnu. macOS files verified byte-for-byte
+  unchanged. Added fail-fast prerequisite checks to the PKGBUILD's build() with specific
+  error messages. Updated the known-gap language across PKGBUILD/README/CONTEXT.md to be
+  precise about exactly what's closed (stub portability) vs. what remains (the Linux
+  binary itself). 7/7 cargo tests, 437/437 python tests unaffected.
+artifacts:
+  - src-tauri/binaries/cleanup-ui-sidecar-stub-linux.sh
+  - src-tauri/binaries/cleanup-ui-sidecar-x86_64-unknown-linux-gnu
+  - packaging/arch/PKGBUILD
+  - README.md
+  - .pHive/CONTEXT.md

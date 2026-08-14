@@ -1,0 +1,15 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-13"
+notes: >
+  Wrote packaging/arch/PKGBUILD (local-only, build-from-source, all required fields,
+  full 9-package Tauri Linux depends list not the 3-item shortlist, options=('!strip')).
+  Added an additive bundle.linux.deb.depends block to tauri.conf.json. Reused
+  tauri-shell-macos's process-lifecycle Rust code entirely unchanged -- confirmed via
+  code review it's genuinely platform-agnostic. Explicitly did not claim or imply
+  makepkg -si was run anywhere. Found (not silently fixed) that the macOS sidecar stub
+  script hardcodes .app-bundle paths with no Linux equivalent -- flagged as a real
+  prerequisite gap.
+artifacts:
+  - packaging/arch/PKGBUILD
+  - src-tauri/tauri.conf.json
