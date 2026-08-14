@@ -76,7 +76,15 @@ then lands back on the dashboard with the same "Staged N entries" result the old
 version showed. The manual (no-AI) approvals UI is now **complete and usable at real scale**:
 `/queue` paginates (`?page=`/`?per_page=`), bulk-approve/bulk-reject act on an entire group_key
 (or an explicit id list) in one click, and keyboard shortcuts (`y`/`n`/`space`/arrow keys) let you
-triage a large plan fast without reaching for the mouse each time.
+triage a large plan fast without reaching for the mouse each time. The dashboard also shows a
+small canvas-drawn chart of storage used per group, built from the same data the group cards
+render from.
+
+The UI now supports **three runtime-switchable visual themes** — Ledger (warm/light, serif
+headings), Sonar (dark, monospace-forward), and Tide (cool/light, rounded) — chosen from a
+"Theme" control in the nav on every page. The choice is saved in the browser's `localStorage`
+(no server-side state, no account), so it persists across page navigations and browser restarts,
+and is applied before first paint (no flash of the wrong theme on load).
 
 An AI-provider layer (`src/cleanup_tools/ai/`) now exists — an Anthropic implementation of a
 narrow "given a filename, propose a bucket" interface. Set `ANTHROPIC_API_KEY` in your

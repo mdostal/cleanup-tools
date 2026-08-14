@@ -19,7 +19,24 @@
   {% endfor %}
 </div>
 
-<h2>Groups <span style="font-weight:normal; color:#888;">({{ total_entries }} total entries)</span></h2>
+{% if groups %}
+<div class="dashboard-chart">
+  <canvas id="dashboard-chart" width="180" height="180" role="img" aria-label="Storage used per group"></canvas>
+  <div id="dashboard-chart-legend" class="dashboard-chart-legend"></div>
+</div>
+<!-- Real data for the canvas chart above, drawn by static/theme.js
+     (drawDashboardChart). Built from the same `groups` the cards below
+     render from, so the chart and the group list can never disagree. -->
+<script id="dashboard-chart-data" type="application/json">
+[
+{%- for g in groups %}
+{"label": {{ g.group_key | tojson }}, "value": {{ g.total_size | tojson }}}{{ "," if not loop.last }}
+{%- endfor %}
+]
+</script>
+{% endif %}
+
+<h2>Groups <span style="font-weight:normal; color:var(--ink-soft);">({{ total_entries }} total entries)</span></h2>
 <div class="group-grid">
   {% for g in groups %}
   <div class="group-card">
