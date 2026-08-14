@@ -118,6 +118,26 @@
   h2 { font-size: 1.5rem; margin: 0 0 0.4rem; letter-spacing: -0.01em; }
   .section-sub { color: var(--text-muted); margin: 0 0 2rem; max-width: 40rem; }
 
+  /* ---------- workflow ---------- */
+  .workflow-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1.1rem; }
+  .workflow-step {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.3rem 1.3rem 1.2rem; box-shadow: var(--shadow); position: relative;
+  }
+  .workflow-num {
+    font-family: var(--mono); font-size: 0.78rem; color: var(--accent); letter-spacing: 0.04em;
+    display: block; margin-bottom: 0.5rem;
+  }
+  .workflow-step h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+  .workflow-step p { margin: 0 0 0.85rem; color: var(--text-muted); font-size: 0.88rem; }
+  .workflow-step code {
+    display: block; font-size: 0.78rem; background: var(--surface-raised); border: 1px solid var(--border);
+    border-radius: 7px; padding: 0.45rem 0.6rem; color: var(--text); overflow-x: auto;
+  }
+  @media (min-width: 900px) {
+    .workflow-steps { grid-template-columns: repeat(4, 1fr); }
+  }
+
   /* ---------- tool grid ---------- */
   .tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
   .tool-card {
@@ -198,6 +218,7 @@
   <div class="wrap">
     <a class="brand" href="#top"><img src="favicon.png" alt=""> cleanup-tools</a>
     <ul>
+      <li><a class="navlink" href="#workflow">How it works</a></li>
       <li><a class="navlink" href="#tools">Tools</a></li>
       <li><a class="navlink" href="#app">Desktop app</a></li>
       <li><a class="navlink" href="#principles">Principles</a></li>
@@ -214,12 +235,15 @@
     <p class="lede">
       Open-source utilities I build, use, and wire into <strong>Pantheon</strong> — an agent layer
       that can pull any of them in. If they're useful and folks want more, I'll keep shipping them.
-      This one reclaims disk space on a cluttered Mac, dry-run first, and — as a side effect of the
-      same file-finder — <strong>locates a lost crypto wallet</strong>.
+      This one <strong>cleans</strong> the junk off a cluttered Mac, <strong>organizes</strong> what's
+      left into sane buckets, gives you a real queue to <strong>sort</strong> through and decide on,
+      then — only if you want it — brings in <strong>AI to propose a bucket for what's left over</strong>
+      and stages that back into the same queue to review. Dry-run first, always. As a side effect of
+      the same file-finder, it also <strong>locates a lost crypto wallet</strong>.
     </p>
     <div class="cta-row">
       <a class="btn primary" href="https://github.com/mdostal/cleanup-tools">View on GitHub</a>
-      <a class="btn ghost" href="#tools">Browse the tools ↓</a>
+      <a class="btn ghost" href="#workflow">See how it works ↓</a>
     </div>
     <div class="install">
       <div class="cmd"><span class="prompt">$ </span>pip install -e . <span class="prompt">&amp;&amp;</span> cleanup survey</div>
@@ -227,6 +251,42 @@
     </div>
   </div>
 </header>
+
+<section id="workflow">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="section-sub">
+      Four steps, each one a real command, each one previewed before it acts. Stop after any of
+      them — the AI step is entirely optional and off unless you ask for it.
+    </p>
+    <div class="workflow-steps">
+      <div class="workflow-step">
+        <span class="workflow-num">01</span>
+        <h3>Clean</h3>
+        <p>Reclaim the junk that costs disk, not memories — <code>node_modules</code>, build caches, Docker layers, OS cruft. Instant GB back, dry-run first.</p>
+        <code>cleanup reclaim --go</code>
+      </div>
+      <div class="workflow-step">
+        <span class="workflow-num">02</span>
+        <h3>Organize</h3>
+        <p>Bucket what's left by type — screenshots, installers, pdfs, photos, videos, archives, docs — so a wall of loose files becomes a handful of folders.</p>
+        <code>cleanup sort --go</code>
+      </div>
+      <div class="workflow-step">
+        <span class="workflow-num">03</span>
+        <h3>Sort &amp; review</h3>
+        <p>Everything staged above lands in a queue, not straight in the trash. Triage it — approve, reject, or undo, one at a time or in bulk — before anything runs.</p>
+        <code>cleanup approve</code>
+      </div>
+      <div class="workflow-step">
+        <span class="workflow-num">04</span>
+        <h3>AI-assisted resort</h3>
+        <p>Whatever's still ambiguous after step 2 can go through an optional AI pass — filename only, never file contents — which proposes a bucket and stages it back into the <em>same</em> review queue from step 3. You still approve every move.</p>
+        <code>cleanup propose-ai</code>
+      </div>
+    </div>
+  </div>
+</section>
 
 <section id="tools">
   <div class="wrap">
