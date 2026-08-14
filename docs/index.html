@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cleanup-tools — small, sharp tools for a cluttered Mac</title>
+<meta name="description" content="Free, open-source, dry-run-first tools to survey, sort, and reclaim disk space on a cluttered Mac — plus a leak-proof crypto wallet finder. From Mathew Dostal.">
+<link rel="icon" type="image/png" href="favicon.png">
+<meta property="og:title" content="cleanup-tools">
+<meta property="og:description" content="Small, sharp tools. Free and open. Reclaim disk on macOS with dry-run-first cleanup scripts.">
+<meta property="og:image" content="og-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d11;
+    --surface: #12151b;
+    --surface-raised: #171b22;
+    --border: #262b34;
+    --text: #e7e9ee;
+    --text-muted: #939aab;
+    --accent: #3fe0c5;
+    --accent-dim: #1f4e47;
+    --warm: #eab058;
+    --danger: #e2685a;
+    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 12px 32px rgba(0,0,0,0.35);
+    --radius: 14px;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f4ee;
+      --surface: #ffffff;
+      --surface-raised: #fdfcf9;
+      --border: #e4e0d4;
+      --text: #1d1b17;
+      --text-muted: #6d6a61;
+      --accent: #0f8f7c;
+      --accent-dim: #d6efe9;
+      --warm: #b3691f;
+      --danger: #b3392c;
+      --shadow: 0 1px 2px rgba(29,27,23,0.05), 0 12px 32px rgba(29,27,23,0.08);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  code, .mono { font-family: var(--mono); }
+
+  .wrap { max-width: 60rem; margin: 0 auto; padding: 0 1.5rem; }
+
+  /* ---------- nav ---------- */
+  nav.top {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.top .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 0.85rem; padding-bottom: 0.85rem; max-width: 64rem; }
+  .brand { display: flex; align-items: center; gap: 0.55rem; font-family: var(--mono); font-weight: 700; font-size: 1rem; color: var(--text); text-decoration: none; }
+  .brand img { width: 26px; height: 26px; border-radius: 7px; }
+  nav.top ul { list-style: none; display: flex; gap: 1.4rem; margin: 0; padding: 0; font-size: 0.88rem; }
+  nav.top a.navlink { color: var(--text-muted); text-decoration: none; }
+  nav.top a.navlink:hover { color: var(--text); }
+
+  /* ---------- hero ---------- */
+  header.hero { padding: 4.5rem 0 3rem; max-width: 64rem; margin: 0 auto; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 1rem; display: flex; align-items: center; gap: 0.5rem;
+  }
+  .eyebrow::before { content: "$"; opacity: 0.6; }
+  h1 { font-size: clamp(2.1rem, 5vw, 3.1rem); line-height: 1.08; margin: 0 0 1.1rem; text-wrap: balance; letter-spacing: -0.015em; font-weight: 700; }
+  h1 .accent { color: var(--accent); }
+  .lede { color: var(--text-muted); font-size: 1.12rem; max-width: 38rem; margin: 0 0 2rem; }
+  .lede strong { color: var(--text); }
+
+  .cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 2.75rem; }
+  .btn {
+    font-family: var(--sans); font-weight: 600; font-size: 0.92rem; text-decoration: none;
+    padding: 0.7rem 1.15rem; border-radius: 10px; display: inline-flex; align-items: center; gap: 0.5rem;
+    border: 1px solid transparent; transition: transform 0.12s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn.primary { background: var(--accent); color: #06201b; }
+  .btn.ghost { background: var(--surface); color: var(--text); border-color: var(--border); }
+
+  .install {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1rem 1.15rem; font-family: var(--mono); font-size: 0.88rem; color: var(--text);
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem; max-width: 34rem;
+    box-shadow: var(--shadow);
+  }
+  .install .cmd { overflow-x: auto; white-space: pre; }
+  .install .cmd .prompt { color: var(--text-muted); }
+  .copy-btn {
+    font-family: var(--sans); font-size: 0.78rem; font-weight: 600; color: var(--text-muted);
+    background: transparent; border: 1px solid var(--border); border-radius: 7px; padding: 0.35rem 0.6rem;
+    cursor: pointer; flex-shrink: 0;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--text-muted); }
+
+  /* ---------- sections ---------- */
+  section { padding: 3.25rem 0; border-top: 1px solid var(--border); }
+  section .wrap { max-width: 64rem; }
+  h2 { font-size: 1.5rem; margin: 0 0 0.4rem; letter-spacing: -0.01em; }
+  .section-sub { color: var(--text-muted); margin: 0 0 2rem; max-width: 40rem; }
+
+  /* ---------- tool grid ---------- */
+  .tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+  .tool-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.25rem 1.3rem; box-shadow: var(--shadow);
+  }
+  .tool-card .badge {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.03em; color: var(--accent);
+    background: var(--accent-dim); display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px;
+    margin-bottom: 0.7rem;
+  }
+  .tool-card .badge.destructive { color: var(--danger); background: color-mix(in srgb, var(--danger) 18%, transparent); }
+  .tool-card h3 { margin: 0 0 0.4rem; font-size: 1.02rem; }
+  .tool-card p { margin: 0 0 0.85rem; color: var(--text-muted); font-size: 0.9rem; }
+  .tool-card code {
+    display: block; font-size: 0.8rem; background: var(--surface-raised); border: 1px solid var(--border);
+    border-radius: 7px; padding: 0.5rem 0.65rem; color: var(--text); overflow-x: auto;
+  }
+
+  /* ---------- app ---------- */
+  .app-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 2.5rem; align-items: center; }
+  @media (max-width: 720px) { .app-grid { grid-template-columns: 1fr; } }
+  .app-copy ul { list-style: none; margin: 1.2rem 0 0; padding: 0; display: grid; gap: 0.7rem; }
+  .app-copy li { display: flex; gap: 0.6rem; font-size: 0.94rem; color: var(--text-muted); }
+  .app-copy li::before { content: "→"; color: var(--accent); flex-shrink: 0; }
+  .app-copy li strong { color: var(--text); }
+  .theme-dots { display: flex; gap: 0.5rem; margin-top: 1.3rem; }
+  .theme-dot { display: flex; align-items: center; gap: 0.4rem; font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
+  .swatch { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border); }
+
+  .mock {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .mock-bar { display: flex; gap: 0.4rem; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--border); }
+  .mock-bar span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
+  .mock-body { padding: 1.1rem 1.1rem 1.3rem; }
+  .mock-stat-row { display: flex; gap: 0.6rem; margin-bottom: 1rem; }
+  .mock-stat { flex: 1; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 9px; padding: 0.55rem 0.7rem; }
+  .mock-stat b { display: block; font-size: 1.15rem; font-family: var(--mono); }
+  .mock-stat span { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .mock-row { display: flex; align-items: center; justify-content: space-between; padding: 0.55rem 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; }
+  .mock-row:last-child { border-bottom: none; }
+  .mock-pill { font-family: var(--mono); font-size: 0.68rem; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--accent-dim); color: var(--accent); }
+
+  /* ---------- principles ---------- */
+  .principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.1rem; }
+  .principle { padding-left: 1rem; border-left: 2px solid var(--accent); }
+  .principle h4 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+  .principle p { margin: 0; color: var(--text-muted); font-size: 0.86rem; }
+
+  /* ---------- support ---------- */
+  .support-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1rem; }
+  .support-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.1rem 1.2rem; text-decoration: none; color: var(--text); box-shadow: var(--shadow);
+    display: block; transition: border-color 0.12s ease;
+  }
+  .support-card:hover { border-color: var(--accent); }
+  .support-card .label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); font-family: var(--mono); margin-bottom: 0.4rem; }
+  .support-card .title { font-weight: 600; font-size: 0.98rem; margin-bottom: 0.25rem; }
+  .support-card .desc { font-size: 0.84rem; color: var(--text-muted); }
+
+  footer { padding: 2.5rem 0 3.5rem; border-top: 1px solid var(--border); }
+  footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; align-items: center; max-width: 64rem; }
+  footer p { margin: 0; color: var(--text-muted); font-size: 0.85rem; }
+  footer .tagline { font-family: var(--mono); font-style: italic; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .btn, .support-card { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="favicon.png" alt=""> cleanup-tools</a>
+    <ul>
+      <li><a class="navlink" href="#tools">Tools</a></li>
+      <li><a class="navlink" href="#app">Desktop app</a></li>
+      <li><a class="navlink" href="#principles">Principles</a></li>
+      <li><a class="navlink" href="#support">Support</a></li>
+      <li><a class="navlink" href="https://github.com/mdostal/cleanup-tools">GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <p class="eyebrow">cleanup-tools · macOS · free &amp; open source</p>
+    <h1>Small, sharp tools.<br><span class="accent">Free and open.</span></h1>
+    <p class="lede">
+      Open-source utilities I build, use, and wire into <strong>Pantheon</strong> — an agent layer
+      that can pull any of them in. If they're useful and folks want more, I'll keep shipping them.
+      This one reclaims disk space on a cluttered Mac, dry-run first, and — as a side effect of the
+      same file-finder — <strong>locates a lost crypto wallet</strong>.
+    </p>
+    <div class="cta-row">
+      <a class="btn primary" href="https://github.com/mdostal/cleanup-tools">View on GitHub</a>
+      <a class="btn ghost" href="#tools">Browse the tools ↓</a>
+    </div>
+    <div class="install">
+      <div class="cmd"><span class="prompt">$ </span>pip install -e . <span class="prompt">&amp;&amp;</span> cleanup survey</div>
+      <button class="copy-btn" data-copy="pip install -e . && cleanup survey" onclick="copyInstall(this)">Copy</button>
+    </div>
+  </div>
+</header>
+
+<section id="tools">
+  <div class="wrap">
+    <h2>Browse the tools</h2>
+    <p class="section-sub">
+      One CLI, several sharp commands — each does one job, previews before it acts, and stages
+      anything destructive into a review queue rather than touching your files blind.
+    </p>
+    <div class="tools">
+      <article class="tool-card">
+        <span class="badge">read-only</span>
+        <h3>survey</h3>
+        <p>The read-only snapshot: disk usage, top-level dir sizes, node_modules total, Downloads type histogram, screenshot count. Always the first step.</p>
+        <code>cleanup survey</code>
+      </article>
+      <article class="tool-card">
+        <span class="badge">dry-run default</span>
+        <h3>sort</h3>
+        <p>Buckets Downloads by type — screenshots, installers, pdfs, photos, videos, archives, docs — into <code>_sorted/</code>. Non-destructive: moves within the same folder.</p>
+        <code>cleanup sort --go</code>
+      </article>
+      <article class="tool-card">
+        <span class="badge destructive">dry-run default</span>
+        <h3>reclaim</h3>
+        <p>Deletes regenerable junk — node_modules, build caches, Docker layers, OS cruft. Refuses to touch any configured master path until it's marked backed up.</p>
+        <code>cleanup reclaim --go</code>
+      </article>
+      <article class="tool-card">
+        <span class="badge">read-only</span>
+        <h3>find-wallets</h3>
+        <p>Scans for crypto-wallet artifacts by filename and content signature. Prints <em>paths and match type only</em> — matched secret content never appears in output, by construction.</p>
+        <code>cleanup find-wallets</code>
+      </article>
+      <article class="tool-card">
+        <span class="badge">read-only</span>
+        <h3>dedupe</h3>
+        <p>Finds duplicate files via a two-stage size-then-hash filter, full uncapped SHA-256. Lists candidates for you to remove — never deletes on its own.</p>
+        <code>cleanup dedupe ~/Downloads</code>
+      </article>
+      <article class="tool-card">
+        <span class="badge">move-only</span>
+        <h3>corral-screenshots</h3>
+        <p>Sweeps every screenshot into <code>~/Pictures/Screenshots</code> and, optionally, stops new ones from landing on the Desktop at all.</p>
+        <code>cleanup corral-screenshots --go</code>
+      </article>
+      <article class="tool-card">
+        <span class="badge">review UI</span>
+        <h3>approve</h3>
+        <p>A small localhost-only review UI — a dashboard, a triage queue with keyboard shortcuts, and approve/reject/undo — for everything staged above before it runs.</p>
+        <code>cleanup approve</code>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="app">
+  <div class="wrap app-grid">
+    <div class="app-copy">
+      <h2>A real desktop app, not just a CLI</h2>
+      <p class="section-sub" style="margin-bottom:0;">
+        The same review UI, packaged as a native macOS app (Tauri) — for when you'd rather click
+        through a queue than pipe a terminal.
+      </p>
+      <ul>
+        <li><strong>Kickoff bar</strong> — pick which plans to run, launch them all as background jobs at once, watch live progress.</li>
+        <li><strong>Bulk triage</strong> — pagination, bulk approve/reject by group, keyboard shortcuts (y/n/space/arrows).</li>
+        <li><strong>Optional AI proposals</strong> — narrow, filename-only, opt-in per run. Never reads file contents. Off by default.</li>
+        <li><strong>Three runtime themes</strong> — pick a look and it sticks, no account, no server state.</li>
+      </ul>
+      <div class="theme-dots">
+        <span class="theme-dot"><span class="swatch" style="background:#e8dcc4"></span>Ledger</span>
+        <span class="theme-dot"><span class="swatch" style="background:#0e1116"></span>Sonar</span>
+        <span class="theme-dot"><span class="swatch" style="background:#dceadf"></span>Tide</span>
+      </div>
+    </div>
+    <div class="mock" aria-hidden="true">
+      <div class="mock-bar"><span></span><span></span><span></span></div>
+      <div class="mock-body">
+        <div class="mock-stat-row">
+          <div class="mock-stat"><b>1,309</b><span>Pending</span></div>
+          <div class="mock-stat"><b>212</b><span>Approved</span></div>
+          <div class="mock-stat"><b>41.2 GB</b><span>Reclaimable</span></div>
+        </div>
+        <div class="mock-row"><span>build-cache · node_modules</span><span class="mock-pill">pending</span></div>
+        <div class="mock-row"><span>screenshots · 2026-08</span><span class="mock-pill">pending</span></div>
+        <div class="mock-row"><span>installers · orphaned .dmg</span><span class="mock-pill">pending</span></div>
+        <div class="mock-row"><span>docs · house-sale.pdf</span><span class="mock-pill">ai-proposed</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="principles">
+  <div class="wrap">
+    <h2>How it stays safe</h2>
+    <p class="section-sub">This tool touches real, irreplaceable files. The rules aren't a style choice.</p>
+    <div class="principles">
+      <div class="principle">
+        <h4>Sort is reversible; delete is not</h4>
+        <p>Every destructive command defaults to dry-run. You pass <code class="mono">--go</code> to actually act.</p>
+      </div>
+      <div class="principle">
+        <h4>Masters are protected in code</h4>
+        <p>Configured master paths are refused from deletion until explicitly marked backed up — enforced, not just remembered.</p>
+      </div>
+      <div class="principle">
+        <h4>Regenerable ≠ precious</h4>
+        <p><code class="mono">node_modules</code>, build caches, and Docker layers delete freely — they cost time, not memories.</p>
+      </div>
+      <div class="principle">
+        <h4>Uncertain files never get trashed blind</h4>
+        <p>Anything unclear lands in a review queue for a human decision, not a bucket, not the trash.</p>
+      </div>
+      <div class="principle">
+        <h4>Local-first, no telemetry</h4>
+        <p>No network calls except the one you explicitly opt into (AI bucket proposals) — filenames only, never file contents.</p>
+      </div>
+      <div class="principle">
+        <h4>Wallet scanning never leaks secrets</h4>
+        <p>Paths and match type only. The matched content is never bound to anything that outlives its own check — structurally, not by convention.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="support">
+  <div class="wrap">
+    <h2>Support / work with me</h2>
+    <p class="section-sub">Free and open, always. A few ways to help — or just say hi.</p>
+    <div class="support-grid">
+      <a class="support-card" href="https://mdostal.com/contact">
+        <div class="label">Hire me</div>
+        <div class="title">Fractional CTO &amp; consulting</div>
+        <div class="desc">Fixing and scaling tech stacks → mdostal.com/contact</div>
+      </a>
+      <a class="support-card" href="https://www.buymeacoffee.com/mdostal">
+        <div class="label">Chip in</div>
+        <div class="title">Buy me a coffee</div>
+        <div class="desc">If a tool like this saved you time → buymeacoffee.com/mdostal</div>
+      </a>
+      <a class="support-card" href="https://life.mdostal.com">
+        <div class="label">Elsewhere</div>
+        <div class="title">Life outside the terminal</div>
+        <div class="desc">life.mdostal.com</div>
+      </a>
+      <a class="support-card" href="https://ff.events">
+        <div class="label">The day job</div>
+        <div class="title">Firefly Events</div>
+        <div class="desc">Event discovery, 8,000+ events/day → ff.events</div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Built by <a href="https://mdostal.com">Mathew Dostal</a> — fractional CTO, Dostal Technology.</p>
+    <p class="tagline">Specialization is for insects.</p>
+  </div>
+</footer>
+
+<script>
+  function copyInstall(btn) {
+    var text = btn.getAttribute('data-copy');
+    navigator.clipboard.writeText(text).then(function () {
+      var original = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = original; }, 1400);
+    });
+  }
+</script>
+
+</body>
+</html>
