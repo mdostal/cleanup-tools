@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cleanup Tools</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+          sans-serif;
+        background: #1e1e1e;
+        color: #eaeaea;
+      }
+      .panel {
+        text-align: center;
+        max-width: 420px;
+        padding: 2rem;
+      }
+      .spinner {
+        width: 36px;
+        height: 36px;
+        margin: 0 auto 1.25rem;
+        border-radius: 50%;
+        border: 3px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #eaeaea;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      h1 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin: 0 0 0.4rem;
+      }
+      p {
+        font-size: 0.9rem;
+        opacity: 0.75;
+        margin: 0;
+        line-height: 1.4;
+      }
+      #error {
+        display: none;
+      }
+      #error h1 {
+        color: #ff6b6b;
+      }
+      .error-icon {
+        font-size: 2rem;
+        margin-bottom: 0.75rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel" id="loading">
+      <div class="spinner"></div>
+      <h1>Starting Cleanup Tools&hellip;</h1>
+      <p id="status-detail">Waiting for the local service to come up.</p>
+    </div>
+    <div class="panel" id="error">
+      <div class="error-icon">&#9888;&#65039;</div>
+      <h1 id="error-title">Cleanup Tools failed to start</h1>
+      <p id="error-detail"></p>
+    </div>
+
+    <script>
+      (function () {
+        // Contract: this page is bundled with the Tauri app (NOT served by
+        // the Flask sidecar) and is the window's very first contents, shown
+        // before the sidecar process has necessarily even been spawned. It
+        // is responsible for polling the sidecar's cheap /healthz route
+        // (see src/cleanup_tools/ui/routes.py) and, once healthy, handing
+        // the window off to the real Flask UI by navigating the webview
+        // there directly -- at that point this page is gone and Tauri's
+        // Rust side is the only thing left able to detect a later crash
+        // (see main.rs's CommandEvent::Terminated handling, which reloads
+        // this exact page with ?error=exited rather than relying on any JS
+        // still running in a page it can no longer talk to).
+        var HOST = "127.0.0.1";
+        var PORT = 5151;
+        var HEALTHZ_URL = "http://" + HOST + ":" + PORT + "/healthz";
+        var APP_URL = "http://" + HOST + ":" + PORT + "/";
+        var POLL_INTERVAL_MS = 400;
+        var TIMEOUT_MS = 20000;
+
+        var loadingEl = document.getElementById("loading");
+        var errorEl = document.getElementById("error");
+        var errorTitleEl = document.getElementById("error-title");
+        var errorDetailEl = document.getElementById("error-detail");
+
+        function showError(title, detail) {
+          loadingEl.style.display = "none";
+          errorEl.style.display = "block";
+          if (title) errorTitleEl.textContent = title;
+          errorDetailEl.textContent = detail || "";
+        }
+
+        // Contract with main.rs's `navigate_to_error`: it force-navigates
+        // the webview to `tauri://localhost/loading.html?error=<reason>`
+        // (bypassing this page's own JS entirely, since by the time a
+        // crash can happen the webview has almost certainly already left
+        // this page for the Flask origin -- see that function's doc
+        // comment for why it's a Rust-driven `navigate()` rather than an
+        // event this page would have to still be around to listen for).
+        // `reason` is either "exited" (the sidecar process died while the
+        // app was open) or "spawn_failed" (we never managed to start it in
+        // the first place). Both are genuine, distinct error states -- show
+        // them immediately rather than falling through to the poll loop
+        // below and only discovering the same thing 20s later.
+        var params = new URLSearchParams(window.location.search);
+        var errorReason = params.get("error");
+        if (errorReason === "exited") {
+          showError(
+            "Cleanup Tools stopped unexpectedly",
+            "The background service exited while the app was running. " +
+              "Quit and relaunch Cleanup Tools to try again.",
+          );
+          return;
+        }
+        if (errorReason === "spawn_failed") {
+          showError(
+            "Cleanup Tools could not start",
+            "The background service failed to launch. Quit and relaunch " +
+              "Cleanup Tools to try again.",
+          );
+          return;
+        }
+
+        var startedAt = Date.now();
+
+        function poll() {
+          if (Date.now() - startedAt > TIMEOUT_MS) {
+            showError(
+              "Cleanup Tools is taking too long to start",
+              "Waited " +
+                Math.round(TIMEOUT_MS / 1000) +
+                "s for the local service to respond. Quit and relaunch to " +
+                "try again.",
+            );
+            return;
+          }
+
+          // mode: "no-cors" is deliberate, not an oversight: this page is
+          // served from the tauri://localhost origin, and Flask (see
+          // src/cleanup_tools/ui/routes.py's healthz()) sends no
+          // Access-Control-Allow-Origin header -- a normal cross-origin
+          // "cors" mode fetch would have its promise reject/its response
+          // be unreadable every single time regardless of whether the
+          // server is actually healthy, which would make this loop always
+          // time out even against a perfectly healthy sidecar. In
+          // "no-cors" mode the response is opaque (status/body unreadable
+          // from here), but the promise only resolves if the request
+          // actually round-tripped successfully -- connection-refused
+          // (sidecar not listening yet) still rejects it. Good enough for
+          // this one specific, known-shape endpoint, which never returns
+          // anything but a bare 200.
+          fetch(HEALTHZ_URL, { cache: "no-store", mode: "no-cors" })
+            .then(function () {
+              window.location.replace(APP_URL);
+            })
+            .catch(function () {
+              // Connection refused / not listening yet -- expected while
+              // the sidecar is still starting. Keep polling.
+              window.setTimeout(poll, POLL_INTERVAL_MS);
+            });
+        }
+
+        poll();
+      })();
+    </script>
+  </body>
+</html>
