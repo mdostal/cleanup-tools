@@ -22,7 +22,7 @@
  *      have that canvas (i.e. every page except the dashboard).
  *
  * Deliberately vanilla JS with no build step or dependency, consistent
- * with keyboard.js and plan-reclaim.js.
+ * with keyboard.js and plan-trigger.js.
  */
 (function () {
   "use strict";

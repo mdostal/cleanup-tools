@@ -10,6 +10,57 @@
 <div class="flash error"><strong>Could not plan:</strong> {{ plan_error }}</div>
 {% endif %}
 
+<!-- Kickoff bar: pick any combination of Sort / Reclaim / Corral
+     Screenshots and launch them all as background jobs at once (see
+     static/plan-trigger.js's initKickoffBar) -- each fires its own
+     /plan/<kind> request in parallel and tracks its own /status/<job_id>
+     poll independently, rather than the client waiting for one to finish
+     before starting the next. Kept prominent, right at the top of the
+     dashboard, above the status summary. -->
+<section class="kickoff-bar" aria-label="Run multiple plans at once">
+  <h2>Kickoff</h2>
+  <p class="meta">Select which plans to run, then launch them together as background jobs.</p>
+  <form
+    id="kickoff-form"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+  >
+    <label class="kickoff-option">
+      <input
+        type="checkbox"
+        class="kickoff-checkbox"
+        data-plan-kind="sort"
+        data-plan-url="{{ url_for('ui.plan_sort') }}"
+        checked>
+      Sort
+    </label>
+    <label class="kickoff-option">
+      <input
+        type="checkbox"
+        class="kickoff-checkbox"
+        data-plan-kind="reclaim"
+        data-plan-url="{{ url_for('ui.plan_reclaim') }}"
+        checked>
+      Reclaim
+    </label>
+    <label class="kickoff-option">
+      <input
+        type="checkbox"
+        class="kickoff-checkbox"
+        data-plan-kind="corral-screenshots"
+        data-plan-url="{{ url_for('ui.plan_corral_screenshots') }}"
+        checked>
+      Corral Screenshots
+    </label>
+    <button type="submit" id="kickoff-run-button">Run selected</button>
+  </form>
+  <!-- One row per launched job, populated/updated live by
+       static/plan-trigger.js -- empty (and so invisible) until "Run
+       selected" is actually clicked. role="status"/aria-live so screen
+       readers announce each job's progress/result as it lands. -->
+  <div id="kickoff-panel" class="kickoff-panel" role="status" aria-live="polite"></div>
+</section>
+
 <h2>Status</h2>
 <!-- A prominent headline stat, not a small easy-to-miss tile row -- at real
      scale (thousands of entries, the overwhelming majority "pending" until
@@ -63,12 +114,25 @@
     </div>
   </div>
   {% else %}
-  <p>No queue entries yet. Try <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a> or <a
-    href="{{ url_for('ui.plan_reclaim') }}"
-    class="plan-reclaim-link"
+  <p>No queue entries yet. Try <a
+    href="{{ url_for('ui.plan_sort') }}"
+    class="plan-trigger-link"
+    data-plan-kind="sort"
     data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
     data-dashboard-url="{{ url_for('ui.dashboard') }}"
-  >Plan: Reclaim</a> or <a href="{{ url_for('ui.plan_corral_screenshots') }}">Plan: Corral Screenshots</a> to stage some.</p>
+  >Plan: Sort</a> or <a
+    href="{{ url_for('ui.plan_reclaim') }}"
+    class="plan-trigger-link"
+    data-plan-kind="reclaim"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+  >Plan: Reclaim</a> or <a
+    href="{{ url_for('ui.plan_corral_screenshots') }}"
+    class="plan-trigger-link"
+    data-plan-kind="corral-screenshots"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+  >Plan: Corral Screenshots</a> to stage some.</p>
   {% endfor %}
 </div>
 {% endblock %}

@@ -61,7 +61,7 @@ Every file under ``src/cleanup_tools/ui/templates/`` and
 via a glob pattern, and the list was cross-checked against a real
 ``find src/cleanup_tools/ui/templates src/cleanup_tools/ui/static -type f``
 run at the time this docstring was last updated (6 files total: base.html,
-dashboard.html, queue.html, keyboard.js, plan-reclaim.js, theme.js). Missing even one
+dashboard.html, queue.html, keyboard.js, plan-trigger.js, theme.js). Missing even one
 of these is a LOUD failure (TemplateNotFound / a 404 on the static route)
 in the frozen binary despite working fine from source, since Flask needs
 these as real files on disk at runtime, not merely importable Python --
@@ -127,7 +127,7 @@ datas = [
     (os.path.join(UI_TEMPLATES, "dashboard.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_TEMPLATES, "queue.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_STATIC, "keyboard.js"), "cleanup_tools/ui/static"),
-    (os.path.join(UI_STATIC, "plan-reclaim.js"), "cleanup_tools/ui/static"),
+    (os.path.join(UI_STATIC, "plan-trigger.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "theme.js"), "cleanup_tools/ui/static"),
 ]
 

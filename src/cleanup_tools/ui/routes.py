@@ -194,27 +194,55 @@ def dashboard():
 # ---------------------------------------------------------------------------
 
 
-def _stage_sort_plan(adapter) -> list[queue_module.QueueEntry]:
+def _stage_sort_plan(adapter, queue_path, progress_callback=None) -> list[queue_module.QueueEntry]:
     """Dry-run cleanup_tools.commands.sort against the default target dir,
     convert its plan into QueueEntry "move" proposals, and stage them.
 
     Reuses sort.run()'s own plan-building (args=None -> dry-run against the
     platform Downloads dir, same default the "sort" CLI subcommand uses
     with no args) rather than walking the filesystem again here.
+
+    The slow part of this route is NOT sort.run() itself (a plain
+    filesystem walk) -- it's the per-proposed-entry
+    ``queue_module.build_plan_snapshot`` call below, which reads up to 8MiB
+    of each file to compute a real content hash (see that function's
+    docstring). With a real Downloads folder containing thousands of files,
+    that loop alone is what used to make this route block for minutes.
+
+    ``queue_path`` is taken explicitly (rather than resolved via
+    ``_queue_path()`` internally) because this is called from a background
+    job thread (see ``_sort_job``/``plan_sort`` below) that has no Flask
+    request/app context to resolve ``current_app`` against -- the caller
+    must resolve it while still inside the request and pass it in, exactly
+    like ``_stage_reclaim_plan``.
+
+    If ``progress_callback`` is given, it's called once per proposed entry
+    as its ``build_plan_snapshot`` is computed -- unlike reclaim's
+    ``_DirSizeProgressAdapter`` proxy trick (needed because reclaim.py makes
+    the slow calls internally, one per candidate directory, with no fixed
+    total known upfront), this loop is directly under this function's own
+    control and its total (``len(plan)``) is known before the loop even
+    starts, so no proxy is needed here -- just call the callback once per
+    iteration.
     """
     result = sort_module.run(adapter, args=None)
-    new_entries = [
-        queue_module.QueueEntry(
-            action="move",
-            src=str(item["src"]),
-            dest=str(item["dest"]),
-            source="ui-plan-sort",
-            group_key=f"sort:{item['bucket']}",
-            plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+    plan_items = result.get("plan", [])
+    total = len(plan_items)
+    new_entries = []
+    for current, item in enumerate(plan_items, start=1):
+        new_entries.append(
+            queue_module.QueueEntry(
+                action="move",
+                src=str(item["src"]),
+                dest=str(item["dest"]),
+                source="ui-plan-sort",
+                group_key=f"sort:{item['bucket']}",
+                plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+            )
         )
-        for item in result.get("plan", [])
-    ]
-    return queue_module.stage_entries(adapter, new_entries, _queue_path())
+        if progress_callback is not None:
+            progress_callback(current, total)
+    return queue_module.stage_entries(adapter, new_entries, queue_path)
 
 
 class _DirSizeProgressAdapter:
@@ -299,7 +327,9 @@ def _stage_reclaim_plan(adapter, queue_path, progress_callback=None) -> list[que
     return queue_module.stage_entries(adapter, new_entries, queue_path)
 
 
-def _stage_corral_screenshots_plan(adapter) -> list[queue_module.QueueEntry]:
+def _stage_corral_screenshots_plan(
+    adapter, queue_path, progress_callback=None
+) -> list[queue_module.QueueEntry]:
     """Dry-run cleanup_tools.commands.corral_screenshots across its default
     roots, convert its plan into QueueEntry "move" proposals, and stage them.
 
@@ -307,35 +337,67 @@ def _stage_corral_screenshots_plan(adapter) -> list[queue_module.QueueEntry]:
     dry-run against the default resolved roots, same defaults the
     "corral-screenshots" CLI subcommand uses with no args) rather than
     walking the filesystem again here -- structurally identical to
-    _stage_sort_plan above. args=None also means set_default_location is
-    never true, so this route can never trigger the OS-preference change --
-    only ever a dry-run plan.
+    _stage_sort_plan above, including the same ``queue_path``/
+    ``progress_callback`` treatment (see that function's docstring for the
+    background-job/no-app-context reasoning and why no proxy-adapter trick
+    is needed for progress here). args=None also means
+    set_default_location is never true, so this route can never trigger the
+    OS-preference change -- only ever a dry-run plan.
     """
     result = corral_screenshots_module.run(adapter, args=None)
-    new_entries = [
-        queue_module.QueueEntry(
-            action="move",
-            src=str(item["src"]),
-            dest=str(item["dest"]),
-            source="ui-plan-corral-screenshots",
-            group_key="corral-screenshots",
-            plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+    plan_items = result.get("plan", [])
+    total = len(plan_items)
+    new_entries = []
+    for current, item in enumerate(plan_items, start=1):
+        new_entries.append(
+            queue_module.QueueEntry(
+                action="move",
+                src=str(item["src"]),
+                dest=str(item["dest"]),
+                source="ui-plan-corral-screenshots",
+                group_key="corral-screenshots",
+                plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+            )
         )
-        for item in result.get("plan", [])
-    ]
-    return queue_module.stage_entries(adapter, new_entries, _queue_path())
+        if progress_callback is not None:
+            progress_callback(current, total)
+    return queue_module.stage_entries(adapter, new_entries, queue_path)
+
+
+def _sort_job(adapter, queue_path, progress_callback) -> list[queue_module.QueueEntry]:
+    """The ``target_fn`` run on ``/plan/sort``'s background job thread.
+
+    Just ``_stage_sort_plan`` with progress reporting wired up, mirroring
+    ``_reclaim_job`` exactly: a ``TimeoutError`` from the queue lock is
+    re-raised carrying ``QUEUE_BUSY_MESSAGE``. Anything else (notably a
+    ``FileNotFoundError`` for a missing Downloads dir, which the OLD
+    synchronous route caught separately) is left to propagate as-is --
+    ``jobs.py``'s generic ``except Exception`` in ``start_job`` records
+    ``str(exc)`` verbatim as the job's terminal error either way, and
+    ``FileNotFoundError``'s message ("sort target directory does not
+    exist: <path>") is already friendly/non-leaky, so no special-casing is
+    needed here the way it is for the queue lock's raw TimeoutError text.
+    """
+    try:
+        return _stage_sort_plan(adapter, queue_path, progress_callback)
+    except TimeoutError as exc:
+        raise TimeoutError(QUEUE_BUSY_MESSAGE) from exc
 
 
 @bp.route("/plan/sort")
 def plan_sort():
+    """Kick off sort planning/staging on a background job thread and return
+    its ``job_id`` immediately (HTTP 200 JSON), instead of blocking the
+    request on ``_stage_sort_plan``'s per-entry ``build_plan_snapshot``
+    content-hashing loop -- mirrors ``plan_reclaim`` exactly (see that
+    route's docstring for the full "why" of the background-job pattern;
+    this route used to be the last of the three "Plan: X" actions still
+    blocking synchronously).
+    """
     adapter = _adapter()
-    try:
-        added = _stage_sort_plan(adapter)
-    except FileNotFoundError as exc:
-        return redirect(url_for("ui.dashboard", plan_error=str(exc)))
-    except TimeoutError:
-        return redirect(url_for("ui.dashboard", plan_error=QUEUE_BUSY_MESSAGE))
-    return redirect(url_for("ui.dashboard", staged=len(added)))
+    queue_path = _queue_path()
+    job_id = jobs.start_job(_sort_job, adapter, queue_path)
+    return jsonify({"job_id": job_id})
 
 
 def _reclaim_job(adapter, queue_path, progress_callback) -> list[queue_module.QueueEntry]:
@@ -383,9 +445,9 @@ def plan_reclaim():
     call ``_adapter()``/``_queue_path()`` (both read ``current_app``).
 
     Callers poll ``GET /status/<job_id>`` (below) for progress/outcome.
-    Unlike ``plan_sort``/``plan_corral_screenshots``, which still run
-    synchronously and redirect back to the dashboard, this route never
-    redirects and never blocks until the plan finishes.
+    ``plan_sort``/``plan_corral_screenshots`` follow this exact same
+    async-job pattern -- none of the three ``/plan/*`` routes redirect
+    synchronously or block until the plan finishes.
     """
     adapter = _adapter()
     queue_path = _queue_path()
@@ -429,14 +491,26 @@ def healthz():
     return jsonify({"status": "ok"}), 200
 
 
+def _corral_screenshots_job(adapter, queue_path, progress_callback) -> list[queue_module.QueueEntry]:
+    """The ``target_fn`` run on ``/plan/corral-screenshots``'s background job
+    thread. Structurally identical to ``_sort_job`` above.
+    """
+    try:
+        return _stage_corral_screenshots_plan(adapter, queue_path, progress_callback)
+    except TimeoutError as exc:
+        raise TimeoutError(QUEUE_BUSY_MESSAGE) from exc
+
+
 @bp.route("/plan/corral-screenshots")
 def plan_corral_screenshots():
+    """Kick off corral-screenshots planning/staging on a background job
+    thread and return its ``job_id`` immediately -- mirrors ``plan_sort``/
+    ``plan_reclaim`` exactly.
+    """
     adapter = _adapter()
-    try:
-        added = _stage_corral_screenshots_plan(adapter)
-    except TimeoutError:
-        return redirect(url_for("ui.dashboard", plan_error=QUEUE_BUSY_MESSAGE))
-    return redirect(url_for("ui.dashboard", staged=len(added)))
+    queue_path = _queue_path()
+    job_id = jobs.start_job(_corral_screenshots_job, adapter, queue_path)
+    return jsonify({"job_id": job_id})
 
 
 @bp.route("/propose-ai", methods=["POST"])

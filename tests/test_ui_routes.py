@@ -189,7 +189,10 @@ def test_plan_sort_stages_entries_and_is_idempotent(adapter, client, home):
     (downloads / "notes.txt").write_bytes(b"notes-bytes")
 
     resp1 = client.get("/plan/sort")
-    assert resp1.status_code == 302
+    assert resp1.status_code == 200
+    job_id_1 = resp1.get_json()["job_id"]
+    result_1 = _poll_job_until_terminal(client, job_id_1)
+    assert result_1["status"] == "done"
 
     entries_after_first = _reload_queue(adapter)
     assert len(entries_after_first) == 2
@@ -200,7 +203,10 @@ def test_plan_sort_stages_entries_and_is_idempotent(adapter, client, home):
     # already staged -- this is stage_entries()'s dedup, exercised through
     # the route.
     resp2 = client.get("/plan/sort")
-    assert resp2.status_code == 302
+    assert resp2.status_code == 200
+    job_id_2 = resp2.get_json()["job_id"]
+    result_2 = _poll_job_until_terminal(client, job_id_2)
+    assert result_2["status"] == "done"
 
     entries_after_second = _reload_queue(adapter)
     assert len(entries_after_second) == 2
@@ -209,12 +215,16 @@ def test_plan_sort_stages_entries_and_is_idempotent(adapter, client, home):
 
 def test_plan_sort_missing_downloads_dir_does_not_crash(adapter, client, home):
     # No Downloads dir created under the fake home -- sort.run() raises
-    # FileNotFoundError; the route must turn that into a redirect/flash,
-    # not a 500.
+    # FileNotFoundError; the background job must land as a terminal "error"
+    # status carrying that message, not an uncaught exception (which would
+    # leave the job stuck at "running" forever) or a 500.
     assert not (home / "Downloads").exists()
     resp = client.get("/plan/sort")
-    assert resp.status_code == 302
-    assert "plan_error" in resp.headers["Location"]
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+    payload = _poll_job_until_terminal(client, job_id)
+    assert payload["status"] == "error"
+    assert "does not exist" in payload["error"]
 
 
 def test_plan_reclaim_stages_entries_and_is_idempotent(adapter, client, home):
@@ -280,7 +290,10 @@ def test_plan_corral_screenshots_stages_move_entries_and_is_idempotent(adapter, 
     shot.write_bytes(b"shot-bytes")
 
     resp1 = client.get("/plan/corral-screenshots")
-    assert resp1.status_code == 302
+    assert resp1.status_code == 200
+    job_id_1 = resp1.get_json()["job_id"]
+    result_1 = _poll_job_until_terminal(client, job_id_1)
+    assert result_1["status"] == "done"
 
     entries_after_first = _reload_queue(adapter)
     assert len(entries_after_first) == 1
@@ -296,7 +309,10 @@ def test_plan_corral_screenshots_stages_move_entries_and_is_idempotent(adapter, 
     # same src -- stage_entries()'s existing dedup, exercised through the
     # route, mirroring plan_sort/plan_reclaim's own idempotency tests.
     resp2 = client.get("/plan/corral-screenshots")
-    assert resp2.status_code == 302
+    assert resp2.status_code == 200
+    job_id_2 = resp2.get_json()["job_id"]
+    result_2 = _poll_job_until_terminal(client, job_id_2)
+    assert result_2["status"] == "done"
 
     entries_after_second = _reload_queue(adapter)
     assert len(entries_after_second) == 1
@@ -313,9 +329,12 @@ def test_plan_corral_screenshots_no_matches_stages_nothing_without_crashing(
 ):
     # No Desktop/Downloads/Documents dirs created under the fake home at
     # all -- corral_screenshots.run() must degrade to an empty plan rather
-    # than raising, and the route must still redirect cleanly.
+    # than raising, and the background job must still reach "done" cleanly.
     resp = client.get("/plan/corral-screenshots")
-    assert resp.status_code == 302
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+    payload = _poll_job_until_terminal(client, job_id)
+    assert payload["status"] == "done"
     assert _reload_queue(adapter) == []
 
 
@@ -452,6 +471,287 @@ def test_status_poll_after_reclaim_run_raises_timeout_lands_as_terminal_error(
     assert payload["status"] == "error"
     assert payload["error"] == QUEUE_BUSY_MESSAGE
     assert "result" not in payload
+
+
+# ---------------------------------------------------------------------------
+# 2c. /plan/sort and /plan/corral-screenshots get the SAME background-job
+#     treatment as /plan/reclaim above: the slow part of both is the
+#     per-proposed-entry queue_module.build_plan_snapshot content-hash loop
+#     (routes.py's _stage_sort_plan/_stage_corral_screenshots_plan), not the
+#     underlying sort.run()/corral_screenshots.run() filesystem walk itself.
+# ---------------------------------------------------------------------------
+
+
+def test_plan_sort_responds_immediately_without_blocking(adapter, client, home, monkeypatch):
+    """The route itself must return fast (job_id only) regardless of how
+    long build_plan_snapshot's per-entry content hashing takes -- proven
+    here by making it deliberately slow and still observing a sub-second
+    response, mirroring plan_reclaim's own responds-immediately test.
+    """
+    import time
+
+    downloads = home / "Downloads"
+    downloads.mkdir()
+    for i in range(5):
+        (downloads / f"file{i}.bin").write_bytes(b"x" * 1024)
+
+    real_build_plan_snapshot = queue_module.build_plan_snapshot
+
+    def slow_build_plan_snapshot(path):
+        time.sleep(0.2)
+        return real_build_plan_snapshot(path)
+
+    monkeypatch.setattr(queue_module, "build_plan_snapshot", slow_build_plan_snapshot)
+
+    start = time.time()
+    resp = client.get("/plan/sort")
+    elapsed = time.time() - start
+
+    assert resp.status_code == 200
+    assert resp.is_json
+    payload = resp.get_json()
+    assert "job_id" in payload and payload["job_id"]
+    assert elapsed < 1.0
+
+    _poll_job_until_terminal(client, payload["job_id"], timeout=10.0)
+
+
+def test_plan_sort_progress_reports_real_increasing_progress_during_snapshot_loop(
+    adapter, client, home, monkeypatch
+):
+    """current/total must be genuine, observed progress through the
+    per-entry build_plan_snapshot loop -- not a fixed placeholder -- proven
+    by making build_plan_snapshot deliberately slow so polling mid-job can
+    catch current at more than one distinct value. Unlike reclaim's
+    _DirSizeProgressAdapter-driven progress (whose total grows as
+    directories are discovered), sort's total is the full plan length,
+    known upfront -- so it must reach exactly that value at the end.
+    """
+    import time
+
+    downloads = home / "Downloads"
+    downloads.mkdir()
+    for i in range(4):
+        (downloads / f"file{i}.bin").write_bytes(b"x" * 1024)
+
+    real_build_plan_snapshot = queue_module.build_plan_snapshot
+
+    def slow_build_plan_snapshot(path):
+        time.sleep(0.15)
+        return real_build_plan_snapshot(path)
+
+    monkeypatch.setattr(queue_module, "build_plan_snapshot", slow_build_plan_snapshot)
+
+    resp = client.get("/plan/sort")
+    job_id = resp.get_json()["job_id"]
+
+    seen_current = []
+    seen_total = set()
+    deadline = time.time() + 10
+    status = "running"
+    while time.time() < deadline:
+        status_resp = client.get(f"/status/{job_id}")
+        assert status_resp.status_code == 200
+        payload = status_resp.get_json()
+        seen_current.append(payload["current"])
+        seen_total.add(payload["total"])
+        status = payload["status"]
+        if status != "running":
+            break
+        time.sleep(0.02)
+
+    assert status == "done"
+    assert len(set(seen_current)) > 1
+    assert max(seen_current) == 4
+    # The total is the full plan length, known before the loop starts --
+    # unlike reclaim's growing total, it's never anything other than 0
+    # (before the first entry's snapshot is built) or 4 (the real total)
+    # across polls, never some other placeholder/interim value.
+    assert seen_total <= {0, 4}
+    assert 4 in seen_total
+
+
+def test_plan_sort_timeout_from_queue_lock_lands_as_terminal_error(
+    adapter, client, home, monkeypatch
+):
+    from cleanup_tools.commands import sort as sort_module
+    from cleanup_tools.ui.routes import QUEUE_BUSY_MESSAGE
+
+    def raise_timeout(adapter_arg, args=None):
+        raise TimeoutError("Timed out after 5.0s waiting for lock on /some/queue.yaml.lock")
+
+    monkeypatch.setattr(sort_module, "run", raise_timeout)
+
+    resp = client.get("/plan/sort")
+    job_id = resp.get_json()["job_id"]
+    payload = _poll_job_until_terminal(client, job_id)
+
+    assert payload["status"] == "error"
+    assert payload["error"] == QUEUE_BUSY_MESSAGE
+
+
+def test_plan_corral_screenshots_timeout_from_queue_lock_lands_as_terminal_error(
+    adapter, client, home, monkeypatch
+):
+    from cleanup_tools.commands import corral_screenshots as corral_screenshots_module
+    from cleanup_tools.ui.routes import QUEUE_BUSY_MESSAGE
+
+    def raise_timeout(adapter_arg, args=None):
+        raise TimeoutError("Timed out after 5.0s waiting for lock on /some/queue.yaml.lock")
+
+    monkeypatch.setattr(corral_screenshots_module, "run", raise_timeout)
+
+    resp = client.get("/plan/corral-screenshots")
+    job_id = resp.get_json()["job_id"]
+    payload = _poll_job_until_terminal(client, job_id)
+
+    assert payload["status"] == "error"
+    assert payload["error"] == QUEUE_BUSY_MESSAGE
+
+
+def test_plan_corral_screenshots_responds_immediately_without_blocking(
+    adapter, client, home, monkeypatch
+):
+    import time
+
+    desktop = home / "Desktop"
+    desktop.mkdir()
+    for i in range(5):
+        (desktop / f"screenshot-202{i}.png").write_bytes(b"x" * 1024)
+
+    real_build_plan_snapshot = queue_module.build_plan_snapshot
+
+    def slow_build_plan_snapshot(path):
+        time.sleep(0.2)
+        return real_build_plan_snapshot(path)
+
+    monkeypatch.setattr(queue_module, "build_plan_snapshot", slow_build_plan_snapshot)
+
+    start = time.time()
+    resp = client.get("/plan/corral-screenshots")
+    elapsed = time.time() - start
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert "job_id" in payload and payload["job_id"]
+    assert elapsed < 1.0
+
+    _poll_job_until_terminal(client, payload["job_id"], timeout=10.0)
+
+
+def test_plan_corral_screenshots_progress_reports_real_increasing_progress(
+    adapter, client, home, monkeypatch
+):
+    import time
+
+    desktop = home / "Desktop"
+    desktop.mkdir()
+    for i in range(4):
+        (desktop / f"screenshot-202{i}.png").write_bytes(b"x" * 1024)
+
+    real_build_plan_snapshot = queue_module.build_plan_snapshot
+
+    def slow_build_plan_snapshot(path):
+        time.sleep(0.15)
+        return real_build_plan_snapshot(path)
+
+    monkeypatch.setattr(queue_module, "build_plan_snapshot", slow_build_plan_snapshot)
+
+    resp = client.get("/plan/corral-screenshots")
+    job_id = resp.get_json()["job_id"]
+
+    seen_current = []
+    deadline = time.time() + 10
+    status = "running"
+    while time.time() < deadline:
+        status_resp = client.get(f"/status/{job_id}")
+        payload = status_resp.get_json()
+        seen_current.append(payload["current"])
+        status = payload["status"]
+        if status != "running":
+            break
+        time.sleep(0.02)
+
+    assert status == "done"
+    assert len(set(seen_current)) > 1
+    assert max(seen_current) == 4
+
+
+# ---------------------------------------------------------------------------
+# 2d. The kickoff bar's premise: /plan/sort, /plan/reclaim, and
+#     /plan/corral-screenshots can all be launched together, each getting
+#     its own independent background job, none blocking on the others.
+# ---------------------------------------------------------------------------
+
+
+def test_all_three_plan_routes_can_be_triggered_without_blocking_each_other(
+    adapter, client, home, monkeypatch
+):
+    """Route-level proof for the kickoff bar's premise (the actual
+    multi-launch UI is client-side -- see static/plan-trigger.js's
+    initKickoffBar -- and is exercised end-to-end separately via
+    Playwright): /plan/sort, /plan/reclaim, and /plan/corral-screenshots
+    can all be started back to back, each getting its own distinct job_id
+    immediately, even though the underlying work behind all three is
+    deliberately slowed down here to prove none of them make the others
+    wait.
+    """
+    import time
+
+    downloads = home / "Downloads"
+    downloads.mkdir()
+    (downloads / "photo.jpg").write_bytes(b"photo-bytes")
+
+    desktop = home / "Desktop"
+    desktop.mkdir()
+    (desktop / "screenshot-2024.png").write_bytes(b"shot-bytes")
+
+    documents = home / "Documents"
+    documents.mkdir()
+    (documents / ".DS_Store").write_bytes(b"junk")
+
+    real_build_plan_snapshot = queue_module.build_plan_snapshot
+    real_dir_size_bytes = MacOSAdapter.dir_size_bytes
+
+    def slow_build_plan_snapshot(path):
+        time.sleep(0.2)
+        return real_build_plan_snapshot(path)
+
+    def slow_dir_size_bytes(self, path):
+        time.sleep(0.2)
+        return real_dir_size_bytes(self, path)
+
+    monkeypatch.setattr(queue_module, "build_plan_snapshot", slow_build_plan_snapshot)
+    monkeypatch.setattr(MacOSAdapter, "dir_size_bytes", slow_dir_size_bytes)
+
+    start = time.time()
+    resp_sort = client.get("/plan/sort")
+    resp_reclaim = client.get("/plan/reclaim")
+    resp_corral = client.get("/plan/corral-screenshots")
+    elapsed = time.time() - start
+
+    assert resp_sort.status_code == 200
+    assert resp_reclaim.status_code == 200
+    assert resp_corral.status_code == 200
+
+    job_ids = {
+        resp_sort.get_json()["job_id"],
+        resp_reclaim.get_json()["job_id"],
+        resp_corral.get_json()["job_id"],
+    }
+    # Three distinct jobs -- one route never blocked on, or accidentally
+    # reused, another's job.
+    assert len(job_ids) == 3
+
+    # Launching all three took nowhere near the sum of their slowed-down
+    # underlying work (well over a second each) -- each responded near
+    # instantly, proving they were kicked off as independent background
+    # jobs rather than one request waiting for the previous to finish.
+    assert elapsed < 1.0
+
+    for resp in (resp_sort, resp_reclaim, resp_corral):
+        payload = _poll_job_until_terminal(client, resp.get_json()["job_id"], timeout=10.0)
+        assert payload["status"] == "done"
 
 
 def test_status_unknown_job_id_returns_404_not_500(client):
@@ -864,7 +1164,9 @@ def test_plan_sort_never_moves_files_only_stages_pending_entries(adapter, client
     photo = downloads / "photo.jpg"
     photo.write_bytes(b"photo-bytes")
 
-    client.get("/plan/sort")
+    resp = client.get("/plan/sort")
+    job_id = resp.get_json()["job_id"]
+    _poll_job_until_terminal(client, job_id)
 
     # File still sitting exactly where it was -- staging is planning only.
     assert photo.exists()
@@ -1242,90 +1544,136 @@ def test_queue_view_includes_keyboard_js_and_bulk_scaffolding(adapter, client, t
 
 
 # ---------------------------------------------------------------------------
-# 10. "Plan: Reclaim" links get real click-intercept + polling wiring (see
-#     static/plan-reclaim.js). /plan/reclaim moved from a synchronous
-#     redirect to an async job (job_id + /status/<job_id> polling), but the
-#     plain <a href="/plan/reclaim"> links in base.html's nav, dashboard.html's
-#     empty state, and queue.html's empty state were never updated -- a real
-#     browser clicking one would just navigate to a bare JSON blob. These
-#     tests assert on the actual rendered HTML (not just that the route still
-#     works) so they genuinely catch the regression: the click-intercept
-#     wiring must actually be present in the markup a browser receives.
-#     "Plan: Sort" and "Plan: Corral Screenshots" are still synchronous and
-#     must stay completely untouched -- plain links, no new JS wrapping them.
+# 10. "Plan: Sort" / "Plan: Reclaim" / "Plan: Corral Screenshots" links all
+#     get real click-intercept + polling wiring (see
+#     static/plan-trigger.js -- the generalized/renamed successor to
+#     plan-reclaim.js, which used to wire up only the "Plan: Reclaim" link).
+#     All three GET /plan/<kind> routes now kick off a background job and
+#     return {"job_id": ...} immediately rather than blocking synchronously
+#     (see _stage_sort_plan/_stage_corral_screenshots_plan/
+#     _stage_reclaim_plan's per-entry build_plan_snapshot/dir_size_bytes
+#     work) -- a plain <a href="/plan/sort">, left alone, would just
+#     navigate a real browser to that bare JSON blob with no progress
+#     feedback. These tests assert on the actual rendered HTML (not just
+#     that the routes still work) so they genuinely catch the regression:
+#     the click-intercept wiring must actually be present in the markup a
+#     browser receives, for all three links now, not just "Plan: Reclaim".
 # ---------------------------------------------------------------------------
 
 
-def _plan_reclaim_link_block(html: str) -> str:
-    """Isolate the first "Plan: Reclaim" anchor tag's own attributes out of a
-    rendered page, so assertions check what's actually on that element
-    rather than merely "this string appears somewhere on the page".
+PLAN_LINK_TEXT = {
+    "sort": "Plan: Sort",
+    "reclaim": "Plan: Reclaim",
+    "corral-screenshots": "Plan: Corral Screenshots",
+}
+PLAN_LINK_HREF = {
+    "sort": "/plan/sort",
+    "reclaim": "/plan/reclaim",
+    "corral-screenshots": "/plan/corral-screenshots",
+}
+
+
+def _plan_trigger_link_block(html: str, link_text: str) -> str:
+    """Isolate one "Plan: X" anchor tag's own attributes out of a rendered
+    page, so assertions check what's actually on that element rather than
+    merely "this string appears somewhere on the page".
     """
-    before = html.split(">Plan: Reclaim<")[0]
+    before = html.split(f">{link_text}<")[0]
     return before.rsplit("<a", 1)[-1]
 
 
-def test_static_plan_reclaim_js_is_served(client):
-    resp = client.get("/static/plan-reclaim.js")
+def test_static_plan_trigger_js_is_served(client):
+    resp = client.get("/static/plan-trigger.js")
     assert resp.status_code == 200
-    assert b"plan-reclaim-link" in resp.data
+    assert b"plan-trigger-link" in resp.data
     # Polls /status/<job_id> using the server-rendered template attribute
     # (data-status-url-template), never a hardcoded path here.
     assert b"statusUrlTemplate" in resp.data
+    # And wires up the kickoff bar's multi-launch flow too (see part 2).
+    assert b"kickoff-form" in resp.data
+    assert b"kickoff-checkbox" in resp.data
 
 
-def test_dashboard_nav_plan_reclaim_link_has_click_intercept_wiring(client):
+def test_dashboard_nav_all_three_plan_links_have_click_intercept_wiring(client):
     resp = client.get("/")
     html = resp.data.decode()
 
-    assert "plan-reclaim.js" in html
-    assert 'id="plan-reclaim-status"' in html
+    assert "plan-trigger.js" in html
+    assert 'id="plan-status"' in html
 
-    link_attrs = _plan_reclaim_link_block(html)
-    assert 'class="plan-reclaim-link"' in link_attrs
-    assert 'href="/plan/reclaim"' in link_attrs
-    assert "data-status-url-template=" in link_attrs
-    assert "__JOB_ID__" in link_attrs
-    assert 'data-dashboard-url="/"' in link_attrs
+    for kind, text in PLAN_LINK_TEXT.items():
+        link_attrs = _plan_trigger_link_block(html, text)
+        assert 'class="plan-trigger-link"' in link_attrs
+        assert f'data-plan-kind="{kind}"' in link_attrs
+        assert f'href="{PLAN_LINK_HREF[kind]}"' in link_attrs
+        assert "data-status-url-template=" in link_attrs
+        assert "__JOB_ID__" in link_attrs
+        assert 'data-dashboard-url="/"' in link_attrs
 
 
-def test_dashboard_empty_state_plan_reclaim_link_is_also_wired(client):
+def test_dashboard_empty_state_plan_links_are_also_wired(client):
     # An empty queue renders dashboard.html's own "No queue entries yet..."
-    # fallback paragraph, which has a SECOND, separate "Plan: Reclaim" link
-    # (in addition to the nav one) -- that one must be wired up too.
+    # fallback paragraph, which has THREE more "Plan: X" links (in addition
+    # to the nav ones) -- those must be wired up too.
     resp = client.get("/")
     html = resp.data.decode()
-    assert html.count('class="plan-reclaim-link"') == 2
+    assert html.count('class="plan-trigger-link"') == 6  # 3 in nav + 3 in empty state
+    for kind in PLAN_LINK_TEXT:
+        # nav link + empty-state link + the kickoff bar's own checkbox for
+        # this kind (see test_dashboard_kickoff_bar_has_checkboxes_for_all_three_plans).
+        assert html.count(f'data-plan-kind="{kind}"') == 3
 
 
-def test_queue_empty_state_plan_reclaim_link_is_also_wired(client):
+def test_queue_empty_state_plan_links_are_also_wired(client):
     resp = client.get("/queue")
     html = resp.data.decode()
     assert b"Nothing pending" in resp.data
-    assert html.count('class="plan-reclaim-link"') == 2  # nav + empty-state
+    assert html.count('class="plan-trigger-link"') == 6  # nav + empty-state
 
 
-def test_queue_nonempty_still_has_nav_plan_reclaim_link_wired(adapter, client, tmp_path):
+def test_queue_nonempty_still_has_nav_plan_links_wired(adapter, client, tmp_path):
     entry = _make_entry(tmp_path, "a.txt")
     _seed_queue(adapter, [entry])
 
     resp = client.get("/queue")
     html = resp.data.decode()
-    # Only the nav link renders once entries exist -- no "Nothing pending"
-    # empty-state fallback to duplicate it.
-    assert html.count('class="plan-reclaim-link"') == 1
-    link_attrs = _plan_reclaim_link_block(html)
-    assert "data-status-url-template=" in link_attrs
+    # Only the nav links render once entries exist -- no "Nothing pending"
+    # empty-state fallback to duplicate them.
+    assert html.count('class="plan-trigger-link"') == 3
+    for kind, text in PLAN_LINK_TEXT.items():
+        link_attrs = _plan_trigger_link_block(html, text)
+        assert "data-status-url-template=" in link_attrs
 
 
-def test_plan_sort_and_corral_screenshots_links_remain_plain_navigation(client):
+# ---------------------------------------------------------------------------
+# 10b. The dashboard's kickoff bar: checkboxes + "Run selected" markup for
+#      launching several plans at once (see static/plan-trigger.js's
+#      initKickoffBar and section 2d's route-level multi-launch test above).
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_kickoff_bar_has_checkboxes_for_all_three_plans(client):
     resp = client.get("/")
     html = resp.data.decode()
 
-    # Exact, unwrapped anchor tags -- no class, no data-* attributes, no new
-    # JS touching either of these. Both routes are still fully synchronous.
-    assert '<a href="/plan/sort">Plan: Sort</a>' in html
-    assert '<a href="/plan/corral-screenshots">Plan: Corral Screenshots</a>' in html
+    assert 'id="kickoff-form"' in html
+    assert 'id="kickoff-panel"' in html
+    assert 'id="kickoff-run-button"' in html
+    assert "data-status-url-template=" in html.split('id="kickoff-form"')[1].split(">")[0]
+    assert 'data-dashboard-url="/"' in html.split('id="kickoff-form"')[1].split(">")[0]
+
+    for kind, href in PLAN_LINK_HREF.items():
+        assert f'data-plan-kind="{kind}"' in html
+        assert f'data-plan-url="{href}"' in html
+
+
+def test_dashboard_kickoff_bar_is_only_on_the_dashboard_not_the_queue_view(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.txt")
+    _seed_queue(adapter, [entry])
+
+    resp = client.get("/queue")
+    html = resp.data.decode()
+    assert 'id="kickoff-form"' not in html
 
 
 # ---------------------------------------------------------------------------
@@ -1373,16 +1721,14 @@ def test_queue_nav_link_marked_current_on_queue_view(client):
 
 
 def test_plan_links_never_carry_active_page_treatment(client):
-    # Even on the dashboard (where Plan: Sort/Reclaim/Corral Screenshots
-    # visually sit right next to the real aria-current="page" Dashboard
-    # link), the Plan: links themselves must never pick up nav-link or
-    # aria-current -- they're actions, not pages you "are on".
+    # Even on the dashboard (where all three "Plan: X" links visually sit
+    # right next to the real aria-current="page" Dashboard link), none of
+    # them may ever pick up nav-link or aria-current -- they're one-shot
+    # background-job triggers, not pages you "are on".
     resp = client.get("/")
     html = resp.data.decode()
 
-    assert '<a href="/plan/sort">Plan: Sort</a>' in html
-    assert '<a href="/plan/corral-screenshots">Plan: Corral Screenshots</a>' in html
-
-    plan_reclaim_link = _nav_link_block(html, "Plan: Reclaim")
-    assert "nav-link" not in plan_reclaim_link
-    assert "aria-current" not in plan_reclaim_link
+    for text in PLAN_LINK_TEXT.values():
+        link = _nav_link_block(html, text)
+        assert "nav-link" not in link
+        assert "aria-current" not in link

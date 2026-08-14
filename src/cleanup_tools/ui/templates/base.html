@@ -429,11 +429,51 @@
   .pagination-disabled { color: var(--ink-soft); opacity: 0.55; }
   .pagination-info { color: var(--ink-soft); font-size: 0.9rem; }
 
-  /* Live status area for the async "Plan: Reclaim" job -- see
-     static/plan-reclaim.js. Empty (and so invisible) until a reclaim job
-     is actually in flight. */
-  .plan-reclaim-status { color: var(--ink-soft); font-family: var(--font-ui); font-size: 0.9rem; }
-  .plan-reclaim-status-error { color: var(--pending); }
+  /* Live status area for an async "Plan: X" trigger-link job -- see
+     static/plan-trigger.js. Empty (and so invisible) until a job is
+     actually in flight. Shared by all three "Plan: X" links, since only
+     one such job can be in flight from a plain link click at a time. */
+  .plan-status { color: var(--ink-soft); font-family: var(--font-ui); font-size: 0.9rem; }
+  .plan-status-error { color: var(--pending); }
+
+  /* Kickoff bar (dashboard.html only): launches several "Plan: X" jobs at
+     once and reports each one's progress/result as its own row in
+     #kickoff-panel -- see static/plan-trigger.js's initKickoffBar. */
+  .kickoff-bar {
+    margin: 1rem 0 1.5rem;
+    padding: 1.1rem 1.4rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+  .kickoff-bar h2 { margin-bottom: 0.3rem; }
+  .kickoff-bar .meta { color: var(--ink-soft); margin: 0 0 0.75rem; }
+  .kickoff-bar form {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+  .kickoff-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-family: var(--font-ui);
+  }
+  .kickoff-option input { accent-color: var(--accent); }
+  .kickoff-panel {
+    margin-top: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+  }
+  .kickoff-row { color: var(--ink-soft); }
+  .kickoff-row-done { color: var(--good); }
+  .kickoff-row-error { color: var(--pending); }
+  .kickoff-summary { color: var(--ink); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -456,22 +496,36 @@
     class="nav-link"
     {% if request.endpoint == 'ui.queue_view' %}aria-current="page"{% endif %}
   >Review Queue</a>
-  <a href="{{ url_for('ui.plan_sort') }}">Plan: Sort</a>
+  <a
+    href="{{ url_for('ui.plan_sort') }}"
+    class="plan-trigger-link"
+    data-plan-kind="sort"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+  >Plan: Sort</a>
   <a
     href="{{ url_for('ui.plan_reclaim') }}"
-    class="plan-reclaim-link"
+    class="plan-trigger-link"
+    data-plan-kind="reclaim"
     data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
     data-dashboard-url="{{ url_for('ui.dashboard') }}"
   >Plan: Reclaim</a>
-  <a href="{{ url_for('ui.plan_corral_screenshots') }}">Plan: Corral Screenshots</a>
+  <a
+    href="{{ url_for('ui.plan_corral_screenshots') }}"
+    class="plan-trigger-link"
+    data-plan-kind="corral-screenshots"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+  >Plan: Corral Screenshots</a>
   <form method="post" action="{{ url_for('ui.propose_ai') }}">
     <button type="submit" title="Ask the configured AI provider to bucket ambiguous ('other') files">Propose with AI</button>
   </form>
-  <!-- Populated by static/plan-reclaim.js while a "Plan: Reclaim" background
-       job (see /plan/reclaim, /status/<job_id>) is running or has just
-       failed -- role="status"/aria-live so screen readers announce updates
-       without the page navigating away. -->
-  <span id="plan-reclaim-status" class="plan-reclaim-status" role="status" aria-live="polite"></span>
+  <!-- Populated by static/plan-trigger.js while any "Plan: X" background job
+       (see /plan/sort, /plan/reclaim, /plan/corral-screenshots,
+       /status/<job_id>) is running or has just failed --
+       role="status"/aria-live so screen readers announce updates without
+       the page navigating away. -->
+  <span id="plan-status" class="plan-status" role="status" aria-live="polite"></span>
 
   <!-- Theme settings control -- wired up by static/theme.js, which keeps
        this <select> in sync with the active data-theme (including on
@@ -488,7 +542,7 @@
 </nav>
 <hr>
 {% block content %}{% endblock %}
-<script src="{{ url_for('static', filename='plan-reclaim.js') }}"></script>
+<script src="{{ url_for('static', filename='plan-trigger.js') }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}"></script>
 </body>
 </html>
