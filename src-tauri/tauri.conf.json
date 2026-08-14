@@ -34,6 +34,15 @@
     "externalBin": ["binaries/cleanup-ui-sidecar"],
     "resources": {
       "resources/cleanup-ui-onedir": "cleanup-ui-onedir"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libcairo2"
+        ]
+      }
     }
   }
 }

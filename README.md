@@ -143,6 +143,62 @@ yourself, on a second Mac).
 > exit on its own; force-quit it (Activity Monitor, or `kill -9 <pid>`) or restart. Removing
 > quarantine *before* first launch (per above) avoids ever triggering this in the first place.
 
+**Arch Linux packaging** (`packaging/arch/PKGBUILD`): a local-only, build-from-source PKGBUILD —
+run `makepkg -si` directly from your own clone of this repo to build and install the Tauri desktop
+shell. It is **not published to the public AUR** (`aur.archlinux.org`) — no AUR-maintainer
+obligations (SSH-key auth, `.SRCINFO` generation, ongoing update responsibility) are taken on; this
+is a deliberate, permanent decision (see `.pHive/epics/desktop-app-shell/docs/design-discussion.md`
+§e/§f), not a "not yet published" placeholder. `makedepends` covers `cargo`, `nodejs`, `npm`;
+`depends` covers `webkit2gtk-4.1`, `gtk3`, `cairo`, and the rest of Tauri's own documented
+WebKitGTK runtime dependency list; `options=('!strip')` protects the bundled PyInstaller sidecar
+binary from being stripped in a way that breaks it.
+
+> ⚠ **This PKGBUILD has only been structurally reviewed, never build-tested.** Nobody working on
+> this project has access to a real Arch Linux machine. Everything in the PKGBUILD has been checked
+> by reading it (field-by-field against the Arch Wiki's PKGBUILD conventions) and by running
+> `bash -n` against its `build()`/`package()` shell functions (a real syntax check, but not a real
+> build) — `makepkg -si` itself has **never been run**.
+>
+> **The sidecar stub-script portability gap is now closed** (was previously listed here as an open
+> item): `src-tauri/binaries/cleanup-ui-sidecar-stub-linux.sh` is a Linux counterpart of the macOS
+> `cleanup-ui-sidecar-stub.sh`, adapted to Tauri's Debian bundler layout (main binary + sidecars in
+> `/usr/bin/`, `bundle.resources` under `/usr/lib/<productName>/` — read directly from
+> `tauri-bundler`'s Debian-bundler source, with a defensive fallback candidate since that reading is
+> itself unverified on real hardware), copied byte-for-byte to
+> `src-tauri/binaries/cleanup-ui-sidecar-x86_64-unknown-linux-gnu` (the exact per-target-triple
+> filename Tauri's `externalBin` resolution requires on Linux x86_64). This is still
+> **structurally reviewed only, never build-tested** — same caveat as the rest of this section — but
+> the macOS-only-hardcoded-paths gap that would have made the stub itself wrong on Linux no longer
+> exists. **Note:** like everything else this PKGBUILD's `git+file://` source pulls in, these new
+> files need to be `git commit`-ted (or at least staged) before `makepkg -si` will see them — see the
+> PKGBUILD's own `source=` caveat comment.
+>
+> One thing is still known, not just suspected, to need attention before `makepkg -si` can actually
+> succeed:
+> 1. **No Linux-target PyInstaller sidecar *binary* exists in this repo yet** (only the stub *script*
+>    above, which locates and `exec`s that binary — not the binary itself). `src-tauri/resources/`
+>    currently only has the macOS onedir build. You'll need to build a Linux onedir sidecar binary
+>    on your own Arch box (`ONEFILE=0 pyinstaller packaging/pyinstaller/cleanup_ui.spec`, per
+>    `packaging/pyinstaller/cleanup_ui.spec`'s onedir-vs-onefile rationale) and place the resulting
+>    output at `src-tauri/resources/cleanup-ui-onedir/` (mirroring the existing macOS layout) before
+>    `tauri build` can produce a working sidecar on Linux. `packaging/arch/PKGBUILD`'s `build()` now
+>    checks for this file explicitly and fails with this same explanation if it's missing, rather
+>    than failing deeper inside `tauri build` with a more generic error.
+> 2. `npm run tauri:build`'s `packaging/tauri/post-build.sh` step is macOS-only (ad-hoc codesign of
+>    a `.app` bundle) — the PKGBUILD deliberately calls `npx tauri build -b deb` directly instead,
+>    not `npm run tauri:build`, to avoid that script hard-failing on Linux.
+>
+> **What you need to do**: after building the Linux sidecar binary in (1) above and committing it
+> (and the new stub files) into the repo, run `makepkg -si` from `packaging/arch/PKGBUILD` on your
+> real Arch machine, then report back:
+> - Did `makepkg -si` complete without error?
+> - Did the package install cleanly via `pacman`?
+> - Does the installed app launch, spawn its sidecar, pass the healthz check, and reach the real
+>   Flask UI (the same end-to-end behavior already proven on macOS)? If the sidecar fails to start,
+>   check whether `cleanup-ui-sidecar-stub-linux.sh`'s resource-path guess was wrong (its own error
+>   message tells you how to check with `dpkg -L`) — that's the one part of this closed gap that
+>   couldn't be confirmed without a real install.
+
 > ⚠ **Flag polarity flip: `cleanup sort` defaults to dry-run — the opposite of `sort-downloads.sh`.**
 > `sort-downloads.sh` **acted by default** and needed `--dry` to preview. The new `cleanup sort`
 > **previews by default** and needs `--go` to actually move files. If you're used to running the bash

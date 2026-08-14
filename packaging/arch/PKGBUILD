@@ -1,0 +1,209 @@
+# Maintainer: mdostal <mathew.dostal@gmail.com>
+#
+# LOCAL-ONLY PKGBUILD -- NOT published to the public AUR (aur.archlinux.org).
+# =============================================================================
+# This file is meant to be run with `makepkg -si` directly out of a local
+# clone of this repo, by the project owner, on their own real Arch machine.
+# It is intentionally never pushed to a public AUR git remote -- no
+# .SRCINFO generation step, no AUR SSH-key auth, no ongoing
+# AUR-maintainer-update obligation is taken on here. See:
+#   - .pHive/epics/desktop-app-shell/docs/research-brief.md §4
+#   - .pHive/epics/desktop-app-shell/docs/design-discussion.md §e/§f
+#   - .pHive/epics/desktop-app-shell/stories/arch-linux-packaging.yaml
+# for the design decisions behind that choice.
+#
+# VERIFICATION STATUS (read this before running `makepkg -si`):
+# -----------------------------------------------------------------------
+# This PKGBUILD has been structurally reviewed (field-by-field against the
+# Arch Wiki's PKGBUILD(5) conventions, `bash -n` on build()/package()) by an
+# automated process that does NOT have access to real Arch Linux hardware.
+# `makepkg -si` has NEVER been run against this file. It has NOT been
+# confirmed to build, install, or launch on a real Arch system. See
+# README.md's "Arch Linux" section for the exact manual verification the
+# project owner still needs to perform.
+#
+# TWO SEPARATE PREREQUISITE-GAP ITEMS, NOW DOWN TO ONE:
+# -----------------------------------------------------------------------
+# 1. CLOSED: the sidecar STUB SCRIPT's macOS-only path assumptions.
+#    src-tauri/binaries/cleanup-ui-sidecar-stub.sh (the shell script Tauri
+#    registers as the `externalBin` sidecar, per the onedir-vs-externalBin
+#    problem explained in its own header comment) used to hardcode macOS
+#    .app-bundle paths (`Contents/MacOS/` -> `Contents/Resources/`) with no
+#    Linux equivalent. A Linux counterpart now exists --
+#    src-tauri/binaries/cleanup-ui-sidecar-stub-linux.sh, copied byte-for-
+#    byte to src-tauri/binaries/cleanup-ui-sidecar-x86_64-unknown-linux-gnu
+#    (the exact per-target-triple filename Tauri's externalBin resolution
+#    looks for on a Linux x86_64 build; see `rustc -vV`'s host triple and
+#    Tauri's sidecar docs). Its path-resolution logic was derived by
+#    reading tauri-bundler's Debian-bundler source directly (see that
+#    file's own header comment for the exact reasoning and its own honesty
+#    caveat: this, too, is unverified on real hardware, and the script
+#    tries multiple candidate paths defensively because of that).
+# 2. STILL OPEN, and cannot be closed without real Linux/Arch hardware: no
+#    Linux-target PyInstaller onedir SIDECAR BINARY (the actual frozen
+#    Python/Flask executable + `_internal/` dir, the thing the stub script
+#    above `exec`s into) exists anywhere in this repo -- only a macOS
+#    (aarch64-apple-darwin) one does. Cross-compiling it from macOS is not
+#    possible (see this epic's research-brief.md §1/§4). The project owner
+#    needs to build it on their own Arch/Linux machine -- follow
+#    pyinstaller-sidecar-build's already-settled onedir spec/recipe
+#    (`packaging/pyinstaller/cleanup_ui.spec`), run on Linux instead of
+#    macOS -- and place the result under src-tauri/resources/cleanup-ui-onedir/
+#    (mirroring the existing macOS layout) before `tauri build` can produce
+#    a working Linux sidecar. This is the one remaining, unavoidable,
+#    owner-only prerequisite; see README.md's Arch Linux section for the
+#    exact step.
+
+pkgname=cleanup-desktop
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native Tauri desktop shell for Cleanup Tools, wrapping the local Flask approvals UI with a PyInstaller sidecar"
+arch=('x86_64')
+url="https://github.com/mdostal/cleanup-tools"
+# No LICENSE file exists in this repo as of this writing (checked: no
+# LICENSE/LICENSE.* at the repo root, no `license` key in pyproject.toml).
+# 'custom' is the Arch-documented value for a package whose license isn't
+# one of the standard SPDX-style identifiers -- see the Arch Wiki's
+# PKGBUILD page, "license" field. Update this (and add a real LICENSE file)
+# if/when the project adopts one.
+license=('custom')
+
+# Runtime deps for a Tauri v2 / WebKitGTK Linux app, per Tauri's own AUR
+# distribution guide (v2.tauri.app/distribute/aur/, fetched and
+# cross-checked directly against its documented `depends` array rather than
+# copied from the research brief without re-verifying): webkit2gtk-4.1,
+# gtk3, and cairo are the three this project's task brief calls out
+# explicitly. Tauri's own guide's full depends array also lists
+# desktop-file-utils, gdk-pixbuf2, glib2, hicolor-icon-theme, libsoup, and
+# pango -- these are transitively pulled in by webkit2gtk-4.1/gtk3 on a
+# standard Arch install in practice, but are listed here explicitly too
+# since they're what Tauri's own documented example declares, and an
+# explicit depends is more correct than relying on transitivity that this
+# process cannot verify on real Arch hardware.
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'cairo'
+    'desktop-file-utils'
+    'gdk-pixbuf2'
+    'glib2'
+    'hicolor-icon-theme'
+    'libsoup'
+    'pango'
+)
+
+# Build-from-source makedepends: cargo (Tauri's Rust side), nodejs + npm
+# (this project's frontend build -- confirmed via package-lock.json's
+# presence at the repo root and the absence of any pnpm-lock.yaml/
+# yarn.lock, i.e. this project uses npm, not pnpm/yarn).
+makedepends=('cargo' 'nodejs' 'npm')
+
+# options=('!strip'): protects the bundled PyInstaller sidecar binary
+# (packaging/pyinstaller/, frozen from src/cleanup_tools/ui/) from being
+# stripped by makepkg's default `strip` option. This is not a generic
+# "keep debug symbols" preference -- PyInstaller's onedir output embeds a
+# Python runtime plus native extension modules (see cleanup_ui.spec's own
+# `strip=False` on its EXE()/COLLECT() calls, chosen for the same reason)
+# whose behavior at runtime can depend on exact binary layout in ways a
+# blind `strip` pass is not guaranteed to preserve safely. Both the
+# research brief and design-discussion.md flag this as a real, specific
+# risk for this project's sidecar (not a generic Arch packaging habit), so
+# this option's presence is required, not optional cargo-cult boilerplate.
+options=('!strip')
+
+# LOCAL-ONLY source: this PKGBUILD lives inside the repo it packages
+# (packaging/arch/PKGBUILD) and is built from an existing local checkout,
+# never fetched from a public URL or mirror. `git+file://` is makepkg's
+# documented VCS-source mechanism, pointed at this repo's own working
+# directory via makepkg's builtin $startdir (the directory containing this
+# PKGBUILD) rather than any network address -- so `source=` still points
+# "at this project's own repo" per this story's acceptance criteria, while
+# never touching the network.
+#
+# CAVEAT (real, worth knowing before running this): `git+file://` clones
+# from the LOCAL REPO'S COMMITTED HISTORY (whatever commit is currently
+# checked out there), not its uncommitted working-tree changes. If you're
+# iterating locally, commit (or at least `git stash`/`git add` -- a clean
+# `git clone` still only sees committed blobs) before `makepkg -si`, or
+# your build will silently use stale content.
+source=("cleanup-tools::git+file://${startdir}/../..")
+sha256sums=('SKIP')  # local working-tree clone, not a fetched/pinned release artifact -- nothing to checksum against
+
+build() {
+    cd "${srcdir}/cleanup-tools"
+
+    # Fail fast, with a specific/actionable message, rather than letting
+    # `tauri build` fail deeper into the build with a more generic error.
+    # Tauri's externalBin resolution looks for this exact per-target-triple
+    # filename (see src-tauri/binaries/cleanup-ui-sidecar-stub-linux.sh's
+    # own header comment for the naming-convention reasoning and for why
+    # this is a stub script, not the real PyInstaller sidecar binary).
+    if [ ! -x "src-tauri/binaries/cleanup-ui-sidecar-x86_64-unknown-linux-gnu" ]; then
+        echo "PKGBUILD: src-tauri/binaries/cleanup-ui-sidecar-x86_64-unknown-linux-gnu is missing or not executable." >&2
+        echo "  This is the Linux sidecar stub Tauri's externalBin mechanism requires; see" >&2
+        echo "  src-tauri/binaries/cleanup-ui-sidecar-stub-linux.sh's header comment." >&2
+        echo "  (If this file exists in your working tree but this still fails: remember" >&2
+        echo "  git+file:// sources only see COMMITTED content -- see this PKGBUILD's" >&2
+        echo "  source= caveat above -- so it must be committed before 'makepkg -si'.)" >&2
+        return 1
+    fi
+
+    # The stub script above only *locates and execs* the real PyInstaller
+    # onedir sidecar binary -- it is not that binary itself. No Linux-target
+    # one has ever been built in this repo (no Arch/Linux hardware to build
+    # it on; see this file's top-of-file "TWO SEPARATE PREREQUISITE-GAP
+    # ITEMS" note, item 2). Checked here, not just left to fail inside
+    # `tauri build`, so the error names exactly what's missing and how to
+    # fix it.
+    if [ ! -x "src-tauri/resources/cleanup-ui-onedir/cleanup-ui-onedir" ]; then
+        echo "PKGBUILD: src-tauri/resources/cleanup-ui-onedir/cleanup-ui-onedir is missing or not executable." >&2
+        echo "  This is the real Linux-target PyInstaller onedir sidecar binary, which this" >&2
+        echo "  automated process cannot build (no Arch/Linux hardware, no cross-compile" >&2
+        echo "  path -- see this epic's research-brief.md). Build it yourself on this Arch" >&2
+        echo "  machine following pyinstaller-sidecar-build's onedir spec/recipe" >&2
+        echo "  (packaging/pyinstaller/cleanup_ui.spec), then place the resulting onedir/" >&2
+        echo "  output at this path before running 'makepkg -si' again." >&2
+        return 1
+    fi
+
+    npm install
+
+    # Deliberately `npx tauri build -b deb`, NOT `npm run tauri:build`.
+    # `npm run tauri:build` (see package.json) is `tauri build && sh
+    # packaging/tauri/post-build.sh` -- post-build.sh is a macOS-only
+    # ad-hoc-codesign step that searches for a `*.app` bundle under
+    # `target/*/release/bundle/macos/` and `exit 1`s loudly if none is
+    # found. On Linux there is no macos/ bundle dir at all, so chaining
+    # that script here would hard-fail every Arch build for a step that
+    # has no meaning on this platform. This is a real cross-platform gap
+    # in package.json's script surface (flagged in this story's review
+    # notes/report, not silently patched here or in package.json itself --
+    # fixing package.json's script surface is out of this packaging-only
+    # story's scope). Calling the Tauri CLI directly with an explicit
+    # `-b deb` bundle target sidesteps it cleanly: the CLI's `--bundles`
+    # flag overrides `tauri.conf.json`'s `bundle.targets` for this one
+    # invocation without needing to touch that shared, macOS-relevant
+    # config value.
+    npx tauri build -b deb
+}
+
+package() {
+    cd "${srcdir}/cleanup-tools"
+
+    # Tauri's own AUR "building from source" example hardcodes the exact
+    # `<name>_<version>_<arch>` output directory name. This PKGBUILD
+    # deliberately globs instead of hardcoding that pattern, since this
+    # project's Linux `.deb` output directory naming has never actually
+    # been observed (no Arch/Linux build has been run) -- a wildcard glob
+    # is honest about that uncertainty and more robust to it than a guess
+    # dressed up as a known fact.
+    local bundle_dir
+    bundle_dir=$(printf '%s\n' "${srcdir}/cleanup-tools/src-tauri/target/release/bundle/deb/"*/ | head -n1)
+
+    if [ ! -d "$bundle_dir" ]; then
+        echo "PKGBUILD: no .deb bundle output directory found under src-tauri/target/release/bundle/deb/ -- did 'tauri build -b deb' succeed?" >&2
+        return 1
+    fi
+
+    cp -a "${bundle_dir}data/"* "${pkgdir}/"
+}

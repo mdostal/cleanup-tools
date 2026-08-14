@@ -89,6 +89,21 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   the webview shows before/if the sidecar isn't ready. Unsigned distribution: a quarantined copy
   shows "app is damaged" on current macOS, not a right-click-Open dialog — see README.md's Tauri
   section for the actual working install step (`xattr -d com.apple.quarantine`).
+- `packaging/arch/PKGBUILD` — local-only, build-from-source Arch Linux PKGBUILD for the Tauri
+  desktop shell, run via `makepkg -si` directly from a local clone (never published to the public
+  AUR). Reuses `src-tauri/`'s process-lifecycle Rust code unchanged; this is a packaging-config-only
+  addition. **Structurally reviewed only, never build-tested** — nobody working on this project has
+  Arch Linux hardware. `bash -n` passes on its `build()`/`package()` functions and its fields were
+  checked against the Arch Wiki's PKGBUILD conventions, but `makepkg -si` itself has never been run.
+  `src-tauri/binaries/cleanup-ui-sidecar-stub-linux.sh` (copied to the required per-target-triple
+  filename `cleanup-ui-sidecar-x86_64-unknown-linux-gnu`) closes the previously-open gap where the
+  sidecar stub script only handled macOS `.app`-bundle paths — it's a Linux/`.deb`-bundle-layout
+  counterpart of `cleanup-ui-sidecar-stub.sh` (untouched), derived from reading `tauri-bundler`'s
+  Debian-bundler source directly (also unverified on real hardware — the stub tries a defensive
+  fallback path for exactly that reason). One prerequisite gap remains and cannot be closed without
+  real Arch/Linux hardware: no Linux-target PyInstaller onedir sidecar *binary* exists yet (only the
+  stub *script* that would locate and exec it) — see README.md's Arch Linux section for the exact
+  manual build/verification steps still needed from the project owner.
 
 ## Conventions
 
