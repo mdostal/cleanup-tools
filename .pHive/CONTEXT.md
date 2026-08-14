@@ -81,6 +81,14 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   real process. `tests/test_pyinstaller_spec_datas.py` fails loudly if the spec's `datas=` list
   ever drifts out of sync with the real `templates/`/`static/` directories — this already caught
   a real bug once (a new static file landing in a concurrent story, missed by the spec).
+- `src-tauri/` — the macOS Tauri v2 desktop shell (first Rust code in this project). Wraps the
+  onedir sidecar via a shell-script stub (`src-tauri/binaries/cleanup-ui-sidecar-stub.sh`) that
+  `exec`s the real onedir executable, since Tauri's `externalBin` only accepts one file per target
+  triple and onedir is a directory — the stub preserves onedir's whole point (the tracked PID is
+  always the real Flask process). `frontend/loading.html` is the bundled loading/poll/error screen
+  the webview shows before/if the sidecar isn't ready. Unsigned distribution: a quarantined copy
+  shows "app is damaged" on current macOS, not a right-click-Open dialog — see README.md's Tauri
+  section for the actual working install step (`xattr -d com.apple.quarantine`).
 
 ## Conventions
 
@@ -89,7 +97,9 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
 - Uncertain files are staged into `_sorted/<type>/` or `_REVIEW/` — never deleted blind.
 - The wallet/secret finder outputs `path · match-type · confidence` — never the matched value itself.
 - **No network, no telemetry.** This tool touches personal files end-to-end and must stay fully local
-  (see `.pHive/project-profile.yaml → north_star.avoid`).
+  (see `.pHive/project-profile.yaml → north_star.avoid`). This extends to the Tauri shell: no
+  `tauri-plugin-updater`, no analytics/crash-reporting plugin — verified by grepping
+  `Cargo.lock`/`package-lock.json`, not just by confirming none was deliberately added.
 - No CLAUDE.md exists yet — until one is added, `.pHive/project-profile.yaml → claude_md_summary`
   is the authoritative source for build/rule conventions.
 - The sole sanctioned exception to "no network, no telemetry": explicit, user-triggered AI calls
