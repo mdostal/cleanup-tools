@@ -69,11 +69,13 @@ duplicate pending entries), and each pending entry gets a review card (thumbnail
 never the original full-resolution file) with approve/reject/undo. Approving or rejecting here
 only changes the entry's status — it does **not** execute anything; run `cleanup sort --from-queue`
 or `cleanup reclaim --from-queue` afterward, as a separate deliberate step, to actually act on
-approved entries. `/plan/reclaim`'s trigger (the "Plan: Reclaim" link) no longer blocks the UI
-silently for as long as the underlying scan takes — it kicks off the plan/stage work on a
-background job and reports live progress ("Staging reclaim plan... (current/total)") while polling,
-then lands back on the dashboard with the same "Staged N entries" result the old synchronous
-version showed. The manual (no-AI) approvals UI is now **complete and usable at real scale**:
+approved entries. None of the three "Plan: X" triggers (Sort, Reclaim, Corral Screenshots) block
+the UI silently while they scan — each kicks off its work on a background job and reports live
+progress while polling, then lands back on the dashboard with the same result a synchronous version
+would have shown. The dashboard also has a **kickoff bar**: check which of Sort/Reclaim/Corral
+Screenshots you want to run, hit one button, and all selected plans launch as independent background
+jobs at once, each with its own progress, instead of clicking and waiting for each one in turn. The
+manual (no-AI) approvals UI is now **complete and usable at real scale**:
 `/queue` paginates (`?page=`/`?per_page=`), bulk-approve/bulk-reject act on an entire group_key
 (or an explicit id list) in one click, and keyboard shortcuts (`y`/`n`/`space`/arrow keys) let you
 triage a large plan fast without reaching for the mouse each time. The dashboard also shows a

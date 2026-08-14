@@ -66,12 +66,15 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   invasive OS-level side effect in this codebase (restarts `SystemUIServer`) — gated behind its own
   `--set-default-location` CLI flag, structurally independent of `--go`/`--from-queue` and
   unreachable from the UI.
-- `src/cleanup_tools/ui/jobs.py` — the in-memory background-job registry backing `/plan/reclaim`
-  (which can take ~2 minutes on a real machine) and `GET /status/<job_id>`. Unlike
-  `approval_queue.yaml`, job state does **not** persist anywhere — it's a plain
-  `dict[job_id -> JobState]` guarded by a single lock, lost entirely on process restart. A job only
-  needs to survive one open browser tab/desktop-app window; there is nothing to recover if the
-  server restarts mid-job. `static/plan-reclaim.js` is the client-side counterpart that polls it.
+- `src/cleanup_tools/ui/jobs.py` — the in-memory background-job registry backing all three
+  `/plan/*` routes (sort, reclaim, corral-screenshots — each proposed entry gets a real content
+  hash, which is slow at real scale) and `GET /status/<job_id>`. Unlike `approval_queue.yaml`, job
+  state does **not** persist anywhere — it's a plain `dict[job_id -> JobState]` guarded by a single
+  lock, lost entirely on process restart. A job only needs to survive one open browser tab/
+  desktop-app window; there is nothing to recover if the server restarts mid-job.
+  `static/plan-trigger.js` is the shared client-side counterpart that polls it, used both by the
+  individual "Plan: X" nav links and the dashboard's kickoff bar (select multiple plans, launch them
+  all as independent parallel jobs with one click).
 - `packaging/pyinstaller/` — the PyInstaller spec (`cleanup_ui.spec`) + entrypoint
   (`entrypoint.py`) that freeze `src/cleanup_tools/ui/` into a standalone sidecar binary, later
   wired into a Tauri desktop shell's `externalBin`. Ships `--onedir` (a directory, not a single
