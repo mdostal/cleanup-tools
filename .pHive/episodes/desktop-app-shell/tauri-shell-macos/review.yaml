@@ -1,0 +1,17 @@
+step_id: review
+status: completed
+timestamp: "2026-08-13"
+review_verdict: findings_required_fix_cycle
+notes: >
+  Independent review gave the quit/orphan-process fix the highest scrutiny in the epic --
+  the epic's top-named risk -- and pressure-tested it with 19 quit cycles including races
+  at 150ms post-launch: zero orphans in 19/19 runs. Independently confirmed the onedir/stub
+  PID-preservation claim via its own ps/lsof inspection, crash detection, port-collision
+  detection (including that the app doesn't kill a process it didn't spawn), capabilities
+  scoping (plus a deeper finding: the capability doesn't extend to the Flask origin once
+  navigated, unclaimed but true defense-in-depth), and telemetry absence. Found the
+  unsigned-distribution assumption doesn't hold on current macOS (a "damaged" dialog, not
+  right-click-Open, confirmed via direct reproduction) plus one new bug: a headless process
+  that hangs indefinitely when a quarantined copy is opened. Also flagged a stale code
+  comment and a null CSP as minor items.
+artifacts: []
