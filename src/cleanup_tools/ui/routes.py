@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,7 +35,7 @@ from PIL import Image, UnidentifiedImageError
 
 from .. import config as config_module
 from .. import queue as queue_module
-from ..ai import CredentialsError, get_provider
+from ..ai import CredentialsError, default_credentials_path, get_provider
 from ..ai.wiring import DEFAULT_CAP as DEFAULT_AI_CAP
 from ..ai.wiring import propose_for_other_bucket
 from ..commands import corral_screenshots as corral_screenshots_module
@@ -1144,6 +1145,49 @@ ICON_CHOICES = {
 DEFAULT_ICON_CHOICE = "broom-folder"
 
 
+def _user_bucket_rules(config: config_module.Config) -> list[config_module.BucketRule]:
+    """The user-added bucket rules within ``config.bucket_rules`` -- everything
+    BEFORE the trailing ``DEFAULT_BUCKET_RULES`` block ``load_config`` always
+    appends (see that function's docstring). Mirrors its own trailing-match
+    slicing exactly, so the CRUD routes below only ever add/edit/remove/
+    reorder user rules -- never the defaults, which stay a fixed, always-
+    applied-last fallback. Editing a default in place here would also break
+    ``load_config``'s round-trip detection (it recognizes "ends with the
+    real default block" by exact list equality), so keeping this boundary
+    exact is a correctness requirement, not just a UI nicety.
+    """
+    n = len(config_module.DEFAULT_BUCKET_RULES)
+    if len(config.bucket_rules) >= n and config.bucket_rules[len(config.bucket_rules) - n :] == config_module.DEFAULT_BUCKET_RULES:
+        return list(config.bucket_rules[: len(config.bucket_rules) - n])
+    return list(config.bucket_rules)
+
+
+def _save_user_bucket_rules(adapter, config: config_module.Config, user_rules: list[config_module.BucketRule]) -> None:
+    """Persist ``user_rules`` (see ``_user_bucket_rules``) followed by the
+    fixed defaults -- the exact shape ``load_config`` expects to read back
+    and correctly re-split on the next load.
+    """
+    new_config = dataclasses.replace(
+        config, bucket_rules=user_rules + config_module.DEFAULT_BUCKET_RULES
+    )
+    config_module.save_config(adapter, new_config)
+
+
+def _ai_credentials_status() -> dict:
+    """Whether an Anthropic API key is configured, and from where -- for the
+    AI Provider settings pane. NEVER reads or exposes the key value itself,
+    only which of ``ai/__init__.py``'s two resolution sources (env var,
+    else the credentials file) is actually active, mirroring that module's
+    own precedence without duplicating its file-reading/permission logic.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return {"configured": True, "source": "ANTHROPIC_API_KEY environment variable"}
+    path = default_credentials_path()
+    if path.exists():
+        return {"configured": True, "source": str(path)}
+    return {"configured": False, "source": None}
+
+
 @bp.route("/settings")
 def settings():
     config = config_module.load_config(_adapter())
@@ -1151,6 +1195,11 @@ def settings():
         "settings.html",
         icon_choices=ICON_CHOICES,
         current_icon_choice=config.icon_choice,
+        user_bucket_rules=_user_bucket_rules(config),
+        default_bucket_rules=config_module.DEFAULT_BUCKET_RULES,
+        search_roots=config.search_roots,
+        master_paths=config.master_paths,
+        ai_status=_ai_credentials_status(),
     )
 
 
@@ -1180,6 +1229,202 @@ def set_icon_choice():
     config = dataclasses.replace(config_module.load_config(adapter), icon_choice=choice)
     config_module.save_config(adapter, config)
     return jsonify({"choice": choice})
+
+
+# ---------------------------------------------------------------------------
+# Bucket Rules CRUD (settings pane). Index-addressed within the USER rules
+# sublist only (see _user_bucket_rules) -- the defaults are a fixed,
+# read-only, always-applied-last fallback, never edited here. This is a
+# single-user local config file with no concurrent-writer story the way the
+# approval queue has, so plain index addressing (rather than a generated id
+# per rule) is enough -- consistent with there being no id scheme for
+# bucket rules anywhere else in this codebase.
+# ---------------------------------------------------------------------------
+
+
+def _parse_extensions(raw: str) -> frozenset[str]:
+    """Comma/whitespace-separated extensions -> a lowercased frozenset,
+    stripping any leading "." a user might type out of habit (e.g. ".jpg").
+    """
+    parts = [p.strip().lower().lstrip(".") for p in raw.replace(",", " ").split()]
+    return frozenset(p for p in parts if p)
+
+
+@bp.route("/settings/bucket-rules/add", methods=["POST"])
+def add_bucket_rule():
+    extensions = _parse_extensions(request.form.get("extensions", ""))
+    bucket = (request.form.get("bucket") or "").strip()
+    filename_pattern = (request.form.get("filename_pattern") or "").strip() or None
+
+    if not extensions or not bucket:
+        return "extensions and bucket are required", 400
+
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+    user_rules = _user_bucket_rules(config)
+    user_rules.append(
+        config_module.BucketRule(extensions=extensions, bucket=bucket, filename_pattern=filename_pattern)
+    )
+    _save_user_bucket_rules(adapter, config, user_rules)
+    return redirect(url_for("ui.settings") + "#bucket-rules")
+
+
+@bp.route("/settings/bucket-rules/<int:index>/edit", methods=["POST"])
+def edit_bucket_rule(index):
+    extensions = _parse_extensions(request.form.get("extensions", ""))
+    bucket = (request.form.get("bucket") or "").strip()
+    filename_pattern = (request.form.get("filename_pattern") or "").strip() or None
+
+    if not extensions or not bucket:
+        return "extensions and bucket are required", 400
+
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+    user_rules = _user_bucket_rules(config)
+    if not 0 <= index < len(user_rules):
+        abort(404, description=f"No user bucket rule at index {index}")
+
+    user_rules[index] = config_module.BucketRule(
+        extensions=extensions, bucket=bucket, filename_pattern=filename_pattern
+    )
+    _save_user_bucket_rules(adapter, config, user_rules)
+    return redirect(url_for("ui.settings") + "#bucket-rules")
+
+
+@bp.route("/settings/bucket-rules/<int:index>/remove", methods=["POST"])
+def remove_bucket_rule(index):
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+    user_rules = _user_bucket_rules(config)
+    if not 0 <= index < len(user_rules):
+        abort(404, description=f"No user bucket rule at index {index}")
+
+    del user_rules[index]
+    _save_user_bucket_rules(adapter, config, user_rules)
+    return redirect(url_for("ui.settings") + "#bucket-rules")
+
+
+@bp.route("/settings/bucket-rules/<int:index>/move", methods=["POST"])
+def move_bucket_rule(index):
+    """Swap the rule at ``index`` with its neighbor in ``direction`` ("up" or
+    "down") -- up/down buttons, not drag-and-drop (see this story's design
+    decision: no drag-and-drop exists anywhere in this codebase yet, and
+    up/down buttons are far lower implementation risk for a first version).
+    Order changing here is exactly what makes ``resolve_bucket``'s
+    first-match-wins behavior change on the next sort run -- see this
+    story's reorder-then-sort integration test.
+    """
+    direction = request.form.get("direction")
+    if direction not in ("up", "down"):
+        return "direction must be 'up' or 'down'", 400
+
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+    user_rules = _user_bucket_rules(config)
+    if not 0 <= index < len(user_rules):
+        abort(404, description=f"No user bucket rule at index {index}")
+
+    target = index - 1 if direction == "up" else index + 1
+    if 0 <= target < len(user_rules):
+        user_rules[index], user_rules[target] = user_rules[target], user_rules[index]
+        _save_user_bucket_rules(adapter, config, user_rules)
+    return redirect(url_for("ui.settings") + "#bucket-rules")
+
+
+# ---------------------------------------------------------------------------
+# Search Roots CRUD (settings pane) -- the natural home for
+# guided-sort-and-cluster's deferred "manage search_roots from the UI" open
+# question. Value-addressed (not index) since paths are naturally unique
+# and removal-by-value avoids any index-drift concern.
+# ---------------------------------------------------------------------------
+
+
+@bp.route("/settings/search-roots/add", methods=["POST"])
+def add_search_root():
+    path = (request.form.get("path") or "").strip()
+    if not path:
+        return "path is required", 400
+
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+    if path not in config.search_roots:
+        new_config = dataclasses.replace(config, search_roots=config.search_roots + [path])
+        config_module.save_config(adapter, new_config)
+    return redirect(url_for("ui.settings") + "#search-roots")
+
+
+@bp.route("/settings/search-roots/remove", methods=["POST"])
+def remove_search_root():
+    path = request.form.get("path")
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+    new_roots = [r for r in config.search_roots if r != path]
+    if new_roots != config.search_roots:
+        new_config = dataclasses.replace(config, search_roots=new_roots)
+        config_module.save_config(adapter, new_config)
+    return redirect(url_for("ui.settings") + "#search-roots")
+
+
+# ---------------------------------------------------------------------------
+# Master Paths CRUD (settings pane). ``backed_up`` gates reclaim.py's
+# delete-refusal (see MASTER_PATH_REFUSAL_REASON) -- flipping it true->false
+# REMOVES that protection for the path, so toggling requires an explicit
+# confirmation click (settings.html's per-row form, not a bare checkbox
+# auto-submitting on change) with warning copy naming exactly what changes,
+# not generic "are you sure?" text. See this story's review-step callout.
+# ---------------------------------------------------------------------------
+
+
+@bp.route("/settings/master-paths/add", methods=["POST"])
+def add_master_path():
+    path = (request.form.get("path") or "").strip()
+    backed_up = request.form.get("backed_up") == "on"
+    if not path:
+        return "path is required", 400
+
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+    if not any(mp.path == path for mp in config.master_paths):
+        new_config = dataclasses.replace(
+            config, master_paths=config.master_paths + [config_module.MasterPath(path=path, backed_up=backed_up)]
+        )
+        config_module.save_config(adapter, new_config)
+    return redirect(url_for("ui.settings") + "#master-paths")
+
+
+@bp.route("/settings/master-paths/remove", methods=["POST"])
+def remove_master_path():
+    path = request.form.get("path")
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+    new_paths = [mp for mp in config.master_paths if mp.path != path]
+    if len(new_paths) != len(config.master_paths):
+        new_config = dataclasses.replace(config, master_paths=new_paths)
+        config_module.save_config(adapter, new_config)
+    return redirect(url_for("ui.settings") + "#master-paths")
+
+
+@bp.route("/settings/master-paths/toggle-backed-up", methods=["POST"])
+def toggle_master_path_backed_up():
+    path = request.form.get("path")
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
+
+    new_paths = []
+    found = False
+    for mp in config.master_paths:
+        if mp.path == path:
+            found = True
+            new_paths.append(dataclasses.replace(mp, backed_up=not mp.backed_up))
+        else:
+            new_paths.append(mp)
+
+    if not found:
+        abort(404, description=f"No master path {path!r}")
+
+    new_config = dataclasses.replace(config, master_paths=new_paths)
+    config_module.save_config(adapter, new_config)
+    return redirect(url_for("ui.settings") + "#master-paths")
 
 
 # ---------------------------------------------------------------------------

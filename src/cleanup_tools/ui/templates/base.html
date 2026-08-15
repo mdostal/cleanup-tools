@@ -387,6 +387,90 @@
     margin-top: 0.4rem;
   }
 
+  /* Settings shell: Raycast/Obsidian-style sidebar of sections (see
+     settings.html + static/settings-shell.js). All panes render
+     server-side in one response; the JS only toggles .settings-pane
+     visibility, so this is pure layout CSS, no JS-driven classes beyond
+     .active on the current sidebar link. */
+  .settings-shell {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+  }
+  .settings-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex-shrink: 0;
+    width: 180px;
+    position: sticky;
+    top: 1rem;
+  }
+  .settings-sidebar a {
+    display: block;
+    padding: 0.45rem 0.7rem;
+    border-radius: var(--radius-card);
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+  }
+  .settings-sidebar a:hover { background: var(--surface-2); color: var(--ink); }
+  .settings-sidebar a.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .settings-panes { flex: 1; min-width: 0; }
+  .settings-pane h2 { margin-top: 0; }
+  .settings-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+  }
+  .settings-table th, .settings-table td {
+    text-align: left;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.88rem;
+  }
+  .settings-table th { color: var(--ink-soft); font-weight: 600; font-size: 0.78rem; }
+  .settings-table input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+  }
+  .settings-table-readonly td { color: var(--ink-soft); font-family: var(--font-mono); }
+  .settings-list { list-style: none; margin: 0.5rem 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+  .settings-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: 0.5rem 0.75rem;
+  }
+  .settings-list code { font-size: 0.85rem; word-break: break-all; }
+  .settings-add-form {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 0.75rem;
+  }
+
+  /* Bare gear-icon Settings nav link (Option A) -- no label/pill, kept
+     visually distinct from the Dashboard/Review Queue text links via
+     padding/vertical-align rather than a second color token. */
+  .nav-link-icon {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem !important;
+  }
+
   /* Chip/pill styling for every .badge -- real padding, a bit of
      font-weight and letter-spacing, and a background/foreground color pair
      drawn from the active theme's tokens (see badge-ai/badge-manual and
@@ -634,11 +718,23 @@
     class="nav-link"
     {% if request.endpoint == 'ui.queue_view' %}aria-current="page"{% endif %}
   >Review Queue</a>
+  <!-- Bare gear icon, no label, no pill (Option A from the design-options
+       artifact -- product-owner-confirmed), distinct from Dashboard/Review
+       Queue's text links. Cmd+, opens it from anywhere (see
+       static/settings-shortcut.js), matching the macOS convention. -->
   <a
     href="{{ url_for('ui.settings') }}"
-    class="nav-link"
+    class="nav-link nav-link-icon"
+    id="settings-nav-link"
+    title="Settings (&#8984;,)"
+    aria-label="Settings"
     {% if request.endpoint == 'ui.settings' %}aria-current="page"{% endif %}
-  >Settings</a>
+  >
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+  </a>
   <a
     href="{{ url_for('ui.plan_sort') }}"
     class="plan-trigger-link"
@@ -698,6 +794,8 @@
 <script src="{{ url_for('static', filename='plan-trigger.js') }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}"></script>
 <script src="{{ url_for('static', filename='settings.js') }}"></script>
+<script src="{{ url_for('static', filename='settings-shell.js') }}"></script>
+<script src="{{ url_for('static', filename='settings-shortcut.js') }}"></script>
 <script src="{{ url_for('static', filename='update-checker.js') }}"></script>
 </body>
 </html>

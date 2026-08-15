@@ -2260,8 +2260,10 @@ def test_settings_nav_link_marked_current_on_settings_view(client):
     resp = client.get("/settings")
     html = resp.data.decode()
 
-    settings_link = _nav_link_block(html, "Settings")
-    assert 'class="nav-link"' in settings_link
+    # The Settings nav link is a bare gear icon (no text content -- see
+    # base.html), so it's isolated by its id rather than _nav_link_block's
+    # text-based split.
+    settings_link = html.split('id="settings-nav-link"')[1].split(">")[0]
     assert 'aria-current="page"' in settings_link
 
     dashboard_link = _nav_link_block(html, "Dashboard")
@@ -2306,3 +2308,265 @@ def test_set_icon_choice_unknown_slug_returns_400_and_does_not_persist(adapter, 
 def test_set_icon_choice_missing_body_returns_400(client):
     resp = client.post("/settings/icon", json={})
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 12b. Settings shell: gear-icon nav link, sidebar sections, and CRUD for
+#      bucket rules / search roots / master paths.
+# ---------------------------------------------------------------------------
+
+
+def test_gear_icon_nav_link_present_on_every_page(client):
+    resp = client.get("/")
+    html = resp.data.decode()
+    assert 'id="settings-nav-link"' in html
+    assert 'href="/settings"' in html
+    # Bare icon, no visible text label between the anchor tags.
+    link_html = html.split('id="settings-nav-link"')[1].split("</a>")[0]
+    assert "<svg" in link_html
+
+
+def test_settings_shell_js_and_shortcut_js_are_served(client):
+    for filename in ("settings-shell.js", "settings-shortcut.js"):
+        resp = client.get(f"/static/{filename}")
+        assert resp.status_code == 200
+
+
+def test_settings_page_renders_all_six_sidebar_sections(client):
+    resp = client.get("/settings")
+    html = resp.data.decode()
+    for pane_id in ("general", "app-icon", "bucket-rules", "search-roots", "master-paths", "ai-provider"):
+        assert f'id="{pane_id}"' in html
+        assert f'data-pane="{pane_id}"' in html
+
+
+def test_add_bucket_rule_persists_and_appears_in_settings(adapter, client):
+    resp = client.post(
+        "/settings/bucket-rules/add",
+        data={"extensions": ".log, TXT", "bucket": "logs", "filename_pattern": ""},
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("#bucket-rules")
+
+    config = config_module.load_config(adapter)
+    user_rules = _user_bucket_rules_for_test(config)
+    assert len(user_rules) == 1
+    assert user_rules[0].extensions == frozenset({"log", "txt"})
+    assert user_rules[0].bucket == "logs"
+
+    html = client.get("/settings").data.decode()
+    assert "logs" in html
+
+
+def _user_bucket_rules_for_test(config):
+    from cleanup_tools.ui.routes import _user_bucket_rules
+
+    return _user_bucket_rules(config)
+
+
+def test_add_bucket_rule_missing_fields_returns_400(adapter, client):
+    resp = client.post("/settings/bucket-rules/add", data={"extensions": "", "bucket": "logs"})
+    assert resp.status_code == 400
+    assert _user_bucket_rules_for_test(config_module.load_config(adapter)) == []
+
+
+def test_edit_bucket_rule_updates_in_place(adapter, client):
+    client.post("/settings/bucket-rules/add", data={"extensions": "log", "bucket": "logs"})
+
+    resp = client.post(
+        "/settings/bucket-rules/0/edit",
+        data={"extensions": "log, out", "bucket": "server-logs", "filename_pattern": "app*"},
+    )
+    assert resp.status_code == 302
+
+    rules = _user_bucket_rules_for_test(config_module.load_config(adapter))
+    assert len(rules) == 1
+    assert rules[0].extensions == frozenset({"log", "out"})
+    assert rules[0].bucket == "server-logs"
+    assert rules[0].filename_pattern == "app*"
+
+
+def test_edit_bucket_rule_unknown_index_returns_404(client):
+    resp = client.post("/settings/bucket-rules/5/edit", data={"extensions": "log", "bucket": "logs"})
+    assert resp.status_code == 404
+
+
+def test_remove_bucket_rule_deletes_only_that_rule(adapter, client):
+    client.post("/settings/bucket-rules/add", data={"extensions": "log", "bucket": "logs"})
+    client.post("/settings/bucket-rules/add", data={"extensions": "out", "bucket": "outputs"})
+
+    resp = client.post("/settings/bucket-rules/0/remove")
+    assert resp.status_code == 302
+
+    rules = _user_bucket_rules_for_test(config_module.load_config(adapter))
+    assert len(rules) == 1
+    assert rules[0].bucket == "outputs"
+
+
+def test_move_bucket_rule_up_and_down_swaps_neighbors(adapter, client):
+    client.post("/settings/bucket-rules/add", data={"extensions": "a", "bucket": "first"})
+    client.post("/settings/bucket-rules/add", data={"extensions": "b", "bucket": "second"})
+    client.post("/settings/bucket-rules/add", data={"extensions": "c", "bucket": "third"})
+
+    client.post("/settings/bucket-rules/0/move", data={"direction": "down"})
+    rules = _user_bucket_rules_for_test(config_module.load_config(adapter))
+    assert [r.bucket for r in rules] == ["second", "first", "third"]
+
+    client.post("/settings/bucket-rules/2/move", data={"direction": "up"})
+    rules = _user_bucket_rules_for_test(config_module.load_config(adapter))
+    assert [r.bucket for r in rules] == ["second", "third", "first"]
+
+
+def test_move_bucket_rule_at_boundary_is_a_harmless_no_op(adapter, client):
+    client.post("/settings/bucket-rules/add", data={"extensions": "a", "bucket": "only"})
+
+    resp = client.post("/settings/bucket-rules/0/move", data={"direction": "up"})
+    assert resp.status_code == 302
+    rules = _user_bucket_rules_for_test(config_module.load_config(adapter))
+    assert [r.bucket for r in rules] == ["only"]
+
+
+def test_reorder_bucket_rule_actually_changes_first_match_wins_on_next_sort(adapter, client, tmp_path):
+    """The single highest-risk property in this whole story: a persisted
+    reorder must actually drive resolve_bucket's first-match-wins behavior
+    on the next real sort run, not just move rows around in the UI.
+    """
+    from cleanup_tools.commands import sort as sort_module
+
+    # Two competing rules for the SAME extension, added in an order where
+    # "wrong-bucket" would win first-match if the reorder below didn't
+    # really persist.
+    client.post("/settings/bucket-rules/add", data={"extensions": "xyz", "bucket": "wrong-bucket"})
+    client.post("/settings/bucket-rules/add", data={"extensions": "xyz", "bucket": "right-bucket"})
+
+    # Reorder so "right-bucket" (index 1) moves ahead of "wrong-bucket".
+    client.post("/settings/bucket-rules/1/move", data={"direction": "up"})
+    rules = _user_bucket_rules_for_test(config_module.load_config(adapter))
+    assert [r.bucket for r in rules] == ["right-bucket", "wrong-bucket"]
+
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "file.xyz").write_text("content")
+
+    from types import SimpleNamespace
+    result = sort_module.run(adapter, SimpleNamespace(dir=[str(target)], go=False))
+    assert result["plan"][0]["bucket"] == "right-bucket"
+
+
+def test_add_search_root_persists_and_dedupes(adapter, client, tmp_path):
+    root = str(tmp_path / "some-root")
+
+    resp = client.post("/settings/search-roots/add", data={"path": root})
+    assert resp.status_code == 302
+
+    config = config_module.load_config(adapter)
+    assert config.search_roots == [root]
+
+    # Adding the same path again is a no-op, not a duplicate.
+    client.post("/settings/search-roots/add", data={"path": root})
+    assert config_module.load_config(adapter).search_roots == [root]
+
+
+def test_add_search_root_missing_path_returns_400(client):
+    resp = client.post("/settings/search-roots/add", data={"path": ""})
+    assert resp.status_code == 400
+
+
+def test_remove_search_root_deletes_only_that_path(adapter, client, tmp_path):
+    root_a = str(tmp_path / "a")
+    root_b = str(tmp_path / "b")
+    client.post("/settings/search-roots/add", data={"path": root_a})
+    client.post("/settings/search-roots/add", data={"path": root_b})
+
+    resp = client.post("/settings/search-roots/remove", data={"path": root_a})
+    assert resp.status_code == 302
+
+    assert config_module.load_config(adapter).search_roots == [root_b]
+
+
+def test_add_master_path_persists_with_backed_up_flag(adapter, client, tmp_path):
+    path = str(tmp_path / "irreplaceable")
+
+    resp = client.post("/settings/master-paths/add", data={"path": path, "backed_up": "on"})
+    assert resp.status_code == 302
+
+    config = config_module.load_config(adapter)
+    assert len(config.master_paths) == 1
+    assert config.master_paths[0].path == path
+    assert config.master_paths[0].backed_up is True
+
+
+def test_add_master_path_defaults_backed_up_false_when_checkbox_omitted(adapter, client, tmp_path):
+    path = str(tmp_path / "irreplaceable")
+    client.post("/settings/master-paths/add", data={"path": path})
+
+    config = config_module.load_config(adapter)
+    assert config.master_paths[0].backed_up is False
+
+
+def test_remove_master_path_deletes_only_that_path(adapter, client, tmp_path):
+    path_a = str(tmp_path / "a")
+    path_b = str(tmp_path / "b")
+    client.post("/settings/master-paths/add", data={"path": path_a})
+    client.post("/settings/master-paths/add", data={"path": path_b})
+
+    resp = client.post("/settings/master-paths/remove", data={"path": path_a})
+    assert resp.status_code == 302
+
+    config = config_module.load_config(adapter)
+    assert [mp.path for mp in config.master_paths] == [path_b]
+
+
+def test_toggle_master_path_backed_up_flips_the_flag(adapter, client, tmp_path):
+    path = str(tmp_path / "irreplaceable")
+    client.post("/settings/master-paths/add", data={"path": path})  # backed_up=False
+
+    client.post("/settings/master-paths/toggle-backed-up", data={"path": path})
+    assert config_module.load_config(adapter).master_paths[0].backed_up is True
+
+    client.post("/settings/master-paths/toggle-backed-up", data={"path": path})
+    assert config_module.load_config(adapter).master_paths[0].backed_up is False
+
+
+def test_toggle_master_path_backed_up_unknown_path_returns_404(client):
+    resp = client.post("/settings/master-paths/toggle-backed-up", data={"path": "/nope"})
+    assert resp.status_code == 404
+
+
+def test_master_paths_pane_shows_explicit_warning_copy_on_backed_up_toggle(adapter, client, tmp_path):
+    """The safety-critical property this story's review step calls out
+    explicitly: flipping backed_up must never read as a generic checkbox.
+    """
+    backed_up_path = str(tmp_path / "safe")
+    not_backed_up_path = str(tmp_path / "unsafe")
+    client.post("/settings/master-paths/add", data={"path": backed_up_path, "backed_up": "on"})
+    client.post("/settings/master-paths/add", data={"path": not_backed_up_path})
+
+    html = client.get("/settings").data.decode()
+
+    # true -> false direction: explicit copy naming what re-enabling
+    # delete-refusal means, not a bare "are you sure?".
+    assert "delete-refusal" in html
+    # The not-backed-up row's own status badge is explicit, not silent.
+    assert "NOT backed up" in html
+
+
+def test_ai_provider_pane_shows_not_configured_when_no_key_anywhere(client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    import cleanup_tools.ui.routes as routes_module
+
+    monkeypatch.setattr(
+        routes_module, "default_credentials_path", lambda: Path("/nonexistent/credentials/path")
+    )
+
+    html = client.get("/settings").data.decode()
+    assert "Not configured" in html
+
+
+def test_ai_provider_pane_shows_configured_via_env_var_without_leaking_the_key(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-super-secret-value")
+
+    html = client.get("/settings").data.decode()
+    assert "Configured" in html
+    assert "ANTHROPIC_API_KEY environment variable" in html
+    assert "sk-super-secret-value" not in html

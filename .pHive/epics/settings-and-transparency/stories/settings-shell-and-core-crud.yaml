@@ -90,6 +90,32 @@ references:
 
 manual_verdict:
   scenario_ref: .pHive/test-scenarios/settings-shell-and-core-crud-manual.yaml
-  verdict: null
-  timestamp: null
-  agent: null
+  verdict: pass
+  timestamp: "2026-08-15T17:25:00Z"
+  agent: claude-sonnet-5 (execute skill, direct Playwright walkthrough -- no
+    formal scenario file was ever authored at scenario_ref, so this verdict
+    is recorded ad hoc)
+  notes: |
+    Ran the real approvals UI against a scratch HOME. Verified via
+    Playwright: (1) the sidebar shell renders all 6 sections and
+    deep-links correctly via #hash on a genuine full page load; (2) a
+    real bug was caught and fixed during this pass -- settings-shell.js
+    originally only wired pane-switching to click events + a manual
+    history.replaceState, which never fires on a fragment-only navigation
+    (e.g. typing a #hash URL directly, or Back/Forward) -- landing on
+    such a URL left the PREVIOUS pane visible instead of the requested
+    one. Fixed by switching to a single `hashchange`-driven show()
+    (native <a href="#pane-id"> anchors already fire that event on
+    click, so the click-specific handler was removed entirely, not just
+    patched) -- re-verified the exact failing scenario afterward and it
+    now works; (3) added a master path via the real form, confirmed the
+    add-then-redirect flow lands back on the right pane with the new row
+    visible; (4) clicked "Mark backed up" and confirmed the native
+    confirm() dialog fires with the exact required warning copy ("This
+    REMOVES reclaim's delete-refusal for this path -- reclaim will be
+    allowed to delete things under it"), accepted it, and confirmed the
+    row's status flipped to "Backed up" with the button relabeling to
+    "Mark NOT backed up". Bucket-rule/search-root CRUD and the
+    reorder-then-sort integration property were verified via the
+    automated test suite (523 passed) rather than repeated manually,
+    since the route-level tests already exercise those exact POSTs.

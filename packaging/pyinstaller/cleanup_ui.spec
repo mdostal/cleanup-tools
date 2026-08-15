@@ -131,6 +131,8 @@ datas = [
     (os.path.join(UI_STATIC, "plan-trigger.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "theme.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "settings.js"), "cleanup_tools/ui/static"),
+    (os.path.join(UI_STATIC, "settings-shell.js"), "cleanup_tools/ui/static"),
+    (os.path.join(UI_STATIC, "settings-shortcut.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "update-checker.js"), "cleanup_tools/ui/static"),
     (
         os.path.join(UI_STATIC, "icon-choices", "broom-folder.png"),
