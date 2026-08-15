@@ -41,6 +41,11 @@ The four original pieces still have different sizes and infrastructure profiles,
 
 **Cost control**: N/A for this epic — no AI calls involved.
 
+**Findings folded in from the 2026-08-15 prior-art research pass** (`.pHive/research/prior-art-cleaning-and-settings-ux.md`) — every credible competitor/prior-art tool researched converges on the same handful of patterns, three of which apply directly here:
+- **Hard-block protected paths from ever entering the queue** (DaisyDisk's Collector rejects `/System`, `/Library`, the home root outright, rather than relying on a warning) — this epic's tree/queue staging should carry the same hard refusal, not just a UI hint, consistent with `reclaim.py`'s existing master-path refusal precedent.
+- **Require expansion before bulk-approving an opaque aggregate.** A branch showing "42 items" shouldn't be one-click-approvable without the tree first showing what categories/buckets make up that count.
+- **Concrete, factual labels, never vague/marketing language** (a direct anti-pattern from the CleanMyMac-adjacent "System Junk"/scareware category) — state this as a permanent design principle for the tree UI's labels (real paths, real sizes, real dates), not an accident of the current implementation.
+
 ## 4. Risks
 
 - **`sort.py`'s single-target-dir assumption runs deeper than the public `run()` signature.** `_plan`, `_run_from_queue`, and the CLI arg parsing all thread a single `target_dir` today; extending to multi-root needs auditing all three, not just the entry point — mirror `reclaim.py`'s already-working multi-root shape rather than inventing a new one.

@@ -61,3 +61,5 @@ src-tauri/resources/cleanup-ui-onedir/
 !.pHive/epics/desktop-app-shell/**
 !.pHive/epics/guided-sort-and-cluster/
 !.pHive/epics/guided-sort-and-cluster/**
+!.pHive/epics/settings-and-transparency/
+!.pHive/epics/settings-and-transparency/**
