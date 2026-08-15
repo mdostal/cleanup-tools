@@ -255,17 +255,28 @@ def _master_path_to_dict(master_path: MasterPath) -> dict:
     return {"path": master_path.path, "backed_up": master_path.backed_up}
 
 
-def save_config(adapter: OSAdapter, config: Config, path: Path | None = None) -> None:
-    """Serialize ``config`` to YAML and write it via ``adapter.write_file``."""
-    if path is None:
-        path = default_config_path(adapter)
-
-    data = {
+def config_to_dict(config: Config) -> dict:
+    """JSON/YAML-safe dict representation of ``config`` -- the exact shape
+    ``save_config`` persists to ``config.yaml``, factored out as its own
+    function so other consumers (e.g. Settings > Advanced's read-only
+    effective-config view) render the identical shape without hand-copying
+    it and risking drift between what's shown and what's actually saved.
+    Never includes AI-provider credentials -- those live entirely outside
+    ``Config``/``config.yaml``, in a separate 0600 credentials file (see
+    ``ai/__init__.py``).
+    """
+    return {
         "bucket_rules": [_bucket_rule_to_dict(r) for r in config.bucket_rules],
         "search_roots": list(config.search_roots),
         "master_paths": [_master_path_to_dict(m) for m in config.master_paths],
         "icon_choice": config.icon_choice,
     }
 
+
+def save_config(adapter: OSAdapter, config: Config, path: Path | None = None) -> None:
+    """Serialize ``config`` to YAML and write it via ``adapter.write_file``."""
+    if path is None:
+        path = default_config_path(adapter)
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    adapter.write_file(path, yaml.safe_dump(data, sort_keys=False))
+    adapter.write_file(path, yaml.safe_dump(config_to_dict(config), sort_keys=False))

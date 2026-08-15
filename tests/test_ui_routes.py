@@ -12,6 +12,8 @@ lsof/netstat check outside pytest).
 from __future__ import annotations
 
 import contextlib
+import html
+import json
 from pathlib import Path
 
 import pytest
@@ -2569,4 +2571,62 @@ def test_ai_provider_pane_shows_configured_via_env_var_without_leaking_the_key(c
     html = client.get("/settings").data.decode()
     assert "Configured" in html
     assert "ANTHROPIC_API_KEY environment variable" in html
+    assert "sk-super-secret-value" not in html
+
+
+# ---------------------------------------------------------------------------
+# 12c. Advanced pane: read-only JSON of the effective config, single source
+#      of truth via config_to_dict (see config.py).
+# ---------------------------------------------------------------------------
+
+
+def test_advanced_pane_renders_id_and_data_pane_attribute(client):
+    html = client.get("/settings").data.decode()
+    assert 'id="advanced"' in html
+    assert 'data-pane="advanced"' in html
+
+
+def _advanced_pane_json(page_html: str) -> dict:
+    """Extract and parse the Advanced pane's <pre> JSON block.
+
+    Jinja auto-escapes {{ config_json }} (correctly -- bucket names and
+    search-root paths are user-controlled strings rendered inside a <pre>,
+    so this must stay auto-escaped rather than marked |safe), so the raw
+    substring is HTML-entity-encoded (e.g. `&#34;` for `"`) and needs
+    html.unescape() before it's valid JSON again.
+    """
+    raw = page_html.split("<pre class=\"settings-json\"><code>")[1].split("</code></pre>")[0]
+    return json.loads(html.unescape(raw))
+
+
+def test_advanced_pane_json_matches_load_configs_actual_output(adapter, client):
+    client.post(
+        "/settings/bucket-rules/add", data={"extensions": "log", "bucket": "logs"}
+    )
+    client.post("/settings/search-roots/add", data={"path": "/some/root"})
+    client.post("/settings/master-paths/add", data={"path": "/some/master", "backed_up": "on"})
+
+    page_html = client.get("/settings").data.decode()
+    parsed = _advanced_pane_json(page_html)
+
+    expected = config_module.config_to_dict(config_module.load_config(adapter))
+    assert parsed == expected
+    assert parsed["search_roots"] == ["/some/root"]
+    assert parsed["master_paths"] == [{"path": "/some/master", "backed_up": True}]
+    assert {"extensions": ["log"], "bucket": "logs"} in parsed["bucket_rules"]
+
+
+def test_advanced_pane_reflects_a_change_made_via_another_pane_on_reload(adapter, client):
+    before_json = _advanced_pane_json(client.get("/settings").data.decode())
+    assert before_json["search_roots"] == []
+
+    client.post("/settings/search-roots/add", data={"path": "/newly/added"})
+
+    after_json = _advanced_pane_json(client.get("/settings").data.decode())
+    assert after_json["search_roots"] == ["/newly/added"]
+
+
+def test_advanced_pane_never_leaks_ai_credentials(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-super-secret-value")
+    html = client.get("/settings").data.decode()
     assert "sk-super-secret-value" not in html

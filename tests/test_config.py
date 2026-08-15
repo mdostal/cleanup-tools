@@ -20,6 +20,7 @@ from cleanup_tools.config import (
     BucketRule,
     Config,
     MasterPath,
+    config_to_dict,
     default_config_path,
     load_config,
     resolve_bucket,
@@ -314,6 +315,55 @@ def test_save_then_load_round_trips_search_roots_and_master_paths(adapter, tmp_p
     assert loaded.master_paths == original.master_paths
     assert loaded.master_paths[0].backed_up is True
     assert loaded.master_paths[1].backed_up is False
+
+
+def test_config_to_dict_matches_the_shape_save_config_actually_persists(tmp_path):
+    """config_to_dict is the single source of truth save_config's own YAML
+    write goes through -- this pins down that save_config's persisted YAML
+    parses back to exactly config_to_dict's output, so a consumer (e.g.
+    Settings > Advanced's read-only view) can never drift from what's
+    actually on disk.
+    """
+    config = Config(
+        bucket_rules=[BucketRule(extensions=frozenset({"log"}), bucket="logs")],
+        search_roots=["/some/root"],
+        master_paths=[MasterPath(path="/some/master", backed_up=True)],
+        icon_choice="recycle-folder",
+    )
+
+    as_dict = config_to_dict(config)
+    assert as_dict == {
+        "bucket_rules": [{"extensions": ["log"], "bucket": "logs"}],
+        "search_roots": ["/some/root"],
+        "master_paths": [{"path": "/some/master", "backed_up": True}],
+        "icon_choice": "recycle-folder",
+    }
+
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    save_config(adapter, config, path=config_path)
+
+    persisted = yaml.safe_load(config_path.read_text())
+    assert persisted == as_dict
+
+
+def test_config_to_dict_never_includes_credential_material():
+    """AI-provider credentials live entirely outside Config/config.yaml (a
+    separate 0600 credentials file, see ai/__init__.py) -- this pins down
+    that config_to_dict's keys are exactly the four Config fields, nothing
+    that could accidentally carry a secret through the Advanced JSON view.
+    """
+    config = Config(bucket_rules=[], search_roots=[], master_paths=[])
+    assert set(config_to_dict(config).keys()) == {
+        "bucket_rules",
+        "search_roots",
+        "master_paths",
+        "icon_choice",
+    }
 
 
 def test_save_config_uses_default_config_path_under_tmp_path_home(tmp_path):

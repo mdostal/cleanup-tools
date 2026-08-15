@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -1200,6 +1201,14 @@ def settings():
         search_roots=config.search_roots,
         master_paths=config.master_paths,
         ai_status=_ai_credentials_status(),
+        # Advanced pane: read-only, formatted JSON of the SAME dict
+        # config.py's own save_config() persists (config_to_dict is the
+        # single source of truth both go through) -- so this can never
+        # drift from what a change made via any other pane actually wrote.
+        # Read-only by design this story; validated in-place editing of
+        # arbitrary pasted JSON is real, separable risk, deferred on
+        # purpose (see the design discussion's open question 1).
+        config_json=json.dumps(config_module.config_to_dict(config), indent=2, sort_keys=False),
     )
 
 

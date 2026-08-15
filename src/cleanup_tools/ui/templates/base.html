@@ -454,6 +454,17 @@
     padding: 0.5rem 0.75rem;
   }
   .settings-list code { font-size: 0.85rem; word-break: break-all; }
+  .settings-json {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: 1rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--ink);
+  }
   .settings-add-form {
     display: flex;
     gap: 0.5rem;
@@ -470,6 +481,10 @@
     align-items: center;
     padding: 0.4rem !important;
   }
+  /* Pushes this nav item (and everything after it, e.g. the theme
+     switcher) to the far right of the bar -- flexbox auto-margin, not a
+     fixed width, so it still collapses sensibly on narrow viewports. */
+  .nav-trailing { margin-left: auto; }
 
   /* Chip/pill styling for every .badge -- real padding, a bit of
      font-weight and letter-spacing, and a background/foreground color pair
@@ -718,23 +733,6 @@
     class="nav-link"
     {% if request.endpoint == 'ui.queue_view' %}aria-current="page"{% endif %}
   >Review Queue</a>
-  <!-- Bare gear icon, no label, no pill (Option A from the design-options
-       artifact -- product-owner-confirmed), distinct from Dashboard/Review
-       Queue's text links. Cmd+, opens it from anywhere (see
-       static/settings-shortcut.js), matching the macOS convention. -->
-  <a
-    href="{{ url_for('ui.settings') }}"
-    class="nav-link nav-link-icon"
-    id="settings-nav-link"
-    title="Settings (&#8984;,)"
-    aria-label="Settings"
-    {% if request.endpoint == 'ui.settings' %}aria-current="page"{% endif %}
-  >
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="3"></circle>
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-    </svg>
-  </a>
   <a
     href="{{ url_for('ui.plan_sort') }}"
     class="plan-trigger-link"
@@ -765,6 +763,29 @@
        role="status"/aria-live so screen readers announce updates without
        the page navigating away. -->
   <span id="plan-status" class="plan-status" role="status" aria-live="polite"></span>
+
+  <!-- Trailing right-aligned group: gear icon + theme switcher, pushed to
+       the far right of the bar via .nav-trailing's margin-left: auto
+       (flexbox auto-margin -- pushes this element and everything after it
+       to the end), so Settings reads as a persistent, separated control
+       rather than another item competing with the page tabs/plan actions
+       on the left. Bare gear icon, no label, no pill (Option A from the
+       design-options artifact -- product-owner-confirmed). Cmd+, opens it
+       from anywhere (see static/settings-shortcut.js), matching the
+       macOS convention. -->
+  <a
+    href="{{ url_for('ui.settings') }}"
+    class="nav-link nav-link-icon nav-trailing"
+    id="settings-nav-link"
+    title="Settings (&#8984;,)"
+    aria-label="Settings"
+    {% if request.endpoint == 'ui.settings' %}aria-current="page"{% endif %}
+  >
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+  </a>
 
   <!-- Theme settings control -- wired up by static/theme.js, which keeps
        this <select> in sync with the active data-theme (including on

@@ -18,6 +18,7 @@
     <a href="#search-roots" data-pane="search-roots">Search Roots &amp; Locations</a>
     <a href="#master-paths" data-pane="master-paths">Master Paths</a>
     <a href="#ai-provider" data-pane="ai-provider">AI Provider</a>
+    <a href="#advanced" data-pane="advanced">Advanced</a>
   </nav>
 
   <div class="settings-panes">
@@ -202,6 +203,17 @@
         "Propose with AI".
       </p>
       {% endif %}
+    </section>
+
+    <section id="advanced" class="settings-pane" aria-label="Advanced">
+      <h2>Advanced</h2>
+      <p class="meta">
+        The effective configuration as it's actually persisted to <code>config.yaml</code> --
+        read-only. A change made in any other section above shows up here after a reload; it's
+        the same underlying config, never a separate copy. Editing this JSON directly isn't
+        supported yet.
+      </p>
+      <pre class="settings-json"><code>{{ config_json }}</code></pre>
     </section>
   </div>
 </div>

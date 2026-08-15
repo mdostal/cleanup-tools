@@ -69,3 +69,18 @@ references:
 
 manual_verdict:
   scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-15T17:34:00Z"
+  agent: claude-sonnet-5 (execute skill)
+  notes: |
+    Verified via the automated suite (529 passed): config_to_dict is the
+    single source of truth both save_config's YAML write and the Advanced
+    pane's JSON render go through (test_config_to_dict_matches_the_shape_
+    save_config_actually_persists), the Advanced pane reflects a change
+    made via another pane on reload without a second data path, and it
+    never leaks AI credentials even when ANTHROPIC_API_KEY is set. Also
+    fixed a nav-layout issue caught by the product owner during this
+    story's browser review: the gear icon was sitting between "Review
+    Queue" and the Plan: action links instead of being visually separated
+    -- moved it to the far right of the nav bar (flexbox auto-margin,
+    next to the theme switcher), verified via a Playwright screenshot.
