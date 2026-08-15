@@ -18,10 +18,11 @@ import pytest
 from PIL import Image
 
 from cleanup_tools.adapters import MacOSAdapter
+from cleanup_tools import config as config_module
 from cleanup_tools import queue as queue_module
 from cleanup_tools.queue import QueueEntry, build_plan_snapshot
 from cleanup_tools.ui.app import create_app
-from cleanup_tools.ui.routes import DEFAULT_ICON_CHOICE, ICON_CHOICES
+from cleanup_tools.ui.routes import DEFAULT_ICON_CHOICE, ICON_CHOICES, _location_for_src, parse_group_key
 
 
 def _make_fake_adapter(home: Path) -> MacOSAdapter:
@@ -229,17 +230,105 @@ def test_plan_sort_stages_entries_and_is_idempotent(adapter, client, home):
 
 
 def test_plan_sort_missing_downloads_dir_does_not_crash(adapter, client, home):
-    # No Downloads dir created under the fake home -- sort.run() raises
-    # FileNotFoundError; the background job must land as a terminal "error"
-    # status carrying that message, not an uncaught exception (which would
-    # leave the job stuck at "running" forever) or a 500.
+    # No Downloads dir created under the fake home. /plan/sort calls
+    # sort.run(adapter, args=None) -- no CLI-supplied dir, so the missing
+    # default (configured/fallback) root is best-effort-skipped rather than
+    # raised, matching reclaim/corral-screenshots' established precedent
+    # (see sort._plan's docstring): the job lands "done" with an empty plan,
+    # not stuck "running" or crashed into a 500.
     assert not (home / "Downloads").exists()
     resp = client.get("/plan/sort")
     assert resp.status_code == 200
     job_id = resp.get_json()["job_id"]
     payload = _poll_job_until_terminal(client, job_id)
-    assert payload["status"] == "error"
-    assert "does not exist" in payload["error"]
+    assert payload["status"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# 1b. Location-aware group_key: _location_for_src resolves which configured
+#     root an entry's src falls under (open-ended, never a fixed enum), and
+#     parse_group_key defensively reads both the new and every pre-epic
+#     group_key format without raising.
+# ---------------------------------------------------------------------------
+
+
+def test_location_for_src_resolves_configured_search_root(adapter, home):
+    root_a = home / "root_a"
+    root_a.mkdir()
+    root_b = home / "root_b"
+    root_b.mkdir()
+    config_module.save_config(adapter, config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root_a), str(root_b)]))
+    config = config_module.load_config(adapter)
+
+    assert _location_for_src(str(root_a / "photo.jpg"), config, adapter) == str(root_a)
+    assert _location_for_src(str(root_b / "sub" / "doc.pdf"), config, adapter) == str(root_b)
+
+
+def test_location_for_src_falls_back_to_other_outside_every_configured_root(adapter, home):
+    root_a = home / "root_a"
+    root_a.mkdir()
+    elsewhere = home / "elsewhere"
+    elsewhere.mkdir()
+    config_module.save_config(adapter, config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root_a)]))
+    config = config_module.load_config(adapter)
+
+    assert _location_for_src(str(elsewhere / "file.txt"), config, adapter) == "other"
+
+
+def test_location_for_src_falls_back_to_standard_trio_when_no_search_roots_configured(adapter, home):
+    downloads = home / "Downloads"
+    downloads.mkdir()
+    config = config_module.load_config(adapter)  # no search_roots configured
+
+    assert _location_for_src(str(downloads / "file.txt"), config, adapter) == str(downloads)
+    assert _location_for_src(str(home / "elsewhere" / "file.txt"), config, adapter) == "other"
+
+
+@pytest.mark.parametrize(
+    "group_key,expected",
+    [
+        (None, {"pipeline": None, "location": "other", "bucket": None}),
+        ("", {"pipeline": None, "location": "other", "bucket": None}),
+        # Old (pre-epic) formats -- no location segment existed yet.
+        ("sort:photos", {"pipeline": "sort", "location": "other", "bucket": "photos"}),
+        ("reclaim:build-caches", {"pipeline": "reclaim", "location": "other", "bucket": "build-caches"}),
+        ("corral-screenshots", {"pipeline": "corral-screenshots", "location": "other", "bucket": None}),
+        # New (post-epic) formats -- location embedded.
+        (
+            "sort:/Users/me/Downloads:photos",
+            {"pipeline": "sort", "location": "/Users/me/Downloads", "bucket": "photos"},
+        ),
+        (
+            "reclaim:/Users/me/Documents:build-caches",
+            {"pipeline": "reclaim", "location": "/Users/me/Documents", "bucket": "build-caches"},
+        ),
+        (
+            "corral-screenshots:/Users/me/Desktop",
+            {"pipeline": "corral-screenshots", "location": "/Users/me/Desktop", "bucket": None},
+        ),
+        # Unrecognized prefix -- must not raise.
+        ("something-else:weird:shape:here", {"pipeline": None, "location": "other", "bucket": None}),
+    ],
+)
+def test_parse_group_key_handles_every_known_format_without_raising(group_key, expected):
+    assert parse_group_key(group_key) == expected
+
+
+def test_plan_sort_stages_entries_with_location_embedded_in_group_key(adapter, client, home):
+    root_a = home / "root_a"
+    root_a.mkdir()
+    (root_a / "photo.jpg").write_bytes(b"photo-bytes")
+    config_module.save_config(adapter, config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root_a)]))
+
+    resp = client.get("/plan/sort")
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+    result = _poll_job_until_terminal(client, job_id)
+    assert result["status"] == "done"
+
+    entries = _reload_queue(adapter)
+    assert len(entries) == 1
+    assert entries[0].group_key == f"sort:{root_a}:photos"
 
 
 def test_plan_reclaim_stages_entries_and_is_idempotent(adapter, client, home):
@@ -316,7 +405,7 @@ def test_plan_corral_screenshots_stages_move_entries_and_is_idempotent(adapter, 
     assert entry.action == "move"
     assert entry.status == "pending"
     assert entry.source == "ui-plan-corral-screenshots"
-    assert entry.group_key == "corral-screenshots"
+    assert entry.group_key == f"corral-screenshots:{desktop}"
     assert entry.src == str(shot)
     assert entry.dest == str(home / "Pictures" / "Screenshots" / "screenshot-2024.png")
 

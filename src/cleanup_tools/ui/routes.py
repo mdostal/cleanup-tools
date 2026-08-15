@@ -134,6 +134,73 @@ def _entry_size(entry: queue_module.QueueEntry) -> int:
     return snapshot.get("size") or 0
 
 
+def _location_for_src(src: str, config: config_module.Config, adapter) -> str:
+    """The configured/selected location ``src`` falls under, or "other".
+
+    Any-and-all configured locations (``config.search_roots``), never a
+    fixed downloads/desktop/documents enum -- per guided-sort-and-cluster's
+    design discussion, which explicitly rejected a fixed enum after
+    product-owner correction ("it should be able to sort ANY and all
+    locations"). Falls back to the standard-dir trio (downloads/desktop/
+    documents) only when no ``search_roots`` are configured at all, so a
+    fresh install's implicit defaults still get a meaningful location
+    rather than everything landing in "other". The location segment is the
+    resolved root's absolute path itself, not a slug -- unambiguous, and
+    the tree UI (a later story) can prettify it for display (e.g. ``~``
+    substitution) without needing a separate naming scheme here.
+    """
+    resolved_src = Path(src).resolve()
+    roots = (
+        [Path(r).resolve() for r in config.search_roots]
+        if config.search_roots
+        else [
+            adapter.resolve_standard_dir("downloads"),
+            adapter.resolve_standard_dir("desktop"),
+            adapter.resolve_standard_dir("documents"),
+        ]
+    )
+    for root in roots:
+        if resolved_src == root or root in resolved_src.parents:
+            return str(root)
+    return "other"
+
+
+def parse_group_key(group_key: str | None) -> dict:
+    """Defensively split a ``group_key`` into ``{"pipeline", "location", "bucket"}``.
+
+    Not a general-purpose parser -- it branches on the known pipeline
+    prefix plus segment count, per the design discussion's simplified
+    (non-migration-proven) parsing rule: the real queue resets before this
+    schema ships, so this only needs to never raise on every format
+    actually ever written, not round-trip arbitrary historical data.
+
+    Formats handled:
+      - None / "" -> no pipeline, "other" location, no bucket.
+      - New (post-epic), 3 segments: ``sort:<location>:<bucket>``,
+        ``reclaim:<location>:<category>``.
+      - New (post-epic), 2 segments: ``corral-screenshots:<location>``.
+      - Old (pre-epic), 2 segments: ``sort:<bucket>``, ``reclaim:<category>``
+        -- no location segment existed yet, so location falls back to "other".
+      - Old (pre-epic), 1 segment: ``corral-screenshots`` -- same fallback.
+      - Anything else unrecognized -> no pipeline, "other" location, no bucket.
+    """
+    if not group_key:
+        return {"pipeline": None, "location": "other", "bucket": None}
+    parts = group_key.split(":")
+    pipeline = parts[0]
+    if pipeline in ("sort", "reclaim"):
+        if len(parts) == 3:
+            return {"pipeline": pipeline, "location": parts[1], "bucket": parts[2]}
+        if len(parts) == 2:
+            return {"pipeline": pipeline, "location": "other", "bucket": parts[1]}
+        return {"pipeline": pipeline, "location": "other", "bucket": None}
+    if pipeline == "corral-screenshots":
+        if len(parts) == 2:
+            return {"pipeline": pipeline, "location": parts[1], "bucket": None}
+        return {"pipeline": pipeline, "location": "other", "bucket": None}
+    return {"pipeline": None, "location": "other", "bucket": None}
+
+
 def _group_entries(entries: list[queue_module.QueueEntry]) -> list[dict]:
     """Group ``entries`` by ``group_key`` (falling back to "ungrouped").
 
@@ -228,15 +295,17 @@ def _stage_sort_plan(adapter, queue_path, progress_callback=None) -> list[queue_
     result = sort_module.run(adapter, args=None)
     plan_items = result.get("plan", [])
     total = len(plan_items)
+    config = config_module.load_config(adapter)
     new_entries = []
     for current, item in enumerate(plan_items, start=1):
+        location = _location_for_src(item["src"], config, adapter)
         new_entries.append(
             queue_module.QueueEntry(
                 action="move",
                 src=str(item["src"]),
                 dest=str(item["dest"]),
                 source="ui-plan-sort",
-                group_key=f"sort:{item['bucket']}",
+                group_key=f"sort:{location}:{item['bucket']}",
                 plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
             )
         )
@@ -309,18 +378,20 @@ def _stage_reclaim_plan(adapter, queue_path, progress_callback=None) -> list[que
         run_adapter = _DirSizeProgressAdapter(adapter, progress_callback)
 
     result = reclaim_module.run(run_adapter, args=None)
+    config = config_module.load_config(adapter)
     new_entries = []
     for category_name, category in result.get("categories", {}).items():
         for item in category.get("entries", []):
             if item.get("master_path_refused"):
                 continue
+            location = _location_for_src(item["path"], config, adapter)
             new_entries.append(
                 queue_module.QueueEntry(
                     action="delete",
                     src=str(item["path"]),
                     dest="",
                     source="ui-plan-reclaim",
-                    group_key=f"reclaim:{category_name}",
+                    group_key=f"reclaim:{location}:{category_name}",
                     plan_snapshot=queue_module.build_plan_snapshot(item["path"]),
                 )
             )
@@ -347,15 +418,17 @@ def _stage_corral_screenshots_plan(
     result = corral_screenshots_module.run(adapter, args=None)
     plan_items = result.get("plan", [])
     total = len(plan_items)
+    config = config_module.load_config(adapter)
     new_entries = []
     for current, item in enumerate(plan_items, start=1):
+        location = _location_for_src(item["src"], config, adapter)
         new_entries.append(
             queue_module.QueueEntry(
                 action="move",
                 src=str(item["src"]),
                 dest=str(item["dest"]),
                 source="ui-plan-corral-screenshots",
-                group_key="corral-screenshots",
+                group_key=f"corral-screenshots:{location}",
                 plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
             )
         )

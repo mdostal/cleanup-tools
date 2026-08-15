@@ -10,7 +10,9 @@ location outside of tmp_path.
 
 sort.run(adapter, args) reads args.dir/args.go via getattr(), so a plain
 types.SimpleNamespace(dir=..., go=...) stands in for the argparse Namespace
-main() would normally pass.
+main() would normally pass. args.dir is a list (cli.py's "dir" argument is
+nargs="*", matching reclaim/corral-screenshots) -- single-root tests below
+pass a one-element list, e.g. dir=[str(target)].
 """
 
 from __future__ import annotations
@@ -74,11 +76,11 @@ def test_dry_run_leaves_files_unchanged_but_plan_describes_moves(adapter, tmp_pa
     photo.write_text("photo-bytes")
     doc.write_text("doc-bytes")
 
-    args = SimpleNamespace(dir=str(target), go=False)
+    args = SimpleNamespace(dir=[str(target)], go=False)
     result = sort.run(adapter, args)
 
     assert result["go"] is False
-    assert result["dir"] == target
+    assert result["roots"] == [target]
 
     # Nothing on disk moved: originals still present, no _sorted/ created.
     assert photo.exists() and photo.read_text() == "photo-bytes"
@@ -122,7 +124,7 @@ def test_go_moves_file_into_correct_bucket(adapter, tmp_path, filename, expected
     src = target / filename
     src.write_text("content")
 
-    args = SimpleNamespace(dir=str(target), go=True)
+    args = SimpleNamespace(dir=[str(target)], go=True)
     result = sort.run(adapter, args)
 
     dest = target / "_sorted" / expected_bucket / filename
@@ -157,14 +159,14 @@ def test_dotfiles_excluded_from_plan_and_never_moved(adapter, tmp_path):
     normal.write_text("photo-bytes")
 
     # Dry-run: dotfile absent from the plan, filesystem untouched.
-    dry_result = sort.run(adapter, SimpleNamespace(dir=str(target), go=False))
+    dry_result = sort.run(adapter, SimpleNamespace(dir=[str(target)], go=False))
     assert {entry["src"].name for entry in dry_result["plan"]} == {"photo.jpg"}
     assert dotfile.exists()
     assert dotfile.read_text() == "ignore-me"
 
     # --go: dotfile still absent from the plan and still never moved; only
     # the normal file actually moves.
-    go_result = sort.run(adapter, SimpleNamespace(dir=str(target), go=True))
+    go_result = sort.run(adapter, SimpleNamespace(dir=[str(target)], go=True))
     assert {entry["src"].name for entry in go_result["plan"]} == {"photo.jpg"}
     assert dotfile.exists()
     assert dotfile.read_text() == "ignore-me"
@@ -181,11 +183,71 @@ def test_empty_directory_returns_empty_plan_without_error(adapter, tmp_path):
     target = tmp_path / "empty"
     target.mkdir()
 
-    dry_result = sort.run(adapter, SimpleNamespace(dir=str(target), go=False))
+    dry_result = sort.run(adapter, SimpleNamespace(dir=[str(target)], go=False))
     assert dry_result["plan"] == []
 
-    go_result = sort.run(adapter, SimpleNamespace(dir=str(target), go=True))
+    go_result = sort.run(adapter, SimpleNamespace(dir=[str(target)], go=True))
     assert go_result["plan"] == []
+
+
+# ---------------------------------------------------------------------------
+# 4b. Multi-root scanning via configured search_roots (mirrors reclaim.py/
+#     corral_screenshots.py's existing precedence: CLI dirs win, else
+#     search_roots, else the single default).
+# ---------------------------------------------------------------------------
+
+
+def test_multi_root_scan_covers_every_configured_search_root(adapter, tmp_path):
+    root_a = tmp_path / "root_a"
+    root_a.mkdir()
+    root_b = tmp_path / "root_b"
+    root_b.mkdir()
+    (root_a / "photo.jpg").write_text("a-bytes")
+    (root_b / "doc.pdf").write_text("b-bytes")
+
+    save_config(adapter, Config(bucket_rules=DEFAULT_BUCKET_RULES, search_roots=[str(root_a), str(root_b)]))
+
+    result = sort.run(adapter, SimpleNamespace(dir=None, go=False))
+
+    assert result["roots"] == [root_a, root_b]
+    plan_by_name = {entry["src"].name: entry for entry in result["plan"]}
+    assert set(plan_by_name) == {"photo.jpg", "doc.pdf"}
+    assert plan_by_name["photo.jpg"]["dest"] == root_a / "_sorted" / "photos" / "photo.jpg"
+    assert plan_by_name["doc.pdf"]["dest"] == root_b / "_sorted" / "pdfs" / "doc.pdf"
+
+
+def test_configured_root_missing_is_silently_skipped_others_still_scanned(adapter, tmp_path):
+    root_a = tmp_path / "root_a"
+    root_a.mkdir()
+    missing_root = tmp_path / "does-not-exist"
+    (root_a / "photo.jpg").write_text("a-bytes")
+
+    save_config(adapter, Config(bucket_rules=DEFAULT_BUCKET_RULES, search_roots=[str(root_a), str(missing_root)]))
+
+    # Must not raise: an implicit, configured root that doesn't exist yet
+    # (e.g. no Documents folder on a fresh machine) is best-effort, unlike
+    # an explicitly CLI-supplied missing dir (see the FileNotFoundError test
+    # in section 8 below).
+    result = sort.run(adapter, SimpleNamespace(dir=None, go=False))
+
+    assert result["roots"] == [root_a, missing_root]
+    assert {entry["src"].name for entry in result["plan"]} == {"photo.jpg"}
+
+
+def test_explicit_cli_dir_overrides_configured_search_roots(adapter, tmp_path):
+    configured_root = tmp_path / "configured"
+    configured_root.mkdir()
+    explicit_dir = tmp_path / "explicit"
+    explicit_dir.mkdir()
+    (configured_root / "photo.jpg").write_text("a-bytes")
+    (explicit_dir / "doc.pdf").write_text("b-bytes")
+
+    save_config(adapter, Config(bucket_rules=DEFAULT_BUCKET_RULES, search_roots=[str(configured_root)]))
+
+    result = sort.run(adapter, SimpleNamespace(dir=[str(explicit_dir)], go=False))
+
+    assert result["roots"] == [explicit_dir]
+    assert {entry["src"].name for entry in result["plan"]} == {"doc.pdf"}
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +271,7 @@ def test_custom_bucket_rule_from_config_is_respected(adapter, tmp_path):
     pdf_file = target / "report.pdf"
     pdf_file.write_text("pdf-bytes")
 
-    args = SimpleNamespace(dir=str(target), go=True)
+    args = SimpleNamespace(dir=[str(target)], go=True)
     result = sort.run(adapter, args)
 
     plan_by_name = {entry["src"].name: entry["bucket"] for entry in result["plan"]}
@@ -250,7 +312,7 @@ def test_go_continues_after_one_entry_fails_and_records_outcome_per_entry(
 
     monkeypatch.setattr(adapter, "move", flaky_move)
 
-    args = SimpleNamespace(dir=str(target), go=True)
+    args = SimpleNamespace(dir=[str(target)], go=True)
     result = sort.run(adapter, args)  # must not raise
 
     plan_by_name = {entry["src"].name: entry for entry in result["plan"]}
@@ -289,7 +351,7 @@ def test_go_skips_entry_whose_destination_already_exists_without_overwriting(
     dest.parent.mkdir(parents=True)
     dest.write_text("precious-old-content")
 
-    args = SimpleNamespace(dir=str(target), go=True)
+    args = SimpleNamespace(dir=[str(target)], go=True)
     result = sort.run(adapter, args)
 
     entry = result["plan"][0]
@@ -314,7 +376,7 @@ def test_dry_run_flags_dest_exists_without_touching_filesystem(adapter, tmp_path
     dest.parent.mkdir(parents=True)
     dest.write_text("precious-old-content")
 
-    args = SimpleNamespace(dir=str(target), go=False)
+    args = SimpleNamespace(dir=[str(target)], go=False)
     result = sort.run(adapter, args)
 
     entry = result["plan"][0]
@@ -337,10 +399,10 @@ def test_nonexistent_target_dir_raises_file_not_found_error(adapter, tmp_path):
     missing = tmp_path / "does-not-exist"
 
     with pytest.raises(FileNotFoundError, match=str(missing)):
-        sort.run(adapter, SimpleNamespace(dir=str(missing), go=False))
+        sort.run(adapter, SimpleNamespace(dir=[str(missing)], go=False))
 
     with pytest.raises(FileNotFoundError, match=str(missing)):
-        sort.run(adapter, SimpleNamespace(dir=str(missing), go=True))
+        sort.run(adapter, SimpleNamespace(dir=[str(missing)], go=True))
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +440,7 @@ def test_from_queue_executes_only_approved_move_entries(adapter, tmp_path, statu
     )
     _seed_queue(adapter, [entry])
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)
     report = result["from_queue"]
 
@@ -418,7 +480,7 @@ def test_from_queue_ignores_approved_non_move_action(adapter, tmp_path):
     )
     _seed_queue(adapter, [entry])
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)
     report = result["from_queue"]
 
@@ -451,7 +513,7 @@ def test_from_queue_stale_entry_is_skipped_status_and_execution_fields_untouched
     )
     _seed_queue(adapter, [entry])
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)
     report = result["from_queue"]
 
@@ -490,7 +552,7 @@ def test_from_queue_stale_entry_deleted_src_is_skipped_and_reported(adapter, tmp
     )
     _seed_queue(adapter, [entry])
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)
     report = result["from_queue"]
 
@@ -521,7 +583,7 @@ def test_from_queue_successful_execution_sets_executed_at_and_clears_error(adapt
     )
     _seed_queue(adapter, [entry])
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)
 
     assert result["from_queue"]["executed"] == [
@@ -559,7 +621,7 @@ def test_from_queue_dest_already_exists_is_skipped_not_overwritten(adapter, tmp_
     )
     _seed_queue(adapter, [entry])
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)
     report = result["from_queue"]
 
@@ -630,7 +692,7 @@ def test_from_queue_failed_execution_isolated_per_entry(adapter, tmp_path, monke
 
     monkeypatch.setattr(adapter, "move", flaky_move)
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)  # must not raise
     report = result["from_queue"]
 
@@ -706,7 +768,7 @@ def test_from_queue_non_oserror_mid_batch_does_not_lose_prior_entrys_result(
 
     monkeypatch.setattr(adapter, "move", flaky_move)
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)  # must not raise
     report = result["from_queue"]
 
@@ -780,7 +842,7 @@ def test_from_queue_saves_queue_exactly_once_per_invocation(adapter, tmp_path, m
 
     monkeypatch.setattr(sort.queue_module, "with_queue_lock", spy_lock)
 
-    args = SimpleNamespace(dir=str(target), go=False, from_queue=True)
+    args = SimpleNamespace(dir=[str(target)], go=False, from_queue=True)
     result = sort.run(adapter, args)
 
     assert result["from_queue"]["qualifying_count"] == 4

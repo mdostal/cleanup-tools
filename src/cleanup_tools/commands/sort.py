@@ -20,8 +20,33 @@ from cleanup_tools.adapters.base import OSAdapter
 SORTED_SUBDIR = "_sorted"
 
 
-def _plan(adapter: OSAdapter, config: config_module.Config, target_dir: Path) -> list[dict]:
-    """Compute the move plan for every non-dotfile directly inside ``target_dir``.
+def _resolve_roots(
+    adapter: OSAdapter, config: config_module.Config, raw_dirs: list[str] | None
+) -> list[Path]:
+    """CLI-supplied dirs win; else configured search_roots; else the platform Downloads dir.
+
+    Mirrors ``reclaim.py``/``corral_screenshots.py``'s ``_resolve_roots``
+    exactly -- sort.py was the one pipeline still hardcoded to a single
+    target dir; this brings it in line with its siblings so ``search_roots``
+    (any-and-all configured locations, not a fixed enum) works the same way
+    across every pipeline.
+    """
+    if raw_dirs:
+        return [Path(d) for d in raw_dirs]
+    if config.search_roots:
+        return [Path(r) for r in config.search_roots]
+    return [adapter.resolve_standard_dir("downloads")]
+
+
+def _plan(adapter: OSAdapter, config: config_module.Config, target_dirs: list[Path]) -> list[dict]:
+    """Compute the move plan for every non-dotfile directly inside each of ``target_dirs``.
+
+    A root that doesn't exist is skipped rather than raised on here --
+    mirroring ``corral_screenshots.py``'s per-root ``if not target_dir.is_dir():
+    continue`` guard, since a *configured* root (search_roots or the
+    single default) is a best-effort set, not something the user just
+    typed. An *explicitly CLI-supplied* missing dir is still a loud error --
+    see ``run()``, which checks that case before ever calling this function.
 
     ``adapter.list_dir(target_dir, max_depth=0)`` returns files at any depth
     that happen to satisfy its depth-0 walk semantics, but it does not
@@ -33,22 +58,28 @@ def _plan(adapter: OSAdapter, config: config_module.Config, target_dir: Path) ->
     on disk at plan time. This is informational in dry-run mode (it tells
     the caller a real ``--go`` run would skip that entry rather than
     overwrite something already there) and is what the ``--go`` path below
-    uses to decide whether to actually call ``adapter.move()``.
+    uses to decide whether to actually call ``adapter.move()``. ``_sorted/``
+    lives inside *each* scanned root (not one shared global destination
+    like corral-screenshots' ``~/Pictures/Screenshots``), so dest is
+    computed per-root, not against a single passed-in destination dir.
     """
     plan: list[dict] = []
-    for file_path in adapter.list_dir(target_dir, max_depth=0):
-        if file_path.name.startswith("."):
+    for target_dir in target_dirs:
+        if not target_dir.is_dir():
             continue
-        bucket = config_module.resolve_bucket(file_path.name, config.bucket_rules)
-        dest = target_dir / SORTED_SUBDIR / bucket / file_path.name
-        plan.append(
-            {
-                "src": file_path,
-                "dest": dest,
-                "bucket": bucket,
-                "dest_exists": dest.exists(),
-            }
-        )
+        for file_path in adapter.list_dir(target_dir, max_depth=0):
+            if file_path.name.startswith("."):
+                continue
+            bucket = config_module.resolve_bucket(file_path.name, config.bucket_rules)
+            dest = target_dir / SORTED_SUBDIR / bucket / file_path.name
+            plan.append(
+                {
+                    "src": file_path,
+                    "dest": dest,
+                    "bucket": bucket,
+                    "dest_exists": dest.exists(),
+                }
+            )
     return plan
 
 
@@ -57,13 +88,13 @@ def _resolve_loose(path: Path) -> Path:
     return path.resolve()
 
 
-def _is_under(child: Path, parent: Path) -> bool:
-    """True if resolved ``child`` is ``parent`` itself or somewhere underneath it."""
-    return child == parent or parent in child.parents
+def _is_under_any(child: Path, roots: list[Path]) -> bool:
+    """True if resolved ``child`` is any resolved root itself or somewhere underneath it."""
+    return any(child == root or root in child.parents for root in roots)
 
 
-def _run_from_queue(adapter: OSAdapter, target_dir: Path) -> dict:
-    """Execute every approved, queue-sourced ``move`` whose ``src`` is under ``target_dir``.
+def _run_from_queue(adapter: OSAdapter, target_dirs: list[Path]) -> dict:
+    """Execute every approved, queue-sourced ``move`` whose ``src`` is under any of ``target_dirs``.
 
     Loads the queue once, filters to qualifying entries, and for each one:
     checks staleness first (a stale entry is left alone -- status stays
@@ -91,7 +122,7 @@ def _run_from_queue(adapter: OSAdapter, target_dir: Path) -> dict:
     invocation.
     """
     path = queue_module.default_queue_path(adapter)
-    resolved_target = _resolve_loose(target_dir)
+    resolved_roots = [_resolve_loose(d) for d in target_dirs]
 
     executed: list[dict] = []
     stale: list[dict] = []
@@ -106,7 +137,7 @@ def _run_from_queue(adapter: OSAdapter, target_dir: Path) -> dict:
             for entry in entries
             if entry.status == "approved"
             and entry.action == "move"
-            and _is_under(_resolve_loose(Path(entry.src)), resolved_target)
+            and _is_under_any(_resolve_loose(Path(entry.src)), resolved_roots)
         ]
 
         for entry in qualifying:
@@ -150,7 +181,8 @@ def _run_from_queue(adapter: OSAdapter, target_dir: Path) -> dict:
 
 
 def run(adapter: OSAdapter, args=None) -> dict:
-    """Sort ``args.dir`` (default: the platform Downloads dir) into buckets.
+    """Sort ``args.dir`` (default: configured search_roots, else the platform
+    Downloads dir) into buckets, across every resolved root.
 
     Always computes the full plan; only mutates the filesystem when
     ``args.go`` is true. ``args`` may be ``None`` (or any object without
@@ -158,10 +190,18 @@ def run(adapter: OSAdapter, args=None) -> dict:
     ``survey.run``'s ``args=None`` convenience for direct/test callers that
     don't go through argparse.
 
-    Raises ``FileNotFoundError`` if the resolved target directory does not
-    exist, rather than silently returning an empty plan -- a typo'd or
-    since-deleted path should be a loud error, not indistinguishable from
-    "nothing to sort".
+    ``args.dir`` may now name more than one root (any-and-all configured
+    locations, not a fixed enum -- see ``_resolve_roots``, mirroring
+    ``reclaim.py``/``corral_screenshots.py``). Root-existence handling is
+    asymmetric on purpose: an **explicitly CLI-supplied** dir that doesn't
+    exist is still a loud ``FileNotFoundError`` (a typo'd path someone just
+    typed should never look indistinguishable from "nothing to sort") --
+    checked here, before ``_plan`` ever runs. A **configured** root
+    (``search_roots``, or the single default when nothing is configured) is
+    best-effort instead: ``_plan`` silently skips one that doesn't exist,
+    matching ``reclaim``/``corral-screenshots``'s existing precedent, since
+    a broad, implicit location set may legitimately not all exist yet (e.g.
+    no ``Documents`` folder on a fresh machine).
 
     In ``--go`` mode, each plan entry is executed independently: a failure
     moving one file (e.g. it was deleted out from under us mid-run) is
@@ -175,24 +215,26 @@ def run(adapter: OSAdapter, args=None) -> dict:
     ``args.from_queue`` takes an entirely separate path: instead of
     computing/executing a fresh plan, it executes every already-*approved*
     ``move`` entry in the approval queue (see ``queue.py``) whose ``src``
-    falls under ``target_dir``, via ``_run_from_queue``. See that helper's
-    docstring for the staleness/isolation/locking details.
+    falls under any resolved root, via ``_run_from_queue``. See that
+    helper's docstring for the staleness/isolation/locking details.
     """
-    raw_dir = getattr(args, "dir", None) if args is not None else None
+    raw_dirs = getattr(args, "dir", None) if args is not None else None
     go = bool(getattr(args, "go", False)) if args is not None else False
     from_queue = bool(getattr(args, "from_queue", False)) if args is not None else False
 
-    target_dir = Path(raw_dir) if raw_dir is not None else adapter.resolve_standard_dir("downloads")
+    config = config_module.load_config(adapter)
+    target_dirs = _resolve_roots(adapter, config, raw_dirs)
 
-    if not target_dir.is_dir():
-        raise FileNotFoundError(f"sort target directory does not exist: {target_dir}")
+    if raw_dirs:
+        for target_dir in target_dirs:
+            if not target_dir.is_dir():
+                raise FileNotFoundError(f"sort target directory does not exist: {target_dir}")
 
     if from_queue:
-        from_queue_report = _run_from_queue(adapter, target_dir)
-        return {"dir": target_dir, "go": go, "from_queue": from_queue_report}
+        from_queue_report = _run_from_queue(adapter, target_dirs)
+        return {"roots": target_dirs, "go": go, "from_queue": from_queue_report}
 
-    config = config_module.load_config(adapter)
-    plan = _plan(adapter, config, target_dir)
+    plan = _plan(adapter, config, target_dirs)
 
     if go:
         for entry in plan:
@@ -209,4 +251,4 @@ def run(adapter: OSAdapter, args=None) -> dict:
                 entry["moved"] = True
                 entry["error"] = None
 
-    return {"dir": target_dir, "go": go, "plan": plan}
+    return {"roots": target_dirs, "go": go, "plan": plan}

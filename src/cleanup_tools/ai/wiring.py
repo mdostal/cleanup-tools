@@ -151,7 +151,7 @@ def propose_for_other_bucket(
     if not target_dir.is_dir():
         raise FileNotFoundError(f"sort target directory does not exist: {target_dir}")
 
-    plan = sort_module._plan(adapter, config, target_dir)
+    plan = sort_module._plan(adapter, config, [target_dir])
     other_items = [item for item in plan if item["bucket"] == "other"]
 
     # THE cap gate: slice to `cap` candidates BEFORE any provider call is

@@ -453,7 +453,7 @@ def test_ai_approved_entry_executes_via_sort_from_queue(adapter, downloads, othe
     queue_module.set_status(adapter, entry.id, "approved", queue_module.default_queue_path(adapter))
 
     class Args:
-        dir = str(downloads)
+        dir = [str(downloads)]
         go = False
         from_queue = True
 

@@ -123,15 +123,22 @@ def test_build_parser_recognizes_sort_subcommand_with_dir_and_go():
     parser = cli.build_parser()
     args = parser.parse_args(["sort", "/some/dir", "--go"])
     assert args.command == "sort"
-    assert args.dir == "/some/dir"
+    assert args.dir == ["/some/dir"]
     assert args.go is True
 
 
-def test_build_parser_sort_subcommand_defaults_dir_none_and_go_false():
+def test_build_parser_sort_subcommand_accepts_multiple_dirs():
+    parser = cli.build_parser()
+    args = parser.parse_args(["sort", "/some/dir", "/other/dir"])
+    assert args.command == "sort"
+    assert args.dir == ["/some/dir", "/other/dir"]
+
+
+def test_build_parser_sort_subcommand_defaults_dir_empty_and_go_false():
     parser = cli.build_parser()
     args = parser.parse_args(["sort"])
     assert args.command == "sort"
-    assert args.dir is None
+    assert args.dir == []
     assert args.go is False
 
 
@@ -160,7 +167,7 @@ def test_main_sort_subcommand_passes_args_with_dir_and_go_to_run(monkeypatch, ca
     exit_code = cli.main(["sort", "/some/dir", "--go"])
 
     assert exit_code == 0
-    assert received["args"].dir == "/some/dir"
+    assert received["args"].dir == ["/some/dir"]
     assert received["args"].go is True
     capsys.readouterr()
 
