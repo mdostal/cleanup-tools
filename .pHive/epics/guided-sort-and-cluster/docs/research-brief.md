@@ -46,6 +46,14 @@ The existing research brief (`.pHive/research/semantic-desktop-organization.md`)
 - **Network policy (corrected same day as this research, commit `f2086a7`)**: not a blanket ban — opt-in/visibly-triggered features are fine; ambient/telemetry-style or aggressively-polling ones are not. This directly permits the chat feature but constrains its infrastructure choice (poll-on-demand over aggressive background polling).
 - **Design against the real 6,800+-entry queue**, not a toy example — pagination and background-job infrastructure already exist specifically because naive full-table rendering/scanning broke at this scale once already.
 
+## 8. Addendum (post-review): `search_roots` already exists as the multi-location hook
+
+`Config.search_roots: list[str]` (`config.py:45`) is already consumed by `reclaim.py` and `corral_screenshots.py` (`_resolve_roots`-style helpers: CLI-supplied dirs win, else configured `search_roots`, else a hardcoded default set) — i.e. **arbitrary, user-configured multi-location scanning already exists for two of the three pipelines.** `sort.py` is the outlier: `run()` (`sort.py:152-212`) takes exactly one `target_dir` (default: Downloads), no `search_roots` support at all. Extending `sort` to match its siblings' existing `search_roots` pattern — rather than inventing a new mechanism — is the natural way to satisfy "sort any and all locations," and a fixed root enum (downloads/desktop/documents/other) is the wrong shape: root should be *whichever of the user's actual configured/selected locations* an entry's `src` falls under, which is open-ended by design, not a closed set.
+
+## 9. Addendum (post-review): the real queue will be reset before this ships
+
+The product owner confirmed the real ~6,800-entry queue will be reset for retesting before this epic lands — the backward-compatible-parsing-of-old-formats risk (grill findings H2/V1, the single highest-risk item in round 1) is substantially de-scoped: the new schema still needs to *not crash* on an unexpected old format (defensive, not silently corrupting), but no longer needs a proven, exhaustively-tested migration path for real historical data. This shrinks the epic's risk surface meaningfully.
+
 ## Test precedent
 
 `tests/test_queue.py` (concurrency/locking races), `tests/test_ui_routes.py` (~80 tests, including the exact-match-not-substring bulk-approve guarantee), `tests/test_ai_wiring.py` (cap-enforcement-by-call-count, not result-count), `tests/test_jobs.py` (background-job semantics) are the direct precedent suites for this epic's stories.

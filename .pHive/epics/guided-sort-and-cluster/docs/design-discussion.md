@@ -4,69 +4,64 @@
 
 No prior KG decisions found for this topic (clean slate). North star (from `.pHive/project-profile.yaml`): ship a local-first desktop app anyone can download to clean up their Mac, with a pluggable AI layer, prioritizing the author's own real use first. This epic is squarely in that lane — it's the author's own stated next workflow.
 
+**Revision note (round 2, post product-owner review):** the product owner corrected three things in the first draft: (1) root locations must be arbitrary/any-and-all, not a fixed enum, and the workflow needs to let the user pick a *subset* of locations and run a scoped pass against just that subset; (2) the real queue will be reset before this ships, which substantially de-risks the backward-compatibility work the first draft was built around; (3) reject/undo/edit/re-run all need to be first-class, because the chat-agent piece (originally epic #3/#4, furthest out) needs "full skills" to actually do those things on the user's behalf — it's being promoted to the very next epic, not deferred. This revision reflects all three.
+
 ## 1. Goal
 
-Let the product owner triage their real ~6,800-entry queue at the speed the tool's scale demands: approve broad swaths at once (whole Downloads/Desktop sort results), progressively hand harder-to-classify piles to AI (with real control over cost/scope), and — eventually — place things by what they're *about*, not just what type they are.
+Let the product owner triage a large, messy queue at the speed the tool's scale demands: run sort/reclaim against any location (not just the two or three hardcoded defaults), select a subset of locations and act on just that subset, approve/reject/undo/edit broad swaths at once via a real tree view, and — very soon after — hand a BYOK LLM real tool-access to the same primitives so it can help drive the triage conversationally, not just propose a one-shot batch.
 
-## 2. Recommendation: split into four sequential epics, not one
+## 2. Recommendation: still split sequentially, but re-sequenced — chat agent moves up to be next, not last
 
-The research brief surfaces one finding that should drive the whole shape of this plan: **the four pieces have genuinely different risk, dependency, and infrastructure profiles**, and three of them share one foundational schema decision that should land once, first, rather than being redesigned three times.
+The four original pieces still have different sizes and infrastructure profiles, and splitting them (rather than one mega-epic) is still right — but the product owner's answers change the order: the chat-agent-with-tools piece depends directly on the primitives in this epic (reject/undo/edit/re-run/select-and-run), and the owner wants it soon, not after AI-sort-scope-modes and semantic clustering. Re-sequenced:
 
 | # | Piece | Size | New infra? | Depends on |
 |---|---|---|---|---|
-| 1 | Hierarchical `group_key` + dashboard tree view | Small–Medium | No — reuses `_bulk_transition` as-is | Nothing |
-| 2 | User-controlled AI-sort scope (other/everything/within-bucket, adjustable cap) | Medium | No — extends `ai/wiring.py`'s existing shape | #1's `group_key` scheme (for the "within-bucket" mode's own grouping) |
-| 3 | In-app chat/agent plan-builder | Large | **Yes** — first chat/streaming surface in the codebase | #1 (approves land as tree branches) + #2 (the agent's "tools" are largely #2's scope modes) |
-| 4 | Semantic/entity clustering | Large | **Yes** — first ML/embedding subsystem, zero deps installed yet | Independent of #1–3 technically, but its outputs (semantic clusters) want the same tree UI from #1 to be reviewable at scale |
+| **1 — this epic** | Arbitrary-location queue hierarchy + dashboard tree + full entry-level control (approve/reject/undo/edit/re-run) + subset-select-and-run | Medium | No | Nothing |
+| **2 — next** | In-app chat/agent plan-builder, BYOK, with tool-access to this epic's primitives | Large | **Yes** — first chat/streaming surface in the codebase | #1 (the agent's "tools" ARE #1's primitives) |
+| 3 | User-controlled AI-sort scope (other/everything/within-bucket, adjustable cap) | Medium | No | #1's hierarchy scheme; likely absorbed as one of #2's "skills" rather than staying a separate one-shot batch feature — re-evaluate when #2 is planned |
+| 4 | Semantic/entity clustering | Large | **Yes** — first ML/embedding subsystem, zero deps installed yet | Independent of #1–3 technically; still last because it needs its own deep design pass (embedding/OCR/face library choices) that the other three don't touch |
 
-Recommendation: plan and ship **#1 as this epic**, sized to two vertical slices (schema first, tree UI second — see §7) rather than "days," since the schema slice is genuinely correctness-critical against a real 6,800-entry queue and deserves to be validated on its own before the UI is built on top of it. It's still immediately valuable on its own (you can start bulk-approving Downloads/Desktop the moment it ships) and still much smaller than #2–4. Once #1's `group_key` scheme is real and battle-tested against the actual queue, run `/plan` again for #2 (now a much smaller, better-informed epic), then #3, then #4 — each building on the last epic's real, shipped foundation instead of a paper design. This mirrors exactly how this project has already shipped everything else (harden-cleanup-cli → ai-approvals-ui → port-remaining-scripts → desktop-app-shell, each a real, separately-shipped epic).
+**Why chat-agent (#2) still isn't bundled into this epic**, even though it's next: it's a genuinely different kind of work — no chat/conversation/streaming code exists anywhere in this codebase today (confirmed by grep), the Anthropic SDK call pattern here is deliberately single-shot, and a real cost-control design is needed for open-ended conversation (very different shape than a capped batch call). Building it well means it should be planned against THIS epic's primitives once they're real and shipped, not designed against a paper API that might shift during implementation. This epic is the fast, mechanical foundation; #2 starts immediately after, informed by what actually landed.
 
-**Why not one big epic with 15+ stories covering all four:** the chat agent (#3) and semantic clustering (#4) are each large enough to be their own multi-week efforts with real open design questions (what tools does the agent have; which embedding/OCR/face libraries to actually vendor). Bundling them with the much smaller, much more mechanical #1/#2 would either slow #1/#2 down waiting for #3/#4's harder questions to resolve, or force #3/#4's design to be rushed to keep pace with #1/#2. Sequential epics let each piece move at its own real pace and let you start using #1 while #2–4 are still being designed.
+## 3. Proposed approach for THIS epic
 
-## 3. Proposed approach for THIS epic (#1: hierarchical group_key + dashboard tree)
+**Locations: arbitrary, not a fixed enum — reuse `Config.search_roots`, which already exists for exactly this.** Research found `reclaim.py` and `corral_screenshots.py` already support scanning multiple arbitrary user-configured locations via `Config.search_roots` (CLI-supplied dirs win, else configured `search_roots`, else a small hardcoded default). `sort.py` is the outlier — it takes exactly one `target_dir`. This epic:
 
-**Schema — `root-slug` is a fixed enum, not a derived free-form value.** `root-slug ∈ {"downloads", "desktop", "documents", "other"}` — decided at design time, not inferred per-path at runtime with open-ended output. Resolution algorithm (to confirm against `adapters/base.py` during implementation — `resolve_standard_dir` is confirmed to exist and be called for `"downloads"` today; the implementing story's first task is confirming it also resolves `"desktop"`/`"documents"` symmetrically, or adding thin wrappers if not):
+1. Extends `sort.py` to accept multiple roots the same way its siblings already do (`search_roots`-aware, CLI/UI-supplied roots win).
+2. Represents a queue entry's location as *whichever of the user's actual configured/selected roots its `src` falls under* — open-ended by design (any path the user has configured or picked), with a single `"other"` fallback for anything outside all of them. No fixed enum.
+3. Adds a **root/location picker to the kickoff bar and `/plan/*` routes**: today those routes always run against a single hardcoded default; this epic adds the ability to select a subset of locations (from configured `search_roots`, or an ad-hoc path) and kick off a scoped sort/reclaim pass against just that subset — directly answering "I should be able to select a subset and say just do this, go."
 
-1. Resolve each of the three standard dirs to an absolute path once per request.
-2. For a given entry, check whether `Path(entry.src).resolve()` is equal to or a descendant of each standard dir's resolved path, in that fixed order (downloads → desktop → documents).
-3. First match wins; no match → `"other"`.
+**Parsing existing `group_key`s — simplified, since the real queue resets before this ships.** New writes use a location-aware format (e.g. `sort:<location>:<bucket>`, location being the actual configured root, not an enum member). Reads must not crash on an unexpected/old format (defensive fallback to `"other"`), but — per the product owner — no longer need a proven migration path against real historical data; a reset queue means this can be validated against synthetic fixtures covering the *shape* of old formats, not a byte-for-byte real snapshot.
 
-**Parsing existing (pre-epic) `group_key`s — explicit table, not a general parser.** New writes always produce the 3-segment form. Reads must handle every format the research brief confirmed exists today:
+**Full entry-level control, not just approve.** Alongside per-branch approve (existing `_bulk_transition`, unchanged) and per-branch reject/undo (same execution path, already symmetric for individual entries — extend to bulk), this epic adds an **edit** primitive that doesn't exist today: `queue.py` currently only has `set_status` (change status) and `undo` (revert to prior status) — no way to change a *pending* entry's proposed `dest`/bucket before approving it. New `queue.edit_entry(adapter, entry_id, new_dest, new_group_key, queue_path)`-shaped function, same locking discipline as `set_status`, appends to `status_history` so edits are auditable the same way status changes are. This is the concrete primitive both the tree UI ("move this whole branch to a different bucket before approving") and the future chat agent ("the agent proposes changing X, you can approve that edit") will call.
 
-| Existing format | Segments | Parsed as |
-|---|---|---|
-| `sort:<bucket>` | 2 | `root="other"`, `bucket=<bucket>` |
-| `reclaim:<category>` | 2 | `root="other"`, `category=<category>` |
-| `corral-screenshots` | 0 colons | `root="other"`, no sub-bucket |
-| `None` | — | displayed as "ungrouped", not part of the tree at all (see open question 2) |
+**"Re-running"**: the kickoff bar already re-runs a plan idempotently (existing `stage_entries` dedup-by-pending-src). What's new is scoping a re-run to a specific location subset (via the picker above) rather than always the full default set.
 
-Split on `:` with `maxsplit`, branch on segment count (0, 2, or 3) rather than a general-purpose parser — a 4th unexpected format should raise loudly in a test, not be silently swallowed. **Verification step before implementation**: grep the whole repo for every `.group_key` read/write site and confirm each one treats it as either an opaque exact-match key or a display string (the research pass checked the obvious consumers — `_bulk_target_ids`, `_group_entries`, `queue.html`'s badges — but wasn't scoped as an exhaustive audit; do that audit as part of this story, not after).
+**UI**: a collapsible tree on the dashboard, grouped by actual configured/selected location then bucket — e.g. `~/Downloads > screenshots (42, 1.2GB) [Approve all] [Reject all] [Undo all]`, with an "Other" branch always present so nothing silently disappears. Vanilla JS matching `plan-trigger.js`'s existing fetch/data-attribute pattern, no bundler. Large branches never render per-entry inline — the tree only ever shows aggregate counts/sizes per branch, consistent with why pagination exists on the flat queue view today. The location/subset picker for kicking off new plans lives on the existing kickoff bar, extending its current checkbox-per-pipeline UI with a location multi-select.
 
-**Backend**: `_bulk_target_ids` gains prefix-aware resolution (a tree-branch identifier like `sort:downloads:` matches every `group_key` starting with that prefix) alongside the existing exact-match mode — additive, not a replacement, so today's flat "Approve group" buttons keep working unchanged. `_bulk_transition`'s execution path (loop calling `set_status`) needs no change at all.
-
-**UI**: a collapsible tree on the dashboard, `Downloads > screenshots (42, 1.2GB) [Approve all]`, `Desktop > screenshots (8, 90MB) [Approve all]`, `Other > ... ` (the fallback bucket, always present so nothing silently disappears), etc. — vanilla JS matching `plan-trigger.js`'s existing fetch/data-attribute pattern, no bundler. Reject/undo-all get the same per-branch treatment. Large branches (thousands of entries) never render per-entry — the tree only ever shows counts/sizes per branch, consistent with why pagination exists on the flat queue view today.
-
-**Cost control**: N/A for this epic — no AI calls involved, purely a queue-schema + bulk-approval UI change.
+**Cost control**: N/A for this epic — no AI calls involved.
 
 ## 4. Risks
 
-- **Migration risk on the real 6,800-entry queue.** The new `group_key` format must be backward-compatible at read time per the parsing table in §3 (old flat keys still parse, just as `root="other"`) — never a one-time rewrite migration on the user's real data. Needs a test built from a representative sample of the real flat-key formats confirmed in the research brief, not just a handful of synthetic entries.
-- **Root-dir inference ambiguity.** Not every `src` path cleanly maps to "Downloads" or "Desktop" (e.g. a nested subfolder, or a file already moved into `_sorted/`). Needs an explicit "other/unknown root" bucket in the tree rather than silently mis-grouping or crashing.
-- **Tree UI at scale.** A naive tree that eagerly renders every leaf would repeat the exact performance mistake pagination/background-jobs were built to fix elsewhere in this app. The tree must only ever show aggregate counts per branch, never a flat entry list inline.
+- **`sort.py`'s single-target-dir assumption runs deeper than the public `run()` signature.** `_plan`, `_run_from_queue`, and the CLI arg parsing all thread a single `target_dir` today; extending to multi-root needs auditing all three, not just the entry point — mirror `reclaim.py`'s already-working multi-root shape rather than inventing a new one.
+- **Location-picker UX at real scale.** If `search_roots` grows large (many configured locations) or a chosen ad-hoc path is enormous, the picker and the resulting tree still need to only ever show aggregates, never eagerly enumerate — same "don't repeat the pre-pagination mistake" risk as the original draft, now applying to two UI surfaces (kickoff picker + tree) instead of one.
+- **New `edit_entry` primitive needs the same concurrency discipline as `set_status`/`undo`.** It's new surface area on the queue's locking contract — needs its own concurrency tests (`test_queue.py` already has a real-race test template to extend, not invent).
+- **Scope discipline for the chat-agent hand-off.** This epic's job is to make reject/undo/edit/re-run/select-and-run real, tested, and usable by a human first. It's tempting to start shaping them around "what an LLM tool call would need" prematurely — resist that; #2 should adapt to what actually shipped here, not the reverse.
 
 ## 5. Dependencies
 
-None outside this repo. No new third-party packages. Builds entirely on `queue.py`, `routes.py`'s existing bulk-transition path, and `dashboard.html`'s existing rendering.
+None outside this repo. No new third-party packages. Builds on `queue.py` (extended with `edit_entry`), `sort.py` (extended to multi-root matching `reclaim.py`/`corral_screenshots.py`'s existing pattern), `routes.py`'s bulk-transition path, and `dashboard.html`'s rendering.
 
 ## 6. Open questions
 
-1. **Root-dir set**: Downloads + Desktop only (as literally requested), or also Documents (already a `reclaim`/`corral-screenshots` root today)? Recommend: include Documents too, since the schema change is the same effort either way and excluding it would just mean redoing this story again soon.
-2. **Existing flat-key entries**: should the tree show a fourth "ungrouped / pre-existing" branch for the real queue's current entries (staged before this schema existed), or should those simply not appear in the tree view at all (still visible in the flat `/queue` page)? Recommend: a visible "ungrouped" branch, so nothing silently becomes harder to find.
-3. **Reject/undo-all per branch**: requested piece only mentioned "approve," but reject/undo exist symmetrically today for individual entries and for exact-match groups. Recommend: ship all three per-branch actions together, not approve-only, since the backend cost is identical.
+Two of the original three are resolved by the product owner's answers (reject/undo: yes, full parity; migration: de-scoped by the queue reset). One remains:
+
+1. **`search_roots` UI**: today `search_roots` is config-file-only (`~/.config/cleanup-tools/config.yaml`, hand-edited or defaulted). Should this epic also add a way to manage it from the Settings page (add/remove a location), or is CLI/config-file management sufficient for now, with only the *picker* (select from what's already configured, for a given run) living in the UI? Recommend: picker only for this epic — managing the underlying `search_roots` list is a small, separable follow-up, not blocking.
 
 ## 7. Scale assessment
 
-**Medium.** Multi-file (queue.py, routes.py, dashboard.html, a new/extended static JS file, tests across `test_queue.py`/`test_ui_routes.py`), single layer (Flask + vanilla JS, no new infrastructure), no new dependencies, no new architecture pattern — but real-scale correctness (the 6,800-entry queue, backward-compatible parsing) makes it more than a "small" mechanical change. Two vertical slices, each landing in a working state on its own:
+**Medium**, three vertical slices, each landing in a working state on its own:
 
-1. **Schema slice**: the `root-slug` enum + parsing table from §3, backend prefix-matching in `_bulk_target_ids`, and the group_key-consumer audit — validated against a real queue snapshot. No UI change yet; existing flat "Approve group" buttons keep working unchanged throughout.
-2. **Tree UI slice**: the dashboard tree view, built on top of slice 1's now-real, now-tested schema.
+1. **Multi-root + hierarchy schema slice**: `sort.py` extended to `search_roots`-aware multi-root scanning (matching `reclaim`/`corral_screenshots`'s existing pattern), the new location-aware `group_key` scheme, defensive (not migration-proven) backward-compat parsing. No UI change yet.
+2. **Entry-control slice**: `queue.edit_entry`, bulk reject/undo extended to match bulk-approve's existing prefix-aware resolution, full concurrency test coverage.
+3. **UI slice**: the dashboard tree (built on slices 1+2) and the kickoff-bar location/subset picker.
