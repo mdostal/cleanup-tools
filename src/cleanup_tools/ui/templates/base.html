@@ -711,14 +711,43 @@
   .kickoff-row-done { color: var(--good); }
   .kickoff-row-error { color: var(--pending); }
   .kickoff-summary { color: var(--ink); font-weight: 600; }
+
+  /* /history: one row per status_history record, reverse-chronological
+     (see routes.py's _history_rows). Kept visually close to .entry-card
+     (same background/border/radius/shadow tokens) since it's the same
+     "one queue-derived thing per row" shape, just read-oriented instead
+     of action-oriented. */
+  .history-row {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    padding: 0.85rem 1.1rem;
+    margin-bottom: 0.6rem;
+  }
+  .history-row-main {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .history-row-what { font-family: var(--font-ui); }
+  .history-row-what code { font-size: 0.85rem; }
+  .history-row-timestamp { margin-left: auto; font-family: var(--font-mono); font-size: 0.78rem; }
+  .history-executed-note {
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+    font-style: italic;
+    margin: 0.5rem 0 0;
+  }
 </style>
 </head>
 <body>
 <nav>
   <!-- "Current page" indicator: request.endpoint (Flask injects `request`
        into every template's context by default, no routes.py change
-       needed) tells us which of these two is the actual page being
-       viewed. Only Dashboard/Review Queue ever get .nav-link +
+       needed) tells us which of these is the actual page being viewed.
+       Only Dashboard/Review Queue/History ever get .nav-link +
        aria-current="page" -- the Plan: links below are one-shot actions
        that redirect back to the dashboard, not pages you "are on", so they
        deliberately never carry this treatment (and never show a stuck
@@ -733,6 +762,11 @@
     class="nav-link"
     {% if request.endpoint == 'ui.queue_view' %}aria-current="page"{% endif %}
   >Review Queue</a>
+  <a
+    href="{{ url_for('ui.history_view') }}"
+    class="nav-link"
+    {% if request.endpoint == 'ui.history_view' %}aria-current="page"{% endif %}
+  >History</a>
   <a
     href="{{ url_for('ui.plan_sort') }}"
     class="plan-trigger-link"

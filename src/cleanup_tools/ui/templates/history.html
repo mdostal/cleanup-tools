@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}History - Cleanup Approvals{% endblock %}
+{% block content %}
+<h1>History <span style="font-weight:normal; color:var(--ink-soft);">({{ total_rows }} total)</span></h1>
+<p class="meta">
+  A reverse-chronological record of every status change and edit, built entirely from the
+  queue's own history -- nothing here is a separate log.
+</p>
+
+{% for row in rows %}
+<div class="history-row" data-entry-id="{{ row.entry_id }}">
+  <div class="history-row-main">
+    <span class="badge badge-status-{{ row.status }}">{{ row.status }}</span>
+    <span class="history-row-what">
+      {% if row.edit %}
+      edited &middot; dest: <code>{{ row.edit.dest.old }}</code> &rarr; <code>{{ row.edit.dest.new }}</code>
+      {% if row.edit.group_key.old != row.edit.group_key.new %}
+      &middot; group: <code>{{ row.edit.group_key.old or "ungrouped" }}</code> &rarr; <code>{{ row.edit.group_key.new or "ungrouped" }}</code>
+      {% endif %}
+      {% else %}
+      <strong>{{ row.action }}</strong>
+      {% if row.group_key %}&middot; {{ row.group_key }}{% endif %}
+      {% endif %}
+    </span>
+    <span class="history-row-timestamp meta">{{ row.timestamp }}</span>
+  </div>
+  <p class="entry-path">src: {{ row.src }}</p>
+  {% if row.dest %}
+  <p class="entry-path">dest: {{ row.dest }}</p>
+  {% endif %}
+
+  {% if row.is_latest %}
+    {% if row.can_undo %}
+    <form method="post" action="{{ url_for('ui.undo_entry', entry_id=row.entry_id) }}" data-action="undo">
+      <button type="submit">Undo</button>
+    </form>
+    {% elif row.executed_at %}
+    <!-- The single most safety-critical property of this whole view: an
+         entry whose --from-queue execution already moved/deleted the real
+         file on disk must NEVER show a plain "Undo" button next to it --
+         queue.undo() only reverts the status field, it never touches the
+         filesystem. See _history_rows' docstring. -->
+    <p class="history-executed-note">
+      Executed {{ row.executed_at }} &mdash; reverting the record does not restore the file.
+    </p>
+    {% endif %}
+  {% endif %}
+</div>
+{% else %}
+<p>No history yet -- approve, reject, or edit something in the <a href="{{ url_for('ui.queue_view') }}">Review Queue</a> to see it here.</p>
+{% endfor %}
+
+{% if pagination.total > 0 %}
+<div class="pagination">
+  {% if pagination.has_prev %}
+  <a href="{{ url_for('ui.history_view', page=pagination.prev_page, per_page=pagination.per_page) }}">&larr; Prev</a>
+  {% else %}
+  <span class="pagination-disabled">&larr; Prev</span>
+  {% endif %}
+
+  <span class="pagination-info">
+    Page {{ pagination.page }} of {{ pagination.total_pages }}
+    ({{ pagination.start_index }}&ndash;{{ pagination.end_index }} of {{ pagination.total }})
+  </span>
+
+  {% if pagination.has_next %}
+  <a href="{{ url_for('ui.history_view', page=pagination.next_page, per_page=pagination.per_page) }}">Next &rarr;</a>
+  {% else %}
+  <span class="pagination-disabled">Next &rarr;</span>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

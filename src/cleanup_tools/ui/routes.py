@@ -889,6 +889,74 @@ def queue_view():
     )
 
 
+# ---------------------------------------------------------------------------
+# History: a reverse-chronological feed built entirely from existing
+# QueueEntry.status_history data (no new storage). The single safety-
+# critical property here -- self-caught during this epic's design review,
+# not by an earlier grill pass -- is that Undo must never be offered where
+# it would lie: queue.undo() only ever reverts the queue's *status* field,
+# it never touches the filesystem, so a row for an entry whose --from-queue
+# execution already ran (entry.executed_at set -- the move/delete actually
+# happened on disk) must not show a plain, working-looking Undo button.
+# ---------------------------------------------------------------------------
+
+
+def _history_rows(entries: list[queue_module.QueueEntry]) -> list[dict]:
+    """Flatten every entry's ``status_history`` into one reverse-chronological
+    row list -- what happened, when, to what, via which rule/pipeline
+    (``group_key``).
+
+    ``queue.undo()`` only ever reverts the single most recent transition
+    (it pops the *last* history record), so only the LATEST row for a
+    given entry can accurately offer a real Undo action -- an older row
+    would visually claim to undo its own transition while actually
+    undoing whatever happened *after* it. Every row still carries
+    ``is_latest`` so the template can gate on it, but ``can_undo`` folds
+    in every other precondition (latest, not yet executed on disk, and
+    something real to revert to -- mirroring ``queue.undo()``'s own
+    ``len(status_history) <= 1`` guard) so the template only ever needs
+    one boolean, never re-deriving this safety property itself.
+    """
+    rows: list[dict] = []
+    for entry in entries:
+        history = entry.status_history
+        last_index = len(history) - 1
+        for index, record in enumerate(history):
+            is_latest = index == last_index
+            rows.append(
+                {
+                    "entry_id": entry.id,
+                    "action": entry.action,
+                    "src": entry.src,
+                    "dest": entry.dest,
+                    "group_key": entry.group_key,
+                    "source": entry.source,
+                    "status": record.get("status"),
+                    "timestamp": record.get("timestamp"),
+                    "edit": record.get("edit"),
+                    "is_latest": is_latest,
+                    "executed_at": entry.executed_at,
+                    "can_undo": is_latest and entry.executed_at is None and len(history) > 1,
+                }
+            )
+    rows.sort(key=lambda r: r["timestamp"] or "", reverse=True)
+    return rows
+
+
+@bp.route("/history")
+def history_view():
+    rows = _history_rows(_load_entries())
+    page_rows, pagination = _paginate(
+        rows, request.args.get("page"), request.args.get("per_page")
+    )
+    return render_template(
+        "history.html",
+        rows=page_rows,
+        total_rows=len(rows),
+        pagination=pagination,
+    )
+
+
 @bp.route("/queue/<entry_id>/approve", methods=["POST"])
 def approve_entry(entry_id):
     try:

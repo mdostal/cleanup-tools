@@ -127,6 +127,7 @@ datas = [
     (os.path.join(UI_TEMPLATES, "dashboard.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_TEMPLATES, "queue.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_TEMPLATES, "settings.html"), "cleanup_tools/ui/templates"),
+    (os.path.join(UI_TEMPLATES, "history.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_STATIC, "keyboard.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "plan-trigger.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "theme.js"), "cleanup_tools/ui/static"),

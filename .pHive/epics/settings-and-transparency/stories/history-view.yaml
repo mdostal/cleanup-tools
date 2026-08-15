@@ -108,6 +108,23 @@ metric:
 
 manual_verdict:
   scenario_ref: .pHive/test-scenarios/history-view-manual.yaml
-  verdict: null
-  timestamp: null
-  agent: null
+  verdict: pass
+  timestamp: "2026-08-15T17:39:30Z"
+  agent: claude-sonnet-5 (execute skill, direct Playwright walkthrough -- no
+    formal scenario file was ever authored at scenario_ref, so this verdict
+    is recorded ad hoc)
+  notes: |
+    Verified via Playwright against the real approvals UI: /history
+    renders the reverse-chronological feed, nav link present and ordered
+    correctly (Dashboard, Review Queue, History, then Plan actions,
+    Settings gear far right). The single safety-critical property
+    (executed_at-gated Undo) was verified both by dedicated automated
+    tests (test_history_view_already_executed_entry_never_shows_undo_
+    button, test_history_view_not_yet_executed_entry_shows_working_undo_
+    button, plus 4 unit tests on _history_rows' can_undo derivation) and
+    live in the browser, where the one real entry (can_undo=False because
+    it has only a single "approved" history record, nothing to revert
+    to) correctly showed neither a working Undo button nor a misleading
+    "executed" note -- the third, previously-untested can_undo=False
+    branch (nothing-to-revert-to, as opposed to already-executed).
+    Pagination-at-scale (60 synthetic entries) verified automated only.

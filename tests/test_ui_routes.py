@@ -2630,3 +2630,175 @@ def test_advanced_pane_never_leaks_ai_credentials(client, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-super-secret-value")
     html = client.get("/settings").data.decode()
     assert "sk-super-secret-value" not in html
+
+
+# ---------------------------------------------------------------------------
+# 13. History: a reverse-chronological feed built entirely from existing
+#     QueueEntry.status_history, with Undo strictly gated on executed_at.
+#     This is the single highest-risk correctness property in the whole
+#     settings-and-transparency epic -- see _history_rows' docstring.
+# ---------------------------------------------------------------------------
+
+
+def test_history_rows_sorted_reverse_chronological_across_entries(tmp_path):
+    from cleanup_tools.ui.routes import _history_rows
+
+    old = _make_entry(tmp_path, "old.txt")
+    old.status_history = [{"status": "pending", "timestamp": "2026-01-01T00:00:00+00:00"}]
+    new = _make_entry(tmp_path, "new.txt")
+    new.status_history = [{"status": "pending", "timestamp": "2026-06-01T00:00:00+00:00"}]
+
+    rows = _history_rows([old, new])
+    assert [r["entry_id"] for r in rows] == [new.id, old.id]
+
+
+def test_history_rows_only_latest_row_per_entry_is_undo_eligible(tmp_path):
+    from cleanup_tools.ui.routes import _history_rows
+
+    entry = _make_entry(tmp_path, "a.txt", status="approved")
+    entry.status_history = [
+        {"status": "pending", "timestamp": "2026-01-01T00:00:00+00:00"},
+        {"status": "rejected", "timestamp": "2026-01-02T00:00:00+00:00"},
+        {"status": "approved", "timestamp": "2026-01-03T00:00:00+00:00"},
+    ]
+
+    rows = _history_rows([entry])
+    # Reverse-chronological: approved (latest) first, then rejected, then pending.
+    assert [r["status"] for r in rows] == ["approved", "rejected", "pending"]
+    assert [r["is_latest"] for r in rows] == [True, False, False]
+    # Only the latest row is undo-eligible -- an older row's Undo would
+    # actually undo a LATER transition, not its own, which would lie.
+    assert rows[0]["can_undo"] is True
+    assert rows[1]["can_undo"] is False
+    assert rows[2]["can_undo"] is False
+
+
+def test_history_rows_can_undo_false_when_nothing_to_revert_to(tmp_path):
+    from cleanup_tools.ui.routes import _history_rows
+
+    entry = _make_entry(tmp_path, "a.txt")
+    entry.status_history = [{"status": "pending", "timestamp": "2026-01-01T00:00:00+00:00"}]
+
+    rows = _history_rows([entry])
+    assert rows[0]["can_undo"] is False  # single history record, nothing before it
+
+
+def test_history_rows_can_undo_false_when_executed(tmp_path):
+    """The single safety-critical property: an entry whose --from-queue
+    execution already ran must never be marked can_undo, even though it's
+    the latest row and has multiple history records.
+    """
+    from cleanup_tools.ui.routes import _history_rows
+
+    entry = _make_entry(tmp_path, "a.txt", status="approved")
+    entry.status_history = [
+        {"status": "pending", "timestamp": "2026-01-01T00:00:00+00:00"},
+        {"status": "approved", "timestamp": "2026-01-02T00:00:00+00:00"},
+    ]
+    entry.executed_at = "2026-01-03T00:00:00+00:00"
+
+    rows = _history_rows([entry])
+    assert rows[0]["is_latest"] is True
+    assert rows[0]["can_undo"] is False
+    assert rows[0]["executed_at"] == "2026-01-03T00:00:00+00:00"
+
+
+def test_history_rows_carries_edit_record_shape(tmp_path):
+    from cleanup_tools.ui.routes import _history_rows
+
+    entry = _make_entry(tmp_path, "a.txt")
+    entry.status_history = [
+        {
+            "status": "pending",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "edit": {
+                "dest": {"old": "/old/dest.txt", "new": "/new/dest.txt"},
+                "group_key": {"old": "sort:photos", "new": "sort:screenshots"},
+            },
+        }
+    ]
+
+    rows = _history_rows([entry])
+    assert rows[0]["edit"]["dest"]["new"] == "/new/dest.txt"
+
+
+def test_history_view_route_renders_rows_reverse_chronological(adapter, client, tmp_path):
+    old = _make_entry(tmp_path, "old.txt")
+    old.status_history = [{"status": "pending", "timestamp": "2026-01-01T00:00:00+00:00"}]
+    new = _make_entry(tmp_path, "new.txt")
+    new.status_history = [{"status": "pending", "timestamp": "2026-06-01T00:00:00+00:00"}]
+    _seed_queue(adapter, [old, new])
+
+    resp = client.get("/history")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+
+    assert html.index("new.txt") < html.index("old.txt")
+
+
+def test_history_view_not_yet_executed_entry_shows_working_undo_button(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.txt", status="approved")
+    entry.status_history = [
+        {"status": "pending", "timestamp": "2026-01-01T00:00:00+00:00"},
+        {"status": "approved", "timestamp": "2026-01-02T00:00:00+00:00"},
+    ]
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/history").data.decode()
+    row_html = html.split(f'data-entry-id="{entry.id}"')[1].split('<div class="history-row"')[0]
+    assert f"/queue/{entry.id}/undo" in row_html
+    assert "does not restore the file" not in row_html
+
+
+def test_history_view_already_executed_entry_never_shows_undo_button(adapter, client, tmp_path):
+    """The exact regression this story must never ship: an executed entry's
+    History row must not offer a plain, working-looking Undo button.
+    """
+    entry = _make_entry(tmp_path, "a.txt", status="approved")
+    entry.status_history = [
+        {"status": "pending", "timestamp": "2026-01-01T00:00:00+00:00"},
+        {"status": "approved", "timestamp": "2026-01-02T00:00:00+00:00"},
+    ]
+    entry.executed_at = "2026-01-03T00:00:00+00:00"
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/history").data.decode()
+    row_html = html.split(f'data-entry-id="{entry.id}"')[1].split('<div class="history-row"')[0]
+
+    assert f"/queue/{entry.id}/undo" not in row_html
+    assert "does not restore the file" in row_html
+
+
+def test_history_view_paginates_at_realistic_scale(adapter, client, tmp_path):
+    entries = []
+    for i in range(60):
+        e = _make_entry(tmp_path, f"f{i}.txt")
+        e.status_history = [{"status": "pending", "timestamp": f"2026-01-01T00:00:{i:02d}+00:00"}]
+        entries.append(e)
+    _seed_queue(adapter, entries)
+
+    resp = client.get("/history")
+    html = resp.data.decode()
+    assert "Page 1 of" in html
+    assert "pagination" in html
+
+    # Reuses the existing _paginate helper -- never eagerly renders all 60
+    # rows on one page.
+    assert html.count('class="history-row"') < 60
+
+
+def test_history_view_empty_queue_shows_empty_state_not_500(client):
+    resp = client.get("/history")
+    assert resp.status_code == 200
+    assert "No history yet" in resp.data.decode()
+
+
+def test_history_nav_link_present_and_marked_current(client):
+    resp = client.get("/history")
+    html = resp.data.decode()
+    link = _nav_link_block(html, "History")
+    assert 'class="nav-link"' in link
+    assert 'aria-current="page"' in link
+
+    dashboard_link = _nav_link_block(html, "Dashboard")
+    assert "aria-current" not in dashboard_link
