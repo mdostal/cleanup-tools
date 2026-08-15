@@ -129,13 +129,17 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   must follow this pattern (see `scripts/safe-reclaim.sh` for the reference implementation).
 - Uncertain files are staged into `_sorted/<type>/` or `_REVIEW/` — never deleted blind.
 - The wallet/secret finder outputs `path · match-type · confidence` — never the matched value itself.
-- **No network, no telemetry.** This tool touches personal files end-to-end and must stay fully local
-  (see `.pHive/project-profile.yaml → north_star.avoid`). This extends to the Tauri shell: no
-  `tauri-plugin-updater`, no analytics/crash-reporting plugin — verified by grepping
-  `Cargo.lock`/`package-lock.json`, not just by confirming none was deliberately added.
+- **No ambient/telemetry network calls, and nothing excessive.** This tool touches personal files
+  end-to-end, so anything that phones home *silently* or *by default* is out — no analytics, no
+  crash-reporting plugin, no background tracking. This is NOT a blanket ban on network code, though
+  (an earlier phrasing of this rule as "no network calls, period" overstated the actual policy —
+  corrected 2026-08-14, direct from the project owner): a legitimate, user-facing feature is fine as
+  long as it's opt-in or visibly-triggered rather than silent, and doesn't poll aggressively or move
+  more data than the feature actually needs. `.pHive/project-profile.yaml → north_star.avoid` has
+  the same correction applied.
 - No CLAUDE.md exists yet — until one is added, `.pHive/project-profile.yaml → claude_md_summary`
   is the authoritative source for build/rule conventions.
-- The sole sanctioned exception to "no network, no telemetry": explicit, user-triggered AI calls
+- Explicit, user-triggered AI calls
   via `src/cleanup_tools/ai/` (`AIProvider` ABC + `AnthropicProvider`). The SDK itself must never
   phone home on its own (verified against the installed SDK's source, not assumed) — client
   construction always passes `api_key=` explicitly so the SDK can't silently fall back to an
