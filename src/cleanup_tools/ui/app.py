@@ -19,9 +19,10 @@ from pathlib import Path
 
 from flask import Flask
 
+from .. import config as config_module
 from ..adapters.base import OSAdapter
 from .routes import bp as ui_blueprint
-from .routes import parse_group_key, short_path
+from .routes import bucket_icon, parse_group_key, short_path
 
 DEFAULT_PORT = 5151
 LOCALHOST = "127.0.0.1"
@@ -45,7 +46,22 @@ def create_app(adapter: OSAdapter, queue_path: Path | None = None) -> Flask:
     # through this filter -- see routes.short_path's docstring for why.
     app.jinja_env.filters["short_path"] = short_path
     app.jinja_env.filters["basename"] = lambda p: Path(p).name
+    app.jinja_env.filters["bucket_icon"] = bucket_icon
     app.jinja_env.globals["parse_group_key"] = parse_group_key
+
+    @app.context_processor
+    def inject_ui_mode():
+        # Available in every template (not just settings.html) without
+        # threading it through every render_template() call individually
+        # -- base.html needs it for <html data-ui-mode="...">, and
+        # dashboard.html/queue.html need it to branch Guided mode's
+        # plain-language copy at the specific spots where it differs from
+        # Standard. One config load per request, same cost as any other
+        # route here already pays calling config_module.load_config()
+        # itself.
+        config = config_module.load_config(app.config["CLEANUP_ADAPTER"])
+        return {"ui_mode": config.ui_mode}
+
     return app
 
 

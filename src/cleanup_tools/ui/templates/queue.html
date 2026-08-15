@@ -79,6 +79,36 @@
   {% endif %}
 
   <div class="entry-body">
+    {% if ui_mode == "guided" %}
+    <!-- Guided mode (config.ui_mode): a plain-language sentence replaces
+         the technical action/src/dest lines below -- raw paths and the
+         group_key are still real, still available, just tucked behind
+         an explicit "Show technical details" toggle rather than shown
+         by default. Direct answer to the first-time/occasional-user
+         persona in the UI design review, who specifically struggled to
+         confirm a "move" wasn't a delete from the raw src/dest labels
+         alone. Delete vs. move gets genuinely different reassurance
+         copy -- these are different risk levels, not a word swap. -->
+    <p class="guided-summary">
+      <span class="bucket-icon" aria-hidden="true">{{ (parsed.bucket if entry.group_key else none) | bucket_icon }}</span>
+      {% if entry.action == "delete" %}
+      <strong>{{ entry.src | basename }}</strong> will be permanently deleted.
+      {% else %}
+      <strong>{{ entry.src | basename }}</strong> will move into the
+      <strong>{{ parsed.bucket or parsed.pipeline or "sorted" }}</strong> folder{% if entry.group_key %} in {{ parsed.location | short_path }}{% endif %}.
+      Nothing is deleted.
+      {% endif %}
+      {% if is_ai_source(entry.source) %}
+      <span class="badge badge-ai" title="Proposed by {{ entry.source }}">AI-proposed</span>
+      {% endif %}
+    </p>
+    <details class="path-disclosure guided-tech-details">
+      <summary>Show technical details</summary>
+      <p class="entry-path">src: <span class="full-path">{{ entry.src }}</span></p>
+      {% if entry.dest %}<p class="entry-path">dest: <span class="full-path">{{ entry.dest }}</span></p>{% endif %}
+      {% if entry.group_key %}<p class="entry-path">group_key: <span class="full-path">{{ entry.group_key }}</span></p>{% endif %}
+    </details>
+    {% else %}
     <p>
       <!-- No per-card status badge here on purpose: /queue (see routes.py's
            queue_view -> _pending_entries()) only ever lists pending
@@ -111,6 +141,7 @@
       to
       <details class="path-disclosure"><summary>{{ (entry.dest | short_path) }}</summary><span class="full-path">{{ entry.dest }}</span></details>
     </p>
+    {% endif %}
     {% endif %}
 
     <div class="entry-actions">

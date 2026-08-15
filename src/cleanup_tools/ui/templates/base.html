@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-ui-mode="{{ ui_mode }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -685,6 +685,41 @@
     word-break: break-all;
   }
 
+  /* Guided mode (config.ui_mode): plain-sentence entry summary + a
+     collapsed-by-default technical-details disclosure (queue.html). The
+     bucket icon is always paired with the sentence's own bucket-name
+     text -- reinforcement, never the only signal, same principle as the
+     status icons. */
+  .guided-summary {
+    font-size: var(--text-base);
+    line-height: 1.55;
+  }
+  .bucket-icon { margin-right: 0.3rem; }
+  .guided-tech-details summary {
+    cursor: pointer;
+    color: var(--ink-soft);
+    font-size: var(--text-sm);
+  }
+  .guided-tech-details .entry-path { margin: 0.3rem 0 0; }
+
+  /* Settings > General's interaction-mode radio picker. */
+  .ui-mode-picker { display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start; }
+  .ui-mode-option {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.65rem 0.9rem;
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius-card);
+    cursor: pointer;
+    width: 100%;
+    max-width: 480px;
+  }
+  .ui-mode-option:has(input:checked),
+  .ui-mode-option.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .ui-mode-option input { margin-right: 0.4rem; }
+  .ui-mode-option-label { font-weight: 700; }
+
   .flash { border: 1px solid var(--line); border-radius: var(--radius-card); padding: 0.75rem 1rem; margin-bottom: 1rem; background: var(--surface); }
   .flash.error { border-color: var(--pending); color: var(--pending); background: var(--pending-soft); }
 
@@ -866,6 +901,48 @@
     font-style: italic;
     margin: 0.5rem 0 0;
   }
+
+  /* -------------------------------------------------------------------
+   * Console mode: a density/copy-style preference (config.ui_mode),
+   * orthogonal to the Ledger/Sonar/Tide color theme -- see
+   * config.Config.ui_mode's docstring. Built entirely as a CSS overlay
+   * keyed off [data-ui-mode="console"] on <html> (see app.py's context
+   * processor): every row-shaped surface (entry cards, bucket rows,
+   * history rows) gets tighter padding/gaps and a monospace-forward
+   * treatment for data, so triaging hundreds of entries in one sitting
+   * needs less scrolling per item -- same markup, same data, no
+   * separate "console" templates to keep in sync with the standard
+   * ones. Per direct design-review feedback, status TEXT stays
+   * sans-serif even here (all-monospace was flagged as harder to scan,
+   * not easier) -- only genuinely tabular data (paths, counts, sizes)
+   * goes monospace.
+   * ------------------------------------------------------------------- */
+  html[data-ui-mode="console"] .entry-card,
+  html[data-ui-mode="console"] .bucket-row,
+  html[data-ui-mode="console"] .history-row {
+    padding: 0.55rem 0.75rem;
+  }
+  html[data-ui-mode="console"] .entry-card { gap: 0.6rem; }
+  html[data-ui-mode="console"] .location-tree,
+  html[data-ui-mode="console"] .bucket-list { gap: 0.35rem; }
+  html[data-ui-mode="console"] .entry-path,
+  html[data-ui-mode="console"] .path-disclosure summary,
+  html[data-ui-mode="console"] .path-disclosure .full-path {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+  html[data-ui-mode="console"] .entry-actions,
+  html[data-ui-mode="console"] .bucket-row-actions {
+    margin-top: 0.4rem;
+  }
+  html[data-ui-mode="console"] .entry-actions button,
+  html[data-ui-mode="console"] .bucket-row-actions button,
+  html[data-ui-mode="console"] .history-row button {
+    padding: 0.28rem 0.6rem;
+    font-size: 0.8rem;
+  }
+  html[data-ui-mode="console"] .branch-count { font-size: 1.1rem; }
+  html[data-ui-mode="console"] .branch-count-sm { font-size: 0.95rem; }
 </style>
 </head>
 <body>

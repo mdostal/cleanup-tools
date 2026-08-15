@@ -337,6 +337,7 @@ def test_config_to_dict_matches_the_shape_save_config_actually_persists(tmp_path
         "search_roots": ["/some/root"],
         "master_paths": [{"path": "/some/master", "backed_up": True}],
         "icon_choice": "recycle-folder",
+        "ui_mode": "standard",
     }
 
     class TmpHomeAdapter(MacOSAdapter):
@@ -363,6 +364,7 @@ def test_config_to_dict_never_includes_credential_material():
         "search_roots",
         "master_paths",
         "icon_choice",
+        "ui_mode",
     }
 
 
@@ -390,6 +392,37 @@ def test_save_config_uses_default_config_path_under_tmp_path_home(tmp_path):
     loaded = load_config(adapter)
     assert loaded.search_roots == ["/some/root"]
     assert loaded.master_paths == [MasterPath(path="/some/master", backed_up=True)]
+
+
+def test_ui_mode_round_trips_through_save_and_load(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], ui_mode="console"), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.ui_mode == "console"
+
+
+def test_ui_mode_defaults_to_standard_when_absent_from_config_file(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("search_roots: []\n")  # no ui_mode key at all
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.ui_mode == "standard"
+
+
+def test_ui_mode_defaults_to_standard_with_no_config_file_at_all():
+    assert DEFAULT_CONFIG.ui_mode == "standard"
 
 
 # ---------------------------------------------------------------------------

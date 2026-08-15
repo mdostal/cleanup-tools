@@ -204,6 +204,28 @@ def _location_for_src(src: str, config: config_module.Config, adapter) -> str:
     return "other"
 
 
+BUCKET_ICONS = {
+    "photos": "📷",
+    "screenshots": "🖼️",
+    "pdfs": "📄",
+    "docs": "📝",
+    "archives": "🗜️",
+    "videos": "🎬",
+    "installers": "💿",
+    "data": "📊",
+}
+DEFAULT_BUCKET_ICON = "📁"
+
+
+def bucket_icon(bucket: str | None) -> str:
+    """A small emoji icon for a bucket name -- Guided mode's (config.ui_mode)
+    per-entry visual scan aid. Always paired with the bucket's text label
+    wherever it's used (never icon-alone), per the same "icon + text,
+    never color/icon alone" principle the status badges follow.
+    """
+    return BUCKET_ICONS.get(bucket or "", DEFAULT_BUCKET_ICON)
+
+
 def short_path(path: str) -> str:
     """Shorten an absolute path for display: ``~``-relativize against the
     real home directory, then cap to at most the last two path segments,
@@ -1255,6 +1277,35 @@ ICON_CHOICES = {
 }
 DEFAULT_ICON_CHOICE = "broom-folder"
 
+# ---------------------------------------------------------------------------
+# UI mode: an interaction-density/copy-style preference, orthogonal to the
+# Ledger/Sonar/Tide color theme (see config.Config.ui_mode's docstring for
+# why this is config-persisted rather than the theme's localStorage). This
+# module owns the allowed set and its labels/descriptions, same convention
+# as ICON_CHOICES above. Applied globally via a data-ui-mode attribute on
+# <html> (see app.py's context processor and base.html) -- CSS attribute
+# selectors handle Console mode's density entirely; Guided mode's
+# plain-language copy needs real template branching at the specific spots
+# where the copy differs (queue.html, dashboard.html), gated on this same
+# value.
+# ---------------------------------------------------------------------------
+
+UI_MODES = {
+    "standard": {
+        "label": "Standard",
+        "description": "The default: dense, direct, technical labels visible at a glance.",
+    },
+    "guided": {
+        "label": "Guided",
+        "description": "Plain-language confirmations, bucket icons, technical details tucked behind a toggle. Good for occasional use.",
+    },
+    "console": {
+        "label": "Console",
+        "description": "Denser rows for triaging hundreds of entries in one sitting. Same data, tighter layout.",
+    },
+}
+DEFAULT_UI_MODE = "standard"
+
 
 def _user_bucket_rules(config: config_module.Config) -> list[config_module.BucketRule]:
     """The user-added bucket rules within ``config.bucket_rules`` -- everything
@@ -1306,6 +1357,8 @@ def settings():
         "settings.html",
         icon_choices=ICON_CHOICES,
         current_icon_choice=config.icon_choice,
+        ui_modes=UI_MODES,
+        current_ui_mode=config.ui_mode,
         user_bucket_rules=_user_bucket_rules(config),
         default_bucket_rules=config_module.DEFAULT_BUCKET_RULES,
         search_roots=config.search_roots,
@@ -1348,6 +1401,26 @@ def set_icon_choice():
     config = dataclasses.replace(config_module.load_config(adapter), icon_choice=choice)
     config_module.save_config(adapter, config)
     return jsonify({"choice": choice})
+
+
+@bp.route("/settings/ui-mode", methods=["POST"])
+def set_ui_mode():
+    """Persist the chosen UI mode (Standard/Guided/Console) to ``config.yaml``.
+
+    Plain form POST + redirect, matching every other Settings CRUD route
+    in this file (unlike ``set_icon_choice``, there's no live in-process
+    side effect to apply beyond the config write -- the mode takes effect
+    on next render via app.py's context processor, no Tauri-side call
+    needed).
+    """
+    mode = request.form.get("ui_mode")
+    if mode not in UI_MODES:
+        return f"unknown UI mode: {mode!r}", 400
+
+    adapter = _adapter()
+    config = dataclasses.replace(config_module.load_config(adapter), ui_mode=mode)
+    config_module.save_config(adapter, config)
+    return redirect(url_for("ui.settings") + "#general")
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,21 @@
   <div class="settings-panes">
     <section id="general" class="settings-pane" aria-label="General">
       <h2>General</h2>
-      <p class="meta">Nothing here yet -- more general options land here as the app grows.</p>
+      <h3>Interaction mode</h3>
+      <p class="meta">
+        Controls information density and how plain-language the copy is -- separate from the
+        color theme below. Switch any time; nothing about your queue or config changes.
+      </p>
+      <form method="post" action="{{ url_for('ui.set_ui_mode') }}" class="ui-mode-picker">
+        {% for slug, mode in ui_modes.items() %}
+        <label class="ui-mode-option{% if slug == current_ui_mode %} selected{% endif %}">
+          <input type="radio" name="ui_mode" value="{{ slug }}" {% if slug == current_ui_mode %}checked{% endif %}>
+          <span class="ui-mode-option-label">{{ mode.label }}</span>
+          <span class="meta">{{ mode.description }}</span>
+        </label>
+        {% endfor %}
+        <button type="submit" data-intent="primary">Save mode</button>
+      </form>
     </section>
 
     <section id="app-icon" class="settings-pane" aria-label="App icon">

@@ -28,9 +28,11 @@ from cleanup_tools.ui.routes import (
     DEFAULT_ICON_CHOICE,
     ICON_CHOICES,
     PROTECTED_PATH_ROOTS,
+    UI_MODES,
     _group_entries_hierarchical,
     _is_protected_path,
     _location_for_src,
+    bucket_icon,
     parse_group_key,
     short_path,
 )
@@ -3037,3 +3039,123 @@ def test_heading_detail_class_used_instead_of_inline_style_on_page_headings(clie
         html = client.get(path).data.decode()
         assert "font-weight:normal; color:var(--ink-soft)" not in html
     assert 'class="heading-detail"' in client.get("/queue").data.decode()
+
+
+# ---------------------------------------------------------------------------
+# 15. UI mode (config.ui_mode): Standard/Guided/Console, orthogonal to the
+#     color theme. Standard is the default and must render identically to
+#     every pre-mode-system test above (none of them set ui_mode).
+# ---------------------------------------------------------------------------
+
+
+def test_bucket_icon_returns_distinct_icon_per_known_bucket_and_a_default_otherwise():
+    assert bucket_icon("photos") != bucket_icon("pdfs")
+    assert bucket_icon("totally-unknown-bucket") == bucket_icon(None)
+    assert bucket_icon("photos")  # non-empty
+
+
+def test_dashboard_html_root_carries_data_ui_mode_matching_config(adapter, client):
+    default_html = client.get("/").data.decode()
+    assert 'data-ui-mode="standard"' in default_html
+
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, ui_mode="console"),
+    )
+    console_html = client.get("/").data.decode()
+    assert 'data-ui-mode="console"' in console_html
+
+
+def test_settings_general_pane_lists_all_three_modes_with_current_selected(adapter, client):
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, ui_mode="guided"),
+    )
+    html = client.get("/settings").data.decode()
+
+    for slug in UI_MODES:
+        assert f'value="{slug}"' in html
+
+    guided_option = html.split('value="guided"')[1].split("</label>")[0]
+    assert "checked" in guided_option
+
+
+def test_set_ui_mode_valid_choice_persists_and_redirects(adapter, client):
+    resp = client.post("/settings/ui-mode", data={"ui_mode": "console"})
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("#general")
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.ui_mode == "console"
+
+
+def test_set_ui_mode_unknown_value_returns_400_and_does_not_persist(adapter, client):
+    resp = client.post("/settings/ui-mode", data={"ui_mode": "not-a-real-mode"})
+    assert resp.status_code == 400
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.ui_mode == "standard"
+
+
+def test_queue_standard_mode_renders_technical_src_dest_labels(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "report.pdf", group_key="sort:misc", status="pending")
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/queue").data.decode()
+    assert "will move from" in html
+    assert 'class="guided-summary"' not in html
+
+
+def test_queue_guided_mode_renders_plain_sentence_and_collapsed_technical_details(
+    adapter, client, tmp_path
+):
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, ui_mode="guided"),
+    )
+    entry = _make_entry(tmp_path, "report.pdf", group_key="sort:pdfs", status="pending")
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/queue").data.decode()
+    assert 'class="guided-summary"' in html
+    assert "will move into the" in html
+    assert "Nothing is deleted." in html
+    assert "Show technical details" in html
+    # The raw src is still present (never actually hidden from the DOM,
+    # only tucked behind a closed-by-default <details>), just not the
+    # first thing the sentence shows.
+    assert str(tmp_path / "report.pdf") in html
+
+
+def test_queue_guided_mode_delete_action_gets_distinct_reassurance_copy(adapter, client, tmp_path):
+    """Move and delete are genuinely different risk levels -- guided mode
+    must not use the same "nothing is deleted" reassurance for an entry
+    that IS a deletion.
+    """
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, ui_mode="guided"),
+    )
+    f = tmp_path / "cache.tmp"
+    f.write_bytes(b"x")
+    entry = QueueEntry(
+        action="delete", src=str(f), dest="", status="pending",
+        group_key="reclaim:build_caches", plan_snapshot=build_plan_snapshot(f),
+    )
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/queue").data.decode()
+    assert "will be permanently deleted" in html
+    assert "Nothing is deleted." not in html.split("permanently deleted")[0][-200:]
+
+
+def test_console_mode_data_attribute_present_for_density_css(adapter, client, tmp_path):
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, ui_mode="console"),
+    )
+    entry = _make_entry(tmp_path, "a.txt", group_key="sort:misc")
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/queue").data.decode()
+    assert 'data-ui-mode="console"' in html
