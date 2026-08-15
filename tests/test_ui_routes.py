@@ -22,7 +22,15 @@ from cleanup_tools import config as config_module
 from cleanup_tools import queue as queue_module
 from cleanup_tools.queue import QueueEntry, build_plan_snapshot
 from cleanup_tools.ui.app import create_app
-from cleanup_tools.ui.routes import DEFAULT_ICON_CHOICE, ICON_CHOICES, _location_for_src, parse_group_key
+from cleanup_tools.ui.routes import (
+    DEFAULT_ICON_CHOICE,
+    ICON_CHOICES,
+    PROTECTED_PATH_ROOTS,
+    _group_entries_hierarchical,
+    _is_protected_path,
+    _location_for_src,
+    parse_group_key,
+)
 
 
 def _make_fake_adapter(home: Path) -> MacOSAdapter:
@@ -190,6 +198,161 @@ def test_dashboard_group_key_falls_back_to_ungrouped(adapter, client, tmp_path):
 
     resp = client.get("/")
     assert b"ungrouped" in resp.data
+
+
+def _entry_with_size(tmp_path, name, size, group_key, status="pending"):
+    f = tmp_path / name
+    f.write_bytes(b"x" * size)
+    return QueueEntry(
+        action="move", src=str(f), dest="", status=status,
+        group_key=group_key, plan_snapshot=build_plan_snapshot(f),
+    )
+
+
+def test_group_entries_hierarchical_aggregates_by_location_then_bucket(tmp_path):
+    entries = [
+        _entry_with_size(tmp_path, "a.jpg", 1024 * 1024, "sort:/root_a:photos"),
+        _entry_with_size(tmp_path, "b.jpg", 2 * 1024 * 1024, "sort:/root_a:photos", status="approved"),
+        _entry_with_size(tmp_path, "c.txt", 512 * 1024, "sort:/root_a:docs"),
+        _entry_with_size(tmp_path, "d.bin", 4 * 1024 * 1024, "reclaim:/root_b:build_caches"),
+    ]
+
+    tree = _group_entries_hierarchical(entries)
+
+    by_location = {loc["location"]: loc for loc in tree}
+    assert set(by_location) == {"/root_a", "/root_b"}
+
+    root_a = by_location["/root_a"]
+    assert root_a["count"] == 3
+    assert root_a["total_size"] == 3 * 1024 * 1024 + 512 * 1024
+    assert root_a["status_counts"] == {"pending": 2, "approved": 1}
+
+    buckets_by_label = {b["label"]: b for b in root_a["buckets"]}
+    assert set(buckets_by_label) == {"photos", "docs"}
+    assert buckets_by_label["photos"]["count"] == 2
+    assert buckets_by_label["photos"]["total_size"] == 3 * 1024 * 1024
+    assert buckets_by_label["photos"]["group_key"] == "sort:/root_a:photos"
+
+    root_b = by_location["/root_b"]
+    assert root_b["count"] == 1
+    assert root_b["buckets"][0]["label"] == "build_caches"
+
+    # Largest-first at both levels.
+    assert tree[0]["location"] == "/root_b"  # 4 MiB > root_a's ~3.5 MiB
+    assert root_a["buckets"][0]["label"] == "photos"
+
+
+def test_group_entries_hierarchical_never_drops_entries_outside_configured_locations(tmp_path):
+    outside = _entry_with_size(tmp_path, "orphan.bin", 1024, "sort:other:misc")
+    no_group_key = _entry_with_size(tmp_path, "mystery.bin", 1024, None)
+
+    tree = _group_entries_hierarchical([outside, no_group_key])
+
+    other = next(loc for loc in tree if loc["location"] == "other")
+    assert other["count"] == 2
+
+
+def test_group_entries_hierarchical_empty_queue_returns_empty_list():
+    assert _group_entries_hierarchical([]) == []
+
+
+def test_dashboard_renders_location_tree_from_hierarchical_entries(adapter, client, tmp_path):
+    entry = _entry_with_size(tmp_path, "a.jpg", 1024 * 1024, "sort:/somewhere:photos")
+    _seed_queue(adapter, [entry])
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert b"/somewhere" in resp.data
+    assert b"photos" in resp.data
+
+
+# ---------------------------------------------------------------------------
+# 1c. Protected paths: hard-blocked at the staging layer, never merely
+#     flagged. See _is_protected_path's docstring for the DaisyDisk-inspired
+#     rationale.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sub_path",
+    ["", "CoreServices/Finder.app", "Frameworks/Foo.framework"],
+)
+def test_is_protected_path_true_under_every_protected_root(adapter, sub_path):
+    for root in PROTECTED_PATH_ROOTS:
+        candidate = root / sub_path if sub_path else root
+        assert _is_protected_path(candidate, adapter) is True
+
+
+def test_is_protected_path_true_for_home_root_itself(adapter, home):
+    assert _is_protected_path(home, adapter) is True
+
+
+def test_is_protected_path_false_for_ordinary_paths_inside_home(adapter, home):
+    downloads = home / "Downloads"
+    assert _is_protected_path(downloads, adapter) is False
+    assert _is_protected_path(downloads / "photo.jpg", adapter) is False
+
+
+def test_plan_sort_never_stages_a_protected_path(adapter, client, home, monkeypatch):
+    """A misconfigured search_root pointing at a protected system location
+    must never produce a queue entry -- refused structurally at staging
+    time, not merely hidden in the UI. Monkeypatches PROTECTED_PATH_ROOTS
+    to include this test's own tmp-scoped "system" dir, since a real
+    /System doesn't exist (or isn't writable) on the test machine.
+    """
+    import cleanup_tools.ui.routes as routes_module
+
+    fake_system_root = home / "FakeSystem"
+    fake_system_root.mkdir()
+    (fake_system_root / "important.plist").write_bytes(b"do-not-touch")
+    monkeypatch.setattr(routes_module, "PROTECTED_PATH_ROOTS", [fake_system_root])
+
+    config_module.save_config(
+        adapter,
+        config_module.Config(
+            bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(fake_system_root)]
+        ),
+    )
+
+    resp = client.get("/plan/sort")
+    job_id = resp.get_json()["job_id"]
+    result = _poll_job_until_terminal(client, job_id)
+    assert result["status"] == "done"
+
+    entries = _reload_queue(adapter)
+    assert entries == []
+    # The file itself is of course untouched -- this is a dry-run route.
+    assert (fake_system_root / "important.plist").exists()
+
+
+# ---------------------------------------------------------------------------
+# 1d. /plan/* location-subset scoping via repeated ?dirs= -- the dashboard's
+#     location multi-select "select a subset and just do this, go".
+# ---------------------------------------------------------------------------
+
+
+def test_plan_sort_dirs_query_param_scopes_to_only_the_selected_locations(adapter, client, home):
+    root_a = home / "root_a"
+    root_a.mkdir()
+    root_b = home / "root_b"
+    root_b.mkdir()
+    (root_a / "photo.jpg").write_bytes(b"a")
+    (root_b / "doc.pdf").write_bytes(b"b")
+    config_module.save_config(
+        adapter,
+        config_module.Config(
+            bucket_rules=config_module.DEFAULT_BUCKET_RULES,
+            search_roots=[str(root_a), str(root_b)],
+        ),
+    )
+
+    resp = client.get("/plan/sort", query_string={"dirs": str(root_a)})
+    job_id = resp.get_json()["job_id"]
+    result = _poll_job_until_terminal(client, job_id)
+    assert result["status"] == "done"
+
+    entries = _reload_queue(adapter)
+    assert {Path(e.src).name for e in entries} == {"photo.jpg"}
 
 
 # ---------------------------------------------------------------------------
@@ -1949,6 +2112,44 @@ def test_dashboard_kickoff_bar_has_checkboxes_for_all_three_plans(client):
     for kind, href in PLAN_LINK_HREF.items():
         assert f'data-plan-kind="{kind}"' in html
         assert f'data-plan-url="{href}"' in html
+
+
+def test_dashboard_kickoff_bar_location_picker_lists_every_configured_location(adapter, client, home):
+    root_a = home / "root_a"
+    root_a.mkdir()
+    root_b = home / "root_b"
+    root_b.mkdir()
+    config_module.save_config(
+        adapter,
+        config_module.Config(
+            bucket_rules=config_module.DEFAULT_BUCKET_RULES,
+            search_roots=[str(root_a), str(root_b)],
+        ),
+    )
+
+    resp = client.get("/")
+    html = resp.data.decode()
+
+    assert 'class="kickoff-locations"' in html
+    for root in (root_a, root_b):
+        assert f'class="kickoff-location-checkbox" value="{root}" checked' in html
+
+
+def test_dashboard_location_tree_bucket_row_actions_scope_to_that_bucket_group_key(
+    adapter, client, tmp_path
+):
+    entry = _entry_with_size(tmp_path, "a.jpg", 1024, "sort:/root_a:photos")
+    _seed_queue(adapter, [entry])
+
+    resp = client.get("/")
+    html = resp.data.decode()
+
+    assert "/root_a" in html
+    assert "photos" in html
+    assert 'action="/queue/bulk-approve"' in html
+    assert 'action="/queue/bulk-reject"' in html
+    assert 'action="/queue/bulk-undo"' in html
+    assert 'name="group_key" value="sort:/root_a:photos"' in html
 
 
 def test_dashboard_kickoff_bar_is_only_on_the_dashboard_not_the_queue_view(adapter, client, tmp_path):

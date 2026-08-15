@@ -292,6 +292,72 @@
   .group-card h3 { margin: 0 0 0.4rem; font-family: var(--font-mono); font-size: 0.95rem; color: var(--ink); }
   .group-card .meta { color: var(--ink-soft); margin: 0 0 0.5rem; }
 
+  /* Dashboard's collapsible location -> bucket tree (see
+     _group_entries_hierarchical). One .location-branch <details> per
+     configured location, each holding a .bucket-row per bucket -- kept
+     visually distinct from .group-card (the flat legacy grouping still
+     used for the chart) via a left accent rail instead of a full card
+     border, so the tree reads as a nested hierarchy rather than a second
+     grid of cards. */
+  .location-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .location-branch {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    padding: 0.85rem 1.1rem;
+  }
+  .location-branch summary {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    list-style: revert;
+  }
+  .location-branch-title {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    color: var(--ink);
+    word-break: break-all;
+  }
+  .bucket-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-top: 0.75rem;
+    padding-left: 1.2rem;
+    border-left: 1px solid var(--line);
+  }
+  .bucket-row {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: 0.6rem 0.85rem;
+  }
+  .bucket-row-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .bucket-label { font-family: var(--font-mono); font-size: 0.88rem; color: var(--ink); }
+  .bucket-row-badges { margin-top: 0.35rem; }
+  .bucket-row-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .bucket-row-actions button {
+    font-size: 0.78rem;
+    padding: 0.3rem 0.7rem;
+  }
+
   /* Settings > App icon: a selectable card per bundled icon choice,
      reusing .group-grid's layout. A thicker border (rather than a new
      color token) marks the hovered/selectable affordance so this still
@@ -514,6 +580,26 @@
     font-family: var(--font-ui);
   }
   .kickoff-option input { accent-color: var(--accent); }
+  /* Location subset picker, dashboard.html's optional #kickoff-form
+     fieldset -- a plain unstyled <fieldset>/<legend> would look like a
+     stray box; this makes it read as one grouped control alongside the
+     plan-kind checkboxes rather than a separate, disconnected section. */
+  .kickoff-locations {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem 1rem;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius-card);
+    padding: 0.5rem 0.9rem;
+    margin: 0;
+  }
+  .kickoff-locations legend {
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    padding: 0 0.3rem;
+  }
   .kickoff-panel {
     margin-top: 0.85rem;
     display: flex;

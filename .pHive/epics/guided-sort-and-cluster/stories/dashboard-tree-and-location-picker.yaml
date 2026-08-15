@@ -114,6 +114,29 @@ metric:
 
 manual_verdict:
   scenario_ref: .pHive/test-scenarios/dashboard-tree-and-location-picker-manual.yaml
-  verdict: null
-  timestamp: null
-  agent: null
+  verdict: pass
+  timestamp: "2026-08-15T17:15:00Z"
+  agent: claude-sonnet-5 (execute skill, direct Playwright walkthrough -- no
+    formal scenario file was ever authored at scenario_ref, so this verdict
+    is recorded ad hoc; see notes below for the exact steps exercised)
+  notes: |
+    Ran the real approvals UI (cleanup approve --no-browser) against a
+    scratch HOME with search_roots=[Downloads, Desktop] and 3 loose files
+    across both. Verified via Playwright: (1) kickoff bar renders the
+    location picker with both configured locations, checked by default;
+    (2) unchecking Corral Screenshots + Reclaim + the Desktop location and
+    clicking "Run selected" staged only Downloads' 2 files ("sort: staged
+    2 entries") -- confirms ?dirs= subset scoping end to end; (3) the
+    dashboard's collapsible location tree rendered a Downloads branch with
+    photos/pdfs bucket rows, correct counts/sizes, and Approve/Reject/Undo
+    all buttons; (4) clicking "Approve all" on the photos bucket approved
+    exactly that entry (confirmed via /queue -- the pdfs entry remained
+    pending, untouched); (5) clicking "Undo all" correctly no-op'd on the
+    just-approved entry (its status_history had only the one "approved"
+    record staging never seeds a "pending" record -- nothing to revert to,
+    same pre-existing single-entry-undo limitation, not a regression) and
+    it stayed "approved" in the tree, which is correct per queue.undo()'s
+    existing contract. Protected-path hard-block and old-format
+    parse_group_key defensiveness were verified via the automated test
+    suite (501 passed) rather than manually, since exercising a real
+    /System path isn't safe to do against a live filesystem.

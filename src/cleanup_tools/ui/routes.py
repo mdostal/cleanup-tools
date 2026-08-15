@@ -27,6 +27,7 @@ from __future__ import annotations
 import dataclasses
 import io
 from pathlib import Path
+from types import SimpleNamespace
 
 from flask import Blueprint, Response, abort, current_app, jsonify, redirect, render_template, request, url_for
 from PIL import Image, UnidentifiedImageError
@@ -60,6 +61,42 @@ QUEUE_BUSY_MESSAGE = "Queue is busy -- try again in a moment."
 # so what goes out over HTTP is never byte-identical to the original file,
 # even for an already-small source image.
 THUMBNAIL_MAX_PX = 256
+
+# Hard-coded macOS system locations that must NEVER be staged as a move or
+# delete candidate, regardless of what a user configures search_roots to
+# (a typo'd or overly broad root -- e.g. "/" -- must not turn into a plan
+# to reorganize/delete system files). Modeled directly on DaisyDisk's
+# Collector pattern (see the prior-art research): these are refused
+# structurally, at the staging layer, in every one of _stage_sort_plan/
+# _stage_reclaim_plan/_stage_corral_screenshots_plan below -- never merely
+# flagged-but-still-queued the way reclaim.py's user-configurable
+# master_paths are (see MASTER_PATH_REFUSAL_REASON in reclaim.py, a
+# related but distinct mechanism: opt-in and per-project, not this
+# always-on system-path floor).
+PROTECTED_PATH_ROOTS = [
+    Path("/System"),
+    Path("/Library"),
+    Path("/bin"),
+    Path("/sbin"),
+    Path("/usr"),
+    Path("/Applications"),
+]
+
+
+def _is_protected_path(path: str | Path, adapter) -> bool:
+    """True if ``path`` is a hard-blocked protected system location, or
+    falls under one -- including the user's home directory itself (never a
+    subdirectory *inside* home, which is exactly what this whole app
+    exists to organize).
+
+    Symlinks are resolved before comparison (``Path.resolve()``) so a
+    symlinked path can't dodge the check by pointing at a protected
+    location through an unresolved alias.
+    """
+    resolved = Path(path).resolve()
+    if resolved == adapter.resolve_home().resolve():
+        return True
+    return any(resolved == root or root in resolved.parents for root in PROTECTED_PATH_ROOTS)
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +263,70 @@ def _group_entries(entries: list[queue_module.QueueEntry]) -> list[dict]:
     return sorted(groups.values(), key=lambda g: g["total_size"], reverse=True)
 
 
+def _group_entries_hierarchical(entries: list[queue_module.QueueEntry]) -> list[dict]:
+    """Aggregate ``entries`` into a location -> bucket tree for the
+    dashboard's collapsible tree view, via ``parse_group_key``.
+
+    Single pass over ``entries``, aggregates only -- never materializes a
+    per-entry list anywhere in the returned structure (repeating the
+    pre-pagination performance mistake at real, thousands-of-entries scale
+    is the single most-cited risk for this story; see the story's own
+    risk list and the prior-art research). Each bucket node is keyed by
+    the entry's literal ``group_key`` (not just the parsed bucket label),
+    so a bucket row's "Approve all"/"Reject all"/"Undo all" action -- an
+    exact match against that literal group_key -- reaches every entry in
+    that row and nothing outside it, even across the rare case of two
+    different literal group_key strings (e.g. an old- and new-format
+    group_key) that happen to parse to the same display label.
+
+    Entries whose ``group_key`` doesn't resolve to a real configured
+    location (``parse_group_key``'s "other" fallback, including entries
+    with no ``group_key`` at all) land under an "other" location branch --
+    it appears in the returned list like any other location whenever at
+    least one such entry exists, never silently dropped.
+
+    Both levels are sorted by descending total_size, largest first --
+    same convention as ``_group_entries``.
+    """
+    locations: dict[str, dict] = {}
+
+    for entry in entries:
+        parsed = parse_group_key(entry.group_key)
+        location = parsed["location"]
+        size = _entry_size(entry)
+
+        loc = locations.setdefault(
+            location,
+            {"location": location, "count": 0, "total_size": 0, "status_counts": {}, "buckets": {}},
+        )
+        loc["count"] += 1
+        loc["total_size"] += size
+        loc["status_counts"][entry.status] = loc["status_counts"].get(entry.status, 0) + 1
+
+        bucket = loc["buckets"].setdefault(
+            entry.group_key,
+            {
+                "group_key": entry.group_key,
+                "label": parsed["bucket"] or parsed["pipeline"] or "ungrouped",
+                "count": 0,
+                "total_size": 0,
+                "status_counts": {},
+                "ai_count": 0,
+            },
+        )
+        bucket["count"] += 1
+        bucket["total_size"] += size
+        bucket["status_counts"][entry.status] = bucket["status_counts"].get(entry.status, 0) + 1
+        if _is_ai_source(entry.source):
+            bucket["ai_count"] += 1
+
+    result = []
+    for loc in locations.values():
+        loc["buckets"] = sorted(loc["buckets"].values(), key=lambda b: b["total_size"], reverse=True)
+        result.append(loc)
+    return sorted(result, key=lambda loc: loc["total_size"], reverse=True)
+
+
 def _status_counts(entries: list[queue_module.QueueEntry]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for entry in entries:
@@ -238,12 +339,33 @@ def _status_counts(entries: list[queue_module.QueueEntry]) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def _configured_locations(config: config_module.Config, adapter) -> list[str]:
+    """The location strings the kickoff-bar's location picker offers.
+
+    Exactly ``_location_for_src``'s own resolution (configured
+    ``search_roots``, else the downloads/desktop/documents fallback trio)
+    so a location the picker offers is always one a plan can actually be
+    scoped to via ``?dirs=``.
+    """
+    if config.search_roots:
+        return [str(Path(r).resolve()) for r in config.search_roots]
+    return [
+        str(adapter.resolve_standard_dir("downloads")),
+        str(adapter.resolve_standard_dir("desktop")),
+        str(adapter.resolve_standard_dir("documents")),
+    ]
+
+
 @bp.route("/")
 def dashboard():
     entries = _load_entries()
+    adapter = _adapter()
+    config = config_module.load_config(adapter)
     return render_template(
         "dashboard.html",
         groups=_group_entries(entries),
+        location_tree=_group_entries_hierarchical(entries),
+        configured_locations=_configured_locations(config, adapter),
         overall_status_counts=_status_counts(entries),
         total_entries=len(entries),
         staged=request.args.get("staged"),
@@ -261,13 +383,20 @@ def dashboard():
 # ---------------------------------------------------------------------------
 
 
-def _stage_sort_plan(adapter, queue_path, progress_callback=None) -> list[queue_module.QueueEntry]:
-    """Dry-run cleanup_tools.commands.sort against the default target dir,
-    convert its plan into QueueEntry "move" proposals, and stage them.
+def _stage_sort_plan(
+    adapter, queue_path, progress_callback=None, dirs: list[str] | None = None
+) -> list[queue_module.QueueEntry]:
+    """Dry-run cleanup_tools.commands.sort against the target dir(s), convert
+    its plan into QueueEntry "move" proposals, and stage them.
 
-    Reuses sort.run()'s own plan-building (args=None -> dry-run against the
-    platform Downloads dir, same default the "sort" CLI subcommand uses
-    with no args) rather than walking the filesystem again here.
+    Reuses sort.run()'s own plan-building rather than walking the
+    filesystem again here. ``dirs``, if given (a subset of configured
+    search_roots picked from the dashboard's location multi-select),
+    scopes the scan to exactly those roots -- passed through as
+    ``args.dir``, the same shape ``cli.py``'s real argparse Namespace uses.
+    ``dirs=None`` (the default) falls back to sort.run()'s own default
+    resolution (configured search_roots, else the platform Downloads dir),
+    same as the "sort" CLI subcommand with no args.
 
     The slow part of this route is NOT sort.run() itself (a plain
     filesystem walk) -- it's the per-proposed-entry
@@ -291,24 +420,30 @@ def _stage_sort_plan(adapter, queue_path, progress_callback=None) -> list[queue_
     control and its total (``len(plan)``) is known before the loop even
     starts, so no proxy is needed here -- just call the callback once per
     iteration.
+
+    Any proposed item under a hard-blocked protected path (see
+    ``_is_protected_path``) is dropped here, before a ``QueueEntry`` is
+    ever constructed for it -- refused structurally, not merely flagged.
     """
-    result = sort_module.run(adapter, args=None)
+    run_args = SimpleNamespace(dir=dirs, go=False) if dirs else None
+    result = sort_module.run(adapter, args=run_args)
     plan_items = result.get("plan", [])
     total = len(plan_items)
     config = config_module.load_config(adapter)
     new_entries = []
     for current, item in enumerate(plan_items, start=1):
-        location = _location_for_src(item["src"], config, adapter)
-        new_entries.append(
-            queue_module.QueueEntry(
-                action="move",
-                src=str(item["src"]),
-                dest=str(item["dest"]),
-                source="ui-plan-sort",
-                group_key=f"sort:{location}:{item['bucket']}",
-                plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+        if not _is_protected_path(item["src"], adapter):
+            location = _location_for_src(item["src"], config, adapter)
+            new_entries.append(
+                queue_module.QueueEntry(
+                    action="move",
+                    src=str(item["src"]),
+                    dest=str(item["dest"]),
+                    source="ui-plan-sort",
+                    group_key=f"sort:{location}:{item['bucket']}",
+                    plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+                )
             )
-        )
         if progress_callback is not None:
             progress_callback(current, total)
     return queue_module.stage_entries(adapter, new_entries, queue_path)
@@ -351,15 +486,26 @@ class _DirSizeProgressAdapter:
         return size
 
 
-def _stage_reclaim_plan(adapter, queue_path, progress_callback=None) -> list[queue_module.QueueEntry]:
-    """Dry-run cleanup_tools.commands.reclaim across its default roots,
-    convert every non-refused candidate into a QueueEntry "delete"
-    proposal, and stage them.
+def _stage_reclaim_plan(
+    adapter, queue_path, progress_callback=None, dirs: list[str] | None = None
+) -> list[queue_module.QueueEntry]:
+    """Dry-run cleanup_tools.commands.reclaim across its roots, convert every
+    non-refused candidate into a QueueEntry "delete" proposal, and stage
+    them.
 
     Master-path-refused candidates (see reclaim.py's
     ``MASTER_PATH_REFUSAL_REASON``) are never staged -- there is nothing to
     approve for a candidate reclaim.py itself refuses to ever delete, even
-    under --go.
+    under --go. Candidates under a hard-blocked protected path (see
+    ``_is_protected_path``) are refused the same way, structurally, before
+    a ``QueueEntry`` ever exists for them -- distinct from master_paths
+    (user-configured, opt-in) but handled with the same "never even stage
+    it" discipline.
+
+    ``dirs``, if given (a subset of configured search_roots picked from
+    the dashboard's location multi-select), scopes the scan to exactly
+    those roots via ``args.dir``. ``dirs=None`` falls back to
+    ``reclaim.run()``'s own default resolution.
 
     ``queue_path`` is taken explicitly (rather than resolved via
     ``_queue_path()`` internally) because this is called from a background
@@ -377,12 +523,15 @@ def _stage_reclaim_plan(adapter, queue_path, progress_callback=None) -> list[que
     if progress_callback is not None:
         run_adapter = _DirSizeProgressAdapter(adapter, progress_callback)
 
-    result = reclaim_module.run(run_adapter, args=None)
+    run_args = SimpleNamespace(dir=dirs, go=False) if dirs else None
+    result = reclaim_module.run(run_adapter, args=run_args)
     config = config_module.load_config(adapter)
     new_entries = []
     for category_name, category in result.get("categories", {}).items():
         for item in category.get("entries", []):
             if item.get("master_path_refused"):
+                continue
+            if _is_protected_path(item["path"], adapter):
                 continue
             location = _location_for_src(item["path"], config, adapter)
             new_entries.append(
@@ -399,45 +548,49 @@ def _stage_reclaim_plan(adapter, queue_path, progress_callback=None) -> list[que
 
 
 def _stage_corral_screenshots_plan(
-    adapter, queue_path, progress_callback=None
+    adapter, queue_path, progress_callback=None, dirs: list[str] | None = None
 ) -> list[queue_module.QueueEntry]:
-    """Dry-run cleanup_tools.commands.corral_screenshots across its default
-    roots, convert its plan into QueueEntry "move" proposals, and stage them.
+    """Dry-run cleanup_tools.commands.corral_screenshots across its roots,
+    convert its plan into QueueEntry "move" proposals, and stage them.
 
-    Reuses corral_screenshots.run()'s own plan-building (args=None ->
-    dry-run against the default resolved roots, same defaults the
-    "corral-screenshots" CLI subcommand uses with no args) rather than
-    walking the filesystem again here -- structurally identical to
-    _stage_sort_plan above, including the same ``queue_path``/
-    ``progress_callback`` treatment (see that function's docstring for the
-    background-job/no-app-context reasoning and why no proxy-adapter trick
-    is needed for progress here). args=None also means
-    set_default_location is never true, so this route can never trigger the
-    OS-preference change -- only ever a dry-run plan.
+    Reuses corral_screenshots.run()'s own plan-building rather than walking
+    the filesystem again here -- structurally identical to _stage_sort_plan
+    above, including the same ``queue_path``/``progress_callback``/``dirs``
+    treatment (see that function's docstring for the background-job/
+    no-app-context reasoning, why no proxy-adapter trick is needed for
+    progress here, and the location-subset scoping). The constructed
+    ``args`` never sets ``set_default_location``, so this route can never
+    trigger the OS-preference change -- only ever a dry-run plan.
+
+    Any proposed item under a hard-blocked protected path (see
+    ``_is_protected_path``) is dropped here, before a ``QueueEntry`` is
+    ever constructed for it.
     """
-    result = corral_screenshots_module.run(adapter, args=None)
+    run_args = SimpleNamespace(dir=dirs, go=False) if dirs else None
+    result = corral_screenshots_module.run(adapter, args=run_args)
     plan_items = result.get("plan", [])
     total = len(plan_items)
     config = config_module.load_config(adapter)
     new_entries = []
     for current, item in enumerate(plan_items, start=1):
-        location = _location_for_src(item["src"], config, adapter)
-        new_entries.append(
-            queue_module.QueueEntry(
-                action="move",
-                src=str(item["src"]),
-                dest=str(item["dest"]),
-                source="ui-plan-corral-screenshots",
-                group_key=f"corral-screenshots:{location}",
-                plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+        if not _is_protected_path(item["src"], adapter):
+            location = _location_for_src(item["src"], config, adapter)
+            new_entries.append(
+                queue_module.QueueEntry(
+                    action="move",
+                    src=str(item["src"]),
+                    dest=str(item["dest"]),
+                    source="ui-plan-corral-screenshots",
+                    group_key=f"corral-screenshots:{location}",
+                    plan_snapshot=queue_module.build_plan_snapshot(item["src"]),
+                )
             )
-        )
         if progress_callback is not None:
             progress_callback(current, total)
     return queue_module.stage_entries(adapter, new_entries, queue_path)
 
 
-def _sort_job(adapter, queue_path, progress_callback) -> list[queue_module.QueueEntry]:
+def _sort_job(adapter, queue_path, dirs, progress_callback) -> list[queue_module.QueueEntry]:
     """The ``target_fn`` run on ``/plan/sort``'s background job thread.
 
     Just ``_stage_sort_plan`` with progress reporting wired up, mirroring
@@ -452,7 +605,7 @@ def _sort_job(adapter, queue_path, progress_callback) -> list[queue_module.Queue
     needed here the way it is for the queue lock's raw TimeoutError text.
     """
     try:
-        return _stage_sort_plan(adapter, queue_path, progress_callback)
+        return _stage_sort_plan(adapter, queue_path, progress_callback, dirs=dirs)
     except TimeoutError as exc:
         raise TimeoutError(QUEUE_BUSY_MESSAGE) from exc
 
@@ -466,14 +619,21 @@ def plan_sort():
     route's docstring for the full "why" of the background-job pattern;
     this route used to be the last of the three "Plan: X" actions still
     blocking synchronously).
+
+    Accepts an optional repeated ``?dirs=`` query param -- the dashboard's
+    location multi-select posting a subset of configured search_roots to
+    scope this run to, instead of every configured location (see
+    ``_stage_sort_plan``'s ``dirs`` param). Omitted entirely -> the usual
+    full default set.
     """
     adapter = _adapter()
     queue_path = _queue_path()
-    job_id = jobs.start_job(_sort_job, adapter, queue_path)
+    dirs = request.args.getlist("dirs") or None
+    job_id = jobs.start_job(_sort_job, adapter, queue_path, dirs)
     return jsonify({"job_id": job_id})
 
 
-def _reclaim_job(adapter, queue_path, progress_callback) -> list[queue_module.QueueEntry]:
+def _reclaim_job(adapter, queue_path, dirs, progress_callback) -> list[queue_module.QueueEntry]:
     """The ``target_fn`` run on ``/plan/reclaim``'s background job thread.
 
     Just ``_stage_reclaim_plan`` with progress reporting wired up, except a
@@ -486,7 +646,7 @@ def _reclaim_job(adapter, queue_path, progress_callback) -> list[queue_module.Qu
     verbatim as the job's terminal ``error``.
     """
     try:
-        return _stage_reclaim_plan(adapter, queue_path, progress_callback)
+        return _stage_reclaim_plan(adapter, queue_path, progress_callback, dirs=dirs)
     except TimeoutError as exc:
         raise TimeoutError(QUEUE_BUSY_MESSAGE) from exc
 
@@ -521,10 +681,14 @@ def plan_reclaim():
     ``plan_sort``/``plan_corral_screenshots`` follow this exact same
     async-job pattern -- none of the three ``/plan/*`` routes redirect
     synchronously or block until the plan finishes.
+
+    Accepts the same optional repeated ``?dirs=`` query param as
+    ``plan_sort`` -- see that route's docstring.
     """
     adapter = _adapter()
     queue_path = _queue_path()
-    job_id = jobs.start_job(_reclaim_job, adapter, queue_path)
+    dirs = request.args.getlist("dirs") or None
+    job_id = jobs.start_job(_reclaim_job, adapter, queue_path, dirs)
     return jsonify({"job_id": job_id})
 
 
@@ -564,12 +728,14 @@ def healthz():
     return jsonify({"status": "ok"}), 200
 
 
-def _corral_screenshots_job(adapter, queue_path, progress_callback) -> list[queue_module.QueueEntry]:
+def _corral_screenshots_job(
+    adapter, queue_path, dirs, progress_callback
+) -> list[queue_module.QueueEntry]:
     """The ``target_fn`` run on ``/plan/corral-screenshots``'s background job
     thread. Structurally identical to ``_sort_job`` above.
     """
     try:
-        return _stage_corral_screenshots_plan(adapter, queue_path, progress_callback)
+        return _stage_corral_screenshots_plan(adapter, queue_path, progress_callback, dirs=dirs)
     except TimeoutError as exc:
         raise TimeoutError(QUEUE_BUSY_MESSAGE) from exc
 
@@ -578,11 +744,13 @@ def _corral_screenshots_job(adapter, queue_path, progress_callback) -> list[queu
 def plan_corral_screenshots():
     """Kick off corral-screenshots planning/staging on a background job
     thread and return its ``job_id`` immediately -- mirrors ``plan_sort``/
-    ``plan_reclaim`` exactly.
+    ``plan_reclaim`` exactly, including the same optional repeated
+    ``?dirs=`` query param.
     """
     adapter = _adapter()
     queue_path = _queue_path()
-    job_id = jobs.start_job(_corral_screenshots_job, adapter, queue_path)
+    dirs = request.args.getlist("dirs") or None
+    job_id = jobs.start_job(_corral_screenshots_job, adapter, queue_path, dirs)
     return jsonify({"job_id": job_id})
 
 
