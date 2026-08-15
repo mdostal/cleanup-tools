@@ -1350,6 +1350,31 @@ def test_bulk_approve_group_key_is_exact_match_not_substring(adapter, client, tm
     assert reloaded[decoy[0].id].status == "pending"
 
 
+def test_bulk_reject_by_group_key_prefix_targets_every_leaf_under_the_branch(adapter, client, tmp_path):
+    """A trailing ":" turns group_key into a tree-branch prefix match:
+    "sort:downloads:" must reach every leaf under it ("sort:downloads:photos",
+    "sort:downloads:screenshots", ...) but never a sibling branch that merely
+    shares the same string prefix ("sort:downloads2:photos").
+    """
+    downloads_branch = [
+        _make_entry(tmp_path, "shot.png", group_key="sort:downloads:screenshots"),
+        _make_entry(tmp_path, "photo.jpg", group_key="sort:downloads:photos"),
+    ]
+    sibling_branch = [_make_entry(tmp_path, "other.jpg", group_key="sort:downloads2:photos")]
+    unrelated = [_make_entry(tmp_path, "cache.bin", group_key="reclaim:downloads:build_caches")]
+    _seed_queue(adapter, downloads_branch + sibling_branch + unrelated)
+
+    resp = client.post("/queue/bulk-reject", data={"group_key": "sort:downloads:"})
+    assert resp.status_code == 302
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    for e in downloads_branch:
+        assert reloaded[e.id].status == "rejected"
+    for e in sibling_branch + unrelated:
+        assert reloaded[e.id].status == "pending"
+        assert reloaded[e.id].status_history == []
+
+
 def test_bulk_approve_by_explicit_entry_ids(adapter, client, tmp_path):
     entries = [_make_entry(tmp_path, f"f{i}.txt", group_key="sort:misc") for i in range(5)]
     _seed_queue(adapter, entries)
@@ -1448,6 +1473,161 @@ def test_bulk_approve_returns_503_when_queue_lock_contended(adapter, client, tmp
         resp = client.post("/queue/bulk-approve", data={"group_key": "sort:misc"})
 
     assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# 7b. Bulk undo -- unlike bulk-approve/bulk-reject, targets are resolved
+#     against the WHOLE queue (approved/rejected entries are exactly what
+#     undo is for), and supports the same ":"-suffixed prefix match.
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_undo_by_group_key_reverts_only_that_group(adapter, client, tmp_path):
+    approved = [
+        _make_entry(tmp_path, f"shot{i}.png", group_key="sort:screenshots", status="approved")
+        for i in range(2)
+    ]
+    for e in approved:
+        e.status_history = [
+            {"status": "pending", "timestamp": "t0"},
+            {"status": "approved", "timestamp": "t1"},
+        ]
+    other = _make_entry(tmp_path, "cache.bin", group_key="reclaim:build_caches", status="approved")
+    other.status_history = [
+        {"status": "pending", "timestamp": "t0"},
+        {"status": "approved", "timestamp": "t1"},
+    ]
+    _seed_queue(adapter, approved + [other])
+
+    resp = client.post("/queue/bulk-undo", data={"group_key": "sort:screenshots"})
+    assert resp.status_code == 302
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    for e in approved:
+        assert reloaded[e.id].status == "pending"
+    assert reloaded[other.id].status == "approved"  # untouched, different group
+
+
+def test_bulk_undo_by_group_key_prefix_targets_every_leaf_under_the_branch(adapter, client, tmp_path):
+    branch = [
+        _make_entry(tmp_path, "shot.png", group_key="sort:downloads:screenshots", status="approved"),
+        _make_entry(tmp_path, "photo.jpg", group_key="sort:downloads:photos", status="approved"),
+    ]
+    for e in branch:
+        e.status_history = [
+            {"status": "pending", "timestamp": "t0"},
+            {"status": "approved", "timestamp": "t1"},
+        ]
+    sibling = _make_entry(tmp_path, "other.jpg", group_key="sort:downloads2:photos", status="approved")
+    sibling.status_history = [
+        {"status": "pending", "timestamp": "t0"},
+        {"status": "approved", "timestamp": "t1"},
+    ]
+    _seed_queue(adapter, branch + [sibling])
+
+    resp = client.post("/queue/bulk-undo", data={"group_key": "sort:downloads:"})
+    assert resp.status_code == 302
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    for e in branch:
+        assert reloaded[e.id].status == "pending"
+    assert reloaded[sibling.id].status == "approved"
+
+
+def test_bulk_undo_skips_entries_with_nothing_to_revert_but_still_processes_the_rest(
+    adapter, client, tmp_path
+):
+    nothing_to_undo = _make_entry(tmp_path, "fresh.png", group_key="sort:misc", status="pending")
+    has_history = _make_entry(tmp_path, "old.png", group_key="sort:misc", status="approved")
+    has_history.status_history = [
+        {"status": "pending", "timestamp": "t0"},
+        {"status": "approved", "timestamp": "t1"},
+    ]
+    _seed_queue(adapter, [nothing_to_undo, has_history])
+
+    resp = client.post("/queue/bulk-undo", data={"group_key": "sort:misc"})
+    assert resp.status_code == 302  # must not 500 just because one entry has nothing to revert
+
+    reloaded = {e.id: e for e in _reload_queue(adapter)}
+    assert reloaded[nothing_to_undo.id].status == "pending"  # untouched, not crashed
+    assert reloaded[has_history.id].status == "pending"  # reverted
+
+
+def test_bulk_undo_via_json_body_returns_json_summary_with_skipped_ids(adapter, client, tmp_path):
+    nothing_to_undo = _make_entry(tmp_path, "fresh.png", group_key="sort:misc", status="pending")
+    _seed_queue(adapter, [nothing_to_undo])
+
+    resp = client.post("/queue/bulk-undo", json={"group_key": "sort:misc"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["count"] == 0
+    assert body["skipped_ids"] == [nothing_to_undo.id]
+
+
+# ---------------------------------------------------------------------------
+# 7c. Entry edit -- change a pending entry's proposed dest/group_key before
+#     approval.
+# ---------------------------------------------------------------------------
+
+
+def test_edit_entry_updates_dest_and_group_key(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.png", group_key="sort:photos", status="pending")
+    _seed_queue(adapter, [entry])
+
+    resp = client.post(
+        f"/queue/{entry.id}/edit",
+        data={"dest": "/tmp/_sorted/screenshots/a.png", "group_key": "sort:screenshots"},
+    )
+    assert resp.status_code == 302
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.dest == "/tmp/_sorted/screenshots/a.png"
+    assert reloaded.group_key == "sort:screenshots"
+    assert reloaded.status == "pending"
+    assert reloaded.status_history[-1]["edit"]["dest"]["new"] == "/tmp/_sorted/screenshots/a.png"
+
+
+def test_edit_entry_missing_dest_returns_400_not_500(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.png", group_key="sort:photos", status="pending")
+    _seed_queue(adapter, [entry])
+
+    resp = client.post(f"/queue/{entry.id}/edit", data={"group_key": "sort:screenshots"})
+    assert resp.status_code == 400
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.group_key == "sort:photos"  # untouched
+
+
+def test_edit_entry_non_pending_returns_400_not_500(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.png", group_key="sort:photos", status="approved")
+    entry.status_history = [{"status": "approved", "timestamp": "t0"}]
+    _seed_queue(adapter, [entry])
+
+    resp = client.post(f"/queue/{entry.id}/edit", data={"dest": "/tmp/new-dest.png"})
+    assert resp.status_code == 400
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.dest == ""  # untouched
+
+
+def test_edit_entry_unknown_entry_id_returns_404_not_500(client):
+    resp = client.post("/queue/does-not-exist/edit", data={"dest": "/tmp/x.png"})
+    assert resp.status_code == 404
+
+
+def test_edit_entry_via_json_body(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.png", group_key="sort:photos", status="pending")
+    _seed_queue(adapter, [entry])
+
+    resp = client.post(
+        f"/queue/{entry.id}/edit",
+        json={"dest": "/tmp/_sorted/docs/a.png", "group_key": "sort:docs"},
+    )
+    assert resp.status_code == 302
+
+    reloaded = _reload_queue(adapter)[0]
+    assert reloaded.dest == "/tmp/_sorted/docs/a.png"
+    assert reloaded.group_key == "sort:docs"
 
 
 # ---------------------------------------------------------------------------

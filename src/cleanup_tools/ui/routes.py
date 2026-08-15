@@ -763,26 +763,39 @@ def reject_entry(entry_id):
 # ---------------------------------------------------------------------------
 
 
-def _bulk_target_ids(pending: list, group_key: str | None, entry_ids: list[str] | None) -> list[str]:
-    """Resolve the pending-entry ids a bulk action should touch.
+def _bulk_target_ids(
+    candidates: list, group_key: str | None, entry_ids: list[str] | None
+) -> list[str]:
+    """Resolve the ids among ``candidates`` a bulk action should touch.
 
-    ``group_key`` (if given, non-blank) takes priority and is matched
-    exactly against ``entry.group_key`` -- entries with no group_key never
-    match a group_key request, even "ungrouped" (the display fallback used
-    only in templates, never a real stored value). If ``group_key`` isn't
-    given, ``entry_ids`` (if given) is intersected against the pending ids
-    so only ids that are both requested and still pending are touched.
-    Returns an empty list if neither is given.
+    ``group_key`` (if given, non-blank) takes priority. A ``group_key``
+    ending in ``":"`` is a **prefix** match -- every candidate whose
+    ``group_key`` starts with it (e.g. ``"sort:downloads:"`` matches
+    ``"sort:downloads:photos"``) -- so a tree-branch identifier can target
+    every leaf beneath it. Because a real stored ``group_key`` value never
+    itself ends in ``":"``, this is unambiguous and can never accidentally
+    prefix-match a sibling branch (``"sort:downloads:"`` never matches
+    ``"sort:downloads2:photos"`` -- the trailing ``":"`` is the segment
+    boundary). Anything NOT ending in ``":"`` is matched exactly, byte-for-
+    byte identical to the original exact-match-only behavior -- entries
+    with no group_key never match a group_key request, even "ungrouped"
+    (the display fallback used only in templates, never a real stored
+    value). If ``group_key`` isn't given, ``entry_ids`` (if given) is
+    intersected against ``candidates``' ids so only ids that are both
+    requested and present in ``candidates`` are touched. Returns an empty
+    list if neither is given.
     """
     if group_key:
-        return [e.id for e in pending if e.group_key == group_key]
+        if group_key.endswith(":"):
+            return [e.id for e in candidates if e.group_key and e.group_key.startswith(group_key)]
+        return [e.id for e in candidates if e.group_key == group_key]
     if entry_ids:
-        pending_ids = {e.id for e in pending}
-        # Preserve request order, dedup, and drop anything not pending.
+        candidate_ids = {e.id for e in candidates}
+        # Preserve request order, dedup, and drop anything not a candidate.
         seen = set()
         result = []
         for eid in entry_ids:
-            if eid in pending_ids and eid not in seen:
+            if eid in candidate_ids and eid not in seen:
                 seen.add(eid)
                 result.append(eid)
         return result
@@ -862,6 +875,80 @@ def undo_entry(entry_id):
         queue_module.undo(_adapter(), entry_id, _queue_path())
     except ValueError as exc:
         return str(exc), 400
+    except TimeoutError:
+        abort(503, description=QUEUE_BUSY_MESSAGE)
+    return redirect(url_for("ui.queue_view"))
+
+
+@bp.route("/queue/bulk-undo", methods=["POST"])
+def bulk_undo():
+    """Undo every targeted entry back to its previous status.
+
+    Unlike bulk-approve/bulk-reject (which only ever touch *pending*
+    entries -- there's nothing to approve/reject otherwise), bulk-undo's
+    targets are resolved against the WHOLE queue: an approved or rejected
+    entry is exactly what undo is for. ``group_key``/``entry_ids``
+    resolution (including the ":"-prefix tree-branch match) is the same
+    ``_bulk_target_ids`` every other bulk route uses.
+
+    Mirrors ``undo_entry``'s per-id semantics but batched: an id with
+    nothing to revert to (``queue.undo``'s ``ValueError``) is skipped
+    rather than failing the whole batch -- same "act on whichever of these
+    are still actionable" philosophy as id-list scoping in
+    ``_bulk_target_ids``.
+    """
+    group_key, entry_ids = _extract_bulk_request()
+    target_ids = _bulk_target_ids(_load_entries(), group_key, entry_ids)
+
+    updated = []
+    skipped_ids = []
+    try:
+        for entry_id in target_ids:
+            try:
+                updated.append(queue_module.undo(_adapter(), entry_id, _queue_path()))
+            except ValueError:
+                skipped_ids.append(entry_id)
+    except TimeoutError:
+        abort(503, description=QUEUE_BUSY_MESSAGE)
+
+    if request.is_json:
+        return {
+            "updated_ids": [e.id for e in updated],
+            "count": len(updated),
+            "skipped_ids": skipped_ids,
+        }
+    return redirect(url_for("ui.queue_view"))
+
+
+@bp.route("/queue/<entry_id>/edit", methods=["POST"])
+def edit_entry(entry_id):
+    """Change a pending entry's proposed ``dest``/``group_key`` before approval.
+
+    Accepts either an HTML form POST (``dest``, ``group_key`` fields) or a
+    JSON body with the same two keys, mirroring ``_extract_bulk_request``'s
+    dual-input convention. ``group_key`` is optional (omitted/blank clears
+    it, matching ``QueueEntry.group_key``'s ``None``-able type) -- ``dest``
+    is required, since a move/delete proposal with no destination isn't a
+    coherent edit.
+    """
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+        new_dest = data.get("dest")
+        new_group_key = data.get("group_key") or None
+    else:
+        new_dest = request.form.get("dest")
+        new_group_key = request.form.get("group_key") or None
+
+    if not new_dest:
+        return "dest is required", 400
+
+    try:
+        queue_module.edit_entry(_adapter(), entry_id, new_dest, new_group_key, _queue_path())
+    except ValueError as exc:
+        message = str(exc)
+        if "not 'pending'" in message:
+            return message, 400
+        abort(404, description=message)
     except TimeoutError:
         abort(503, description=QUEUE_BUSY_MESSAGE)
     return redirect(url_for("ui.queue_view"))

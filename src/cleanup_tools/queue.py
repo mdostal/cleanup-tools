@@ -244,6 +244,61 @@ def set_status(
     return entry
 
 
+def edit_entry(
+    adapter: OSAdapter,
+    entry_id: str,
+    new_dest: str,
+    new_group_key: str | None,
+    path: Path | None = None,
+) -> QueueEntry:
+    """Change a *pending* entry's proposed ``dest``/``group_key`` before approval.
+
+    Only ever touches a pending entry: editing an already-approved/
+    rejected entry's proposed destination is meaningless (it already has
+    -- or, for a rejected entry, never will have -- a real outcome), and
+    editing after execution would silently disagree with what actually
+    happened on disk. Raises ``ValueError`` (naming the entry id and its
+    actual status) if ``entry.status`` isn't ``"pending"``, mirroring
+    ``set_status``'s guard-rail style for invalid transitions.
+
+    Under the same queue file lock / load-mutate-save cycle as
+    ``set_status``/``undo``: loads the queue, finds the entry (raising
+    ``ValueError`` as in ``set_status`` if it isn't found), appends a
+    ``status_history`` record carrying the old and new ``dest``/
+    ``group_key`` (so the edit is auditable the same way a status
+    transition is -- see ``QueueEntry.status_history``), mutates the
+    entry, saves, and returns it.
+    """
+    if path is None:
+        path = default_queue_path(adapter)
+
+    with with_queue_lock(adapter, path):
+        entries = load_queue(adapter, path)
+        entry = _find_entry(entries, entry_id, path)
+
+        if entry.status != "pending":
+            raise ValueError(
+                f"Cannot edit entry {entry_id!r}: status is {entry.status!r}, not 'pending'"
+            )
+
+        entry.status_history.append(
+            {
+                "status": entry.status,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "edit": {
+                    "dest": {"old": entry.dest, "new": new_dest},
+                    "group_key": {"old": entry.group_key, "new": new_group_key},
+                },
+            }
+        )
+        entry.dest = new_dest
+        entry.group_key = new_group_key
+
+        save_queue(adapter, entries, path)
+
+    return entry
+
+
 def undo(adapter: OSAdapter, entry_id: str, path: Path | None = None) -> QueueEntry:
     """Revert the entry with ``entry_id`` to its previous status.
 
