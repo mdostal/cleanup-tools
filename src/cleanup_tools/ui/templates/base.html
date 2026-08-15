@@ -131,6 +131,25 @@
     --focus-ring: 0 0 0 3px var(--accent-soft);
   }
 
+  /* A real type scale, shared across all three themes (only the
+     font-FAMILY/tracking differs per theme -- the size/weight
+     relationships between "headline," "section title," "body," and
+     "meta" text stay constant). Direct answer to a design-review
+     finding: text throughout the app previously sat at one or two
+     registers regardless of importance, so nothing told the eye what to
+     look at first. Applied to h1/h2/h3 and .meta below; call sites that
+     need a number to read as a literal headline (item counts, status
+     summary) use --text-headline directly, same as .branch-count. */
+  :root {
+    --text-headline: 1.9rem;
+    --text-3xl: 1.85rem;
+    --text-2xl: 1.35rem;
+    --text-xl: 1.05rem;
+    --text-base: 1rem;
+    --text-sm: 0.88rem;
+    --text-xs: 0.76rem;
+  }
+
   * { box-sizing: border-box; }
 
   /* Visually hidden but still announced by screen readers -- e.g. the
@@ -193,7 +212,21 @@
     text-decoration: none;
     color: var(--ink);
   }
-  h1, h2 { font-family: var(--font-display); letter-spacing: var(--tracking-display); margin-top: 0; }
+  h1, h2, h3 { font-family: var(--font-display); letter-spacing: var(--tracking-display); margin-top: 0; }
+  h1 { font-size: var(--text-3xl); font-weight: 800; }
+  h2 { font-size: var(--text-2xl); font-weight: 700; }
+  h3 { font-size: var(--text-xl); font-weight: 700; }
+  /* Global .meta base: every scoped .meta rule elsewhere in this file
+     only overrides color/margin, never size -- so "this is secondary,
+     supporting text" reads consistently the same size everywhere it
+     appears, from the kickoff bar's helper copy to a bucket row's
+     "N MB" suffix. */
+  .meta { font-size: var(--text-sm); }
+  /* Subordinate detail appended to an h1/h2 (e.g. "(42 pending)") --
+     explicitly smaller and lighter than its heading, not just
+     un-bolded at the same size, so it reads as supporting information
+     rather than a second headline competing with the first. */
+  .heading-detail { font-size: var(--text-sm); font-weight: 400; color: var(--ink-soft); }
   hr { border: none; border-top: var(--hr-width) var(--hr-style) var(--line-strong); margin: 1rem 0 1.5rem; }
 
   .theme-switcher {
@@ -244,7 +277,7 @@
   }
   .status-summary-item strong {
     font-family: var(--font-mono);
-    font-size: 1.9rem;
+    font-size: var(--text-headline);
     font-weight: 700;
     color: var(--ink);
     line-height: 1;

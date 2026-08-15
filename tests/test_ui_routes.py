@@ -3025,3 +3025,15 @@ def test_status_icon_macro_renders_distinct_svg_per_status():
     assert "<svg" in approved and "<svg" in rejected and "<svg" in pending
     assert approved != rejected != pending
     assert 'aria-hidden="true"' in approved
+
+
+def test_heading_detail_class_used_instead_of_inline_style_on_page_headings(client):
+    """Regression guard: the "(N pending)"/"(N total)" suffix next to a
+    page h1/h2 goes through the shared .heading-detail class (part of
+    the real type scale), not a one-off inline style repeated per
+    template.
+    """
+    for path in ("/queue", "/history", "/"):
+        html = client.get(path).data.decode()
+        assert "font-weight:normal; color:var(--ink-soft)" not in html
+    assert 'class="heading-detail"' in client.get("/queue").data.decode()
