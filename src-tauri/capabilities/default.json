@@ -1,10 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. Grants permission to execute the bundled cleanup-ui sidecar (by its registered externalBin name, sidecar-scoped, with a fixed argument list) plus Tauri's own default core permissions (window/event/webview management etc), plus three narrowly-scoped macOS commands used only by the icon-picker's Finder-icon swap: reading CFBundleIconFile out of the running .app's Info.plist (read-only), touching the .app bundle path to nudge Finder's icon cache, and an admin-prompted `osascript`/`do shell script` fallback used only when the plain filesystem copy is denied (e.g. the app is installed in /Applications). No filesystem plugin, no HTTP/network plugin, no shell access beyond these four named commands, no updater, no analytics/telemetry.",
+  "description": "Capability for the main window. Grants permission to execute the bundled cleanup-ui sidecar (by its registered externalBin name, sidecar-scoped, with a fixed argument list) plus Tauri's own default core permissions (window/event/webview management etc), plus three narrowly-scoped macOS commands used only by the icon-picker's Finder-icon swap: reading CFBundleIconFile out of the running .app's Info.plist (read-only), touching the .app bundle path to nudge Finder's icon cache, and an admin-prompted `osascript`/`do shell script` fallback used only when the plain filesystem copy is denied (e.g. the app is installed in /Applications). Also grants the updater plugin (check/download/install against the one pinned, signature-verified GitHub-releases endpoint in tauri.conf.json's plugins.updater -- never silent, always behind an explicit in-app 'Update now' click) and the process plugin's restart permission (relaunches the app after an update installs, re-entering the same sidecar-spawn setup() logic as a normal launch). No filesystem plugin, no general HTTP/network plugin, no shell access beyond the four named commands above, no analytics/telemetry.",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "shell:allow-execute",
       "allow": [

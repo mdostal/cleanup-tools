@@ -97,6 +97,20 @@ def test_dashboard_empty_queue_shows_zero_entries(client):
     assert b"Queue is empty" in resp.data
 
 
+def test_update_banner_present_but_hidden_on_every_page(client):
+    # The update banner is global markup (base.html), rendered hidden by
+    # default -- static/update-checker.js is what shows it, and only ever
+    # does so inside the Tauri shell (window.__TAURI__), never in a plain
+    # browser tab. Confirmed present on two different routes to prove it's
+    # genuinely global, not accidentally dashboard-only.
+    for path in ("/", "/queue"):
+        html = client.get(path).data.decode()
+        assert 'id="update-banner"' in html
+        banner = html.split('id="update-banner"')[1].split("</div>")[0]
+        assert "hidden" in banner
+        assert 'src="/static/update-checker.js"' in html
+
+
 def test_dashboard_groups_by_group_key_with_sizes_and_status_counts(adapter, client, tmp_path):
     # Hand-built entries with sizes deliberately NOT tiny/round-to-zero
     # (1 MiB / 2 MiB / 0.5 MiB) so the rendered MB figures are distinctive

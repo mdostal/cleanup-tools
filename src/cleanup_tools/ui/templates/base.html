@@ -397,6 +397,29 @@
   .flash { border: 1px solid var(--line); border-radius: var(--radius-card); padding: 0.75rem 1rem; margin-bottom: 1rem; background: var(--surface); }
   .flash.error { border-color: var(--pending); color: var(--pending); background: var(--pending-soft); }
 
+  .update-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid var(--good);
+    background: var(--good-soft);
+    color: var(--ink);
+    border-radius: var(--radius-card);
+    padding: 0.7rem 1rem;
+    margin: 0 0 1rem;
+    font-family: var(--font-ui);
+  }
+  .update-banner[hidden] { display: none; }
+  .update-banner #update-banner-text { flex: 1; }
+  .update-banner button {
+    background: var(--surface);
+  }
+  .update-banner #update-banner-install {
+    border-color: var(--good);
+    color: var(--good);
+    font-weight: 600;
+  }
+
   /* Source-of-entry indicator: distinguishes an AI-proposed queue entry
      from a manually-staged one (see routes.py's _is_ai_source) without
      implying any functional difference -- approve/reject/undo/bulk/
@@ -575,9 +598,20 @@
   </span>
 </nav>
 <hr>
+<!-- Update-available banner: hidden by default, populated/shown by
+     static/update-checker.js only when the desktop shell's background
+     update check (src-tauri's spawn_update_check_loop) has actually found
+     a newer signed release -- never shown in a plain browser tab (no
+     window.__TAURI__), never shown speculatively. -->
+<div id="update-banner" class="update-banner" hidden role="status" aria-live="polite">
+  <span id="update-banner-text"></span>
+  <button type="button" id="update-banner-install">Update now</button>
+  <button type="button" id="update-banner-dismiss">Dismiss</button>
+</div>
 {% block content %}{% endblock %}
 <script src="{{ url_for('static', filename='plan-trigger.js') }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}"></script>
 <script src="{{ url_for('static', filename='settings.js') }}"></script>
+<script src="{{ url_for('static', filename='update-checker.js') }}"></script>
 </body>
 </html>

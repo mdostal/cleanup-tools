@@ -172,6 +172,58 @@ yourself, on a second Mac).
 > exit on its own; force-quit it (Activity Monitor, or `kill -9 <pid>`) or restart. Removing
 > quarantine *before* first launch (per above) avoids ever triggering this in the first place.
 
+**In-app update checker.** The desktop app checks for a newer signed release on launch and every 6
+hours it stays open — never silently: it only ever shows a dismissible in-app banner
+("Update available: vX.Y.Z — Update now / Dismiss"). Nothing downloads or installs without an
+explicit click. This is the one narrow, deliberate exception to local-first mentioned in
+`.pHive/CONTEXT.md`'s corrected network-policy rule (see that file's Conventions section) —
+visibly-triggered, not ambient.
+
+**Cutting a signed release** (needed for the update checker to have anything to find): the
+private signing key lives in Portunus (`cleanup-tools-updater-signing-key`), never on disk in this
+repo or in shell history.
+
+```sh
+# 1. Bump the version in src-tauri/tauri.conf.json, package.json, and
+#    src-tauri/Cargo.toml (all three -- there's no single source of truth
+#    for it across the JS/Rust split).
+# 2. Build, with the signing key injected only into this one process.
+#    MUST pass --ci to `tauri build` itself (not just `signer generate`) --
+#    without it, the signing step tries to interactively prompt for the
+#    key's password even though the key has none and
+#    TAURI_SIGNING_PRIVATE_KEY_PASSWORD is set to "", and hangs forever
+#    with no TTY attached to answer it (hit this for real cutting v0.1.1;
+#    --ci is what actually suppresses the prompt). Run post-build.sh
+#    yourself afterward since this bypasses the npm run tauri:build
+#    wrapper that normally chains it:
+portunus resolve --exec env \
+  TAURI_SIGNING_PRIVATE_KEY='{{secret:cleanup-tools-updater-signing-key}}' \
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' \
+  CI=true \
+  npx tauri build --ci
+sh packaging/tauri/post-build.sh
+
+# 3. Tag + create the release, uploading the human-facing .dmg AND the
+#    updater-facing .app.tar.gz + .sig (createUpdaterArtifacts in
+#    tauri.conf.json is what makes the latter two exist):
+gh release create vX.Y.Z \
+  "src-tauri/target/release/bundle/dmg/Cleanup Tools_X.Y.Z_aarch64.dmg" \
+  "src-tauri/target/release/bundle/macos/Cleanup Tools.app.tar.gz" \
+  "src-tauri/target/release/bundle/macos/Cleanup Tools.app.tar.gz.sig" \
+  --title "vX.Y.Z" --notes "..."
+
+# 4. Read back the REAL uploaded .app.tar.gz URL (GitHub mangles spaces
+#    in filenames on upload -- don't guess it):
+gh release view vX.Y.Z --json assets
+
+# 5. Generate latest.json from that real URL and this build's own .sig,
+#    then upload it as a release asset too -- this is the file
+#    tauri.conf.json's plugins.updater.endpoints actually polls, via the
+#    stable releases/latest/download/latest.json alias:
+sh packaging/tauri/make-latest-json.sh "<real .app.tar.gz URL from step 4>" "release notes" /tmp/latest.json
+gh release upload vX.Y.Z /tmp/latest.json
+```
+
 **Arch Linux packaging** (`packaging/arch/PKGBUILD`): a local-only, build-from-source PKGBUILD —
 run `makepkg -si` directly from your own clone of this repo to build and install the Tauri desktop
 shell. It is **not published to the public AUR** (`aur.archlinux.org`) — no AUR-maintainer

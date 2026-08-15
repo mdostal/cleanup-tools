@@ -122,6 +122,22 @@ on, and finding files across a cluttered Mac — including recovering a lost cry
   cross-platform `set_icon` — no Start-Menu-shortcut or `.desktop` `Icon=` rewrite, for the same
   "no test hardware" reason the Arch PKGBUILD above is flagged reviewed-never-built. If that ever
   changes, this is the natural next extension point.
+- **Update checker** (`tauri-plugin-updater` + `tauri-plugin-process`, `src-tauri/src/lib.rs`'s
+  `check_for_update`/`get_pending_update`/`download_and_install_update` commands,
+  `static/update-checker.js`) — checks `plugins.updater.endpoints` in `tauri.conf.json` (the
+  stable `releases/latest/download/latest.json` GitHub alias, so this URL never needs to change
+  per release) on launch and every 6 hours, and ONLY ever shows a dismissible in-app banner; a
+  download/install never happens without an explicit "Update now" click. This is the first real
+  use of the corrected network-policy rule above (custom `#[tauri::command]`s wrapping the plugin's
+  Rust API, not the `@tauri-apps/plugin-updater` JS package — this project's frontend has no JS
+  bundler, same reasoning as the icon picker's `apply_icon_choice`). The signing private key lives
+  in Portunus (`cleanup-tools-updater-signing-key`), never on disk in this repo; the public key is
+  the `pubkey` baked into `tauri.conf.json`. Cutting a signed release needs `tauri build --ci`
+  (plain `tauri build` tries to interactively prompt for the signing key's password even when
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""` is set, and hangs forever with no TTY attached — `--ci`
+  is what actually suppresses that prompt; confirmed the hard way during v0.1.1's own release) —
+  see README.md's "Cutting a signed release" section and `packaging/tauri/make-latest-json.sh` for
+  the full sequence.
 
 ## Conventions
 

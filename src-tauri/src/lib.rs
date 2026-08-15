@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -434,14 +434,157 @@ async fn apply_icon_choice(app: AppHandle, choice: String) -> Result<(), String>
     Ok(())
 }
 
+// ─── update checker ─────────────────────────────────────────────────────
+//
+// Checks GitHub Releases (via `plugins.updater.endpoints` in
+// tauri.conf.json, pointed at the stable `releases/latest/download/
+// latest.json` alias so this never needs updating per release) for a
+// newer signed build. Deliberately NOT silent/automatic end-to-end: a
+// background check (on launch, then every `UPDATE_RECHECK_INTERVAL`)
+// only ever *finds* an update and emits an `update-available` event for
+// the UI to show a dismissible banner -- downloading and installing only
+// happens from an explicit "Update now" click
+// (`download_and_install_update`), never on its own.
+//
+// Custom commands wrapping the plugin's Rust API, not the
+// `@tauri-apps/plugin-updater` JS package -- this project's frontend has
+// no JS bundler at all (see `settings.js`/`apply_icon_choice` for the
+// same reasoning), so every Tauri-side capability is exposed as a plain
+// `#[tauri::command]` called via `window.__TAURI__.core.invoke(...)`.
+
+use tauri_plugin_updater::UpdaterExt;
+
+const UPDATE_RECHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const UPDATE_AVAILABLE_EVENT: &str = "update-available";
+
+/// Holds the `Update` handle a successful check found, so a later
+/// `download_and_install_update` call (a separate IPC round trip) can act
+/// on it without re-checking. Mirrors `SidecarState`'s shape/purpose.
+#[derive(Default)]
+struct UpdaterState {
+    pending: Mutex<Option<tauri_plugin_updater::Update>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+    notes: Option<String>,
+    pub_date: Option<String>,
+}
+
+impl From<&tauri_plugin_updater::Update> for UpdateInfo {
+    fn from(update: &tauri_plugin_updater::Update) -> Self {
+        UpdateInfo {
+            version: update.version.clone(),
+            notes: update.body.clone(),
+            pub_date: update.date.map(|d| d.to_string()),
+        }
+    }
+}
+
+/// The actual check, shared by the command below and the background
+/// launch/periodic loop. On a hit: stores the `Update` in `UpdaterState`
+/// (overwriting any earlier one -- only the most recent check's result is
+/// ever actionable) and returns its info; on a miss, clears any stale
+/// pending update from a previous check that's no longer the latest.
+async fn run_update_check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let updater = app
+        .updater()
+        .map_err(|err| format!("updater unavailable: {err}"))?;
+    let found = updater
+        .check()
+        .await
+        .map_err(|err| format!("update check failed: {err}"))?;
+
+    let info = found.as_ref().map(UpdateInfo::from);
+    *app.state::<UpdaterState>().pending.lock().unwrap() = found;
+    Ok(info)
+}
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    run_update_check(&app).await
+}
+
+/// Returns whatever the most recent background/foreground check already
+/// found, without making a new network call -- called once per page load
+/// so a page opened *after* a background check already fired still shows
+/// the banner (the `update-available` event itself only reaches listeners
+/// that were already registered when it fired).
+#[tauri::command]
+fn get_pending_update(app: AppHandle) -> Option<UpdateInfo> {
+    app.state::<UpdaterState>()
+        .pending
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(UpdateInfo::from)
+}
+
+#[tauri::command]
+async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
+    let update = app
+        .state::<UpdaterState>()
+        .pending
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or_else(|| {
+            "no update was found by a prior check -- call check_for_update first".to_string()
+        })?;
+
+    update
+        .download_and_install(|_chunk_len, _total_len| {}, || {})
+        .await
+        .map_err(|err| format!("download/install failed: {err}"))?;
+
+    // Re-enters setup()'s existing sidecar-spawn/port-collision logic on
+    // relaunch exactly like a normal launch -- no special-casing needed
+    // here.
+    app.restart();
+}
+
+/// Background launch-time check plus a repeating re-check every
+/// `UPDATE_RECHECK_INTERVAL` while the app stays open, each run on its
+/// own OS thread so it never blocks `setup()` or the UI -- same pattern
+/// as `spawn_sidecar_in_background`. A short initial delay lets the
+/// sidecar/webview finish loading before the very first check's event
+/// has anywhere to be heard.
+fn spawn_update_check_loop(app: AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        loop {
+            let result = tauri::async_runtime::block_on(run_update_check(&app));
+            match result {
+                Ok(Some(info)) => {
+                    if let Err(err) = app.emit(UPDATE_AVAILABLE_EVENT, info) {
+                        eprintln!("cleanup-tools: failed to emit update-available event: {err}");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => eprintln!("cleanup-tools: update check failed: {err}"),
+            }
+            std::thread::sleep(UPDATE_RECHECK_INTERVAL);
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let sidecar_state = SidecarState::default();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(sidecar_state.clone())
-        .invoke_handler(tauri::generate_handler![apply_icon_choice])
+        .manage(UpdaterState::default())
+        .invoke_handler(tauri::generate_handler![
+            apply_icon_choice,
+            check_for_update,
+            get_pending_update,
+            download_and_install_update
+        ])
         .setup(move |app| {
             // Must return immediately -- see spawn_sidecar_in_background's
             // doc comment. The window is created before/around this
@@ -449,6 +592,12 @@ pub fn run() {
             // starts polling on its own timeline, independent of when (or
             // whether) this background thread finishes.
             spawn_sidecar_in_background(app.handle().clone(), sidecar_state.clone());
+
+            // Launch-time + periodic update check -- see
+            // spawn_update_check_loop's doc comment. Only ever finds and
+            // announces an update; downloading/installing needs an
+            // explicit "Update now" click in the UI.
+            spawn_update_check_loop(app.handle().clone());
 
             // Re-apply a previously saved icon choice so the Dock/taskbar
             // icon matches it from the first frame, not just after the
