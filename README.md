@@ -11,6 +11,10 @@ Scripts + a plan for going through a cluttered Mac — Documents, Desktop, Downl
 screenshots — and getting it **sorted, arranged, and kept clean**. Built from a real survey (see
 `docs/CLEANUP-PLAN.md`). A side benefit of the file-finder: it also **locates a lost crypto wallet**.
 
+**[Landing page](https://mdostal.github.io/cleanup-tools/)** ·
+**[Download the macOS app](https://github.com/mdostal/cleanup-tools/releases/latest)** (unsigned —
+see the Tauri section below for the one-time `xattr` step it needs) · CLI: `pip install -e .`
+
 ## Principles
 - **Sort is reversible; delete is not.** Destructive scripts default to **dry-run**; you pass `--go` to act.
 - **Back up masters before deleting.** Never lose the irreplaceable (SMS/family/tax/patent).
