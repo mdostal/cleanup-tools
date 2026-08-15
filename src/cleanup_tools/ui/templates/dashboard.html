@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_status_icon.html" as icons %}
 {% block title %}Dashboard - Cleanup Approvals{% endblock %}
 {% block content %}
 <h1>Overview</h1>
@@ -62,9 +63,10 @@
     <fieldset class="kickoff-locations">
       <legend>Locations to run against</legend>
       {% for loc in configured_locations %}
-      <label class="kickoff-option">
+      <label class="kickoff-option" title="{{ loc }}">
         <input type="checkbox" class="kickoff-location-checkbox" value="{{ loc }}" checked>
-        {{ loc }}
+        {{ loc | short_path }}
+        <span class="sr-only"> ({{ loc }})</span>
       </label>
       {% endfor %}
     </fieldset>
@@ -109,7 +111,8 @@
 <script id="dashboard-chart-data" type="application/json">
 [
 {%- for g in groups %}
-{"label": {{ g.group_key | tojson }}, "value": {{ g.total_size | tojson }}}{{ "," if not loop.last }}
+{%- set parsed = parse_group_key(g.group_key) %}
+{"label": {{ ((parsed.bucket or parsed.pipeline or "ungrouped") ~ " — " ~ (parsed.location | short_path)) | tojson }}, "value": {{ g.total_size | tojson }}}{{ "," if not loop.last }}
 {%- endfor %}
 ]
 </script>
@@ -128,20 +131,25 @@
 <div class="location-tree">
   {% for loc in location_tree %}
   <details class="location-branch" {{ "open" if loop.first }}>
-    <summary>
-      <span class="location-branch-title">{{ loc.location }}</span>
-      <span class="meta">{{ loc.count }} item{{ "s" if loc.count != 1 else "" }} &middot; {{ "%.1f"|format(loc.total_size / 1048576) }} MB</span>
+    <summary title="{{ loc.location }}">
+      <span class="location-branch-title">{{ loc.location | short_path }}</span>
+      <span class="branch-count">{{ loc.count }}</span>
+      <span class="meta">item{{ "s" if loc.count != 1 else "" }} &middot; {{ "%.1f"|format(loc.total_size / 1048576) }} MB</span>
     </summary>
     <div class="bucket-list">
+      {% if loc.location != "other" %}
+      <p class="full-path-hint">Full path: <code>{{ loc.location }}</code></p>
+      {% endif %}
       {% for b in loc.buckets %}
       <div class="bucket-row">
         <div class="bucket-row-header">
           <span class="bucket-label">{{ b.label }}</span>
-          <span class="meta">{{ b.count }} item{{ "s" if b.count != 1 else "" }} &middot; {{ "%.1f"|format(b.total_size / 1048576) }} MB</span>
+          <span class="branch-count branch-count-sm">{{ b.count }}</span>
+          <span class="meta">item{{ "s" if b.count != 1 else "" }} &middot; {{ "%.1f"|format(b.total_size / 1048576) }} MB</span>
         </div>
         <div class="bucket-row-badges">
           {% for status, count in b.status_counts.items() %}
-          <span class="badge badge-status-{{ status }}">{{ status }}: {{ count }}</span>
+          <span class="badge badge-status-{{ status }}">{{ icons.status_icon(status) }}{{ status }}: {{ count }}</span>
           {% endfor %}
           {% if b.ai_count %}
           <span class="badge badge-ai">AI-proposed: {{ b.ai_count }}</span>
@@ -149,17 +157,26 @@
         </div>
         {% if b.group_key %}
         <div class="bucket-row-actions">
-          <form method="post" action="{{ url_for('ui.bulk_approve') }}" style="display:inline;">
+          <form
+            method="post" action="{{ url_for('ui.bulk_approve') }}" style="display:inline;"
+            data-confirm="Approve all {{ b.count }} pending item{{ "s" if b.count != 1 else "" }} in {{ b.label }}?"
+          >
             <input type="hidden" name="group_key" value="{{ b.group_key }}">
-            <button type="submit" title="Approve every pending entry in {{ b.label }}">Approve all</button>
+            <button type="submit" data-intent="primary" title="Approve every pending entry in {{ b.label }}">Approve all</button>
           </form>
-          <form method="post" action="{{ url_for('ui.bulk_reject') }}" style="display:inline;">
+          <form
+            method="post" action="{{ url_for('ui.bulk_reject') }}" style="display:inline;"
+            data-confirm="Reject all {{ b.count }} pending item{{ "s" if b.count != 1 else "" }} in {{ b.label }}?"
+          >
             <input type="hidden" name="group_key" value="{{ b.group_key }}">
-            <button type="submit" title="Reject every pending entry in {{ b.label }}">Reject all</button>
+            <button type="submit" data-intent="secondary" title="Reject every pending entry in {{ b.label }}">Reject all</button>
           </form>
-          <form method="post" action="{{ url_for('ui.bulk_undo') }}" style="display:inline;">
+          <form
+            method="post" action="{{ url_for('ui.bulk_undo') }}" style="display:inline;"
+            data-confirm="Revert every entry in {{ b.label }} to its previous status?"
+          >
             <input type="hidden" name="group_key" value="{{ b.group_key }}">
-            <button type="submit" title="Revert every entry in {{ b.label }} to its previous status">Undo all</button>
+            <button type="submit" data-intent="ghost" title="Revert every entry in {{ b.label }} to its previous status">Undo all</button>
           </form>
         </div>
         {% endif %}

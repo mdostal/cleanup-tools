@@ -204,6 +204,38 @@ def _location_for_src(src: str, config: config_module.Config, adapter) -> str:
     return "other"
 
 
+def short_path(path: str) -> str:
+    """Shorten an absolute path for display: ``~``-relativize against the
+    real home directory, then cap to at most the last two path segments,
+    marked with a leading ``"…/"`` when something was actually cut.
+
+    A pure display transform -- it never invents a name and never hides
+    the real path from the user permanently; every call site wraps this
+    in a ``<details>/<summary>`` disclosure (keyboard/focus-operable, not
+    mouse-hover-only -- see base.html's ``.path-disclosure``) so the full,
+    real path is always one keystroke or click away. This directly
+    answers the loudest, most-repeated finding from this project's UI
+    design review: raw 60-100+ character paths repeated verbatim 3-4
+    times per screen were the single biggest complaint across every
+    persona that reviewed it.
+    """
+    p = Path(path)
+    parts = p.parts
+    home_parts = Path.home().parts
+
+    if parts[: len(home_parts)] == home_parts:
+        rel_parts = parts[len(home_parts) :]
+        if not rel_parts:
+            return "~"
+        if len(rel_parts) <= 2:
+            return "~/" + "/".join(rel_parts)
+        return "…/" + "/".join(rel_parts[-2:])
+
+    if len(parts) <= 3:
+        return str(p)
+    return "…/" + "/".join(parts[-2:])
+
+
 def parse_group_key(group_key: str | None) -> dict:
     """Defensively split a ``group_key`` into ``{"pipeline", "location", "bucket"}``.
 
@@ -870,14 +902,24 @@ def queue_view():
         entries, request.args.get("page"), request.args.get("per_page")
     )
     # Distinct, truthy group_keys among ALL pending entries (not just the
-    # current page) -- feeds the "bulk-approve/reject this whole group"
-    # quick-action bar, which must be able to target entries regardless of
-    # which page they currently sit on. Entries with no group_key (the
-    # "ungrouped" display fallback) are deliberately excluded here: there is
-    # no real group_key value that would round-trip back to matching them
-    # via the exact-match bulk routes, so offering a fake "ungrouped" button
-    # would silently do nothing when clicked.
-    group_keys = sorted({e.group_key for e in entries if e.group_key})
+    # current page), each with its real pending count -- feeds the
+    # "bulk-approve/reject this whole group" quick-action bar, which must
+    # be able to target entries regardless of which page they currently
+    # sit on. The count is what lets that bar's confirm-before-firing
+    # dialog (see static/confirm-actions.js) name a real number instead of
+    # a vague "are you sure?" -- a direct requirement from the UI design
+    # review. Entries with no group_key (the "ungrouped" display fallback)
+    # are deliberately excluded here: there is no real group_key value
+    # that would round-trip back to matching them via the exact-match bulk
+    # routes, so offering a fake "ungrouped" button would silently do
+    # nothing when clicked.
+    group_counts: dict[str, int] = {}
+    for e in entries:
+        if e.group_key:
+            group_counts[e.group_key] = group_counts.get(e.group_key, 0) + 1
+    group_keys = [
+        {"group_key": gk, "count": group_counts[gk]} for gk in sorted(group_counts)
+    ]
     return render_template(
         "queue.html",
         entries=page_entries,

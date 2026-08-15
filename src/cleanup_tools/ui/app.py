@@ -21,6 +21,7 @@ from flask import Flask
 
 from ..adapters.base import OSAdapter
 from .routes import bp as ui_blueprint
+from .routes import parse_group_key, short_path
 
 DEFAULT_PORT = 5151
 LOCALHOST = "127.0.0.1"
@@ -39,6 +40,12 @@ def create_app(adapter: OSAdapter, queue_path: Path | None = None) -> Flask:
     app.config["CLEANUP_ADAPTER"] = adapter
     app.config["CLEANUP_QUEUE_PATH"] = queue_path
     app.register_blueprint(ui_blueprint)
+    # short_path: every template that renders a raw filesystem path as a
+    # PRIMARY label (never as the disclosed full-path fallback) goes
+    # through this filter -- see routes.short_path's docstring for why.
+    app.jinja_env.filters["short_path"] = short_path
+    app.jinja_env.filters["basename"] = lambda p: Path(p).name
+    app.jinja_env.globals["parse_group_key"] = parse_group_key
     return app
 
 

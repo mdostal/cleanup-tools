@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_status_icon.html" as icons %}
 {% block title %}History - Cleanup Approvals{% endblock %}
 {% block content %}
 <h1>History <span style="font-weight:normal; color:var(--ink-soft);">({{ total_rows }} total)</span></h1>
@@ -8,31 +9,39 @@
 </p>
 
 {% for row in rows %}
+{% set parsed = parse_group_key(row.group_key) %}
 <div class="history-row" data-entry-id="{{ row.entry_id }}">
   <div class="history-row-main">
-    <span class="badge badge-status-{{ row.status }}">{{ row.status }}</span>
+    <span class="badge badge-status-{{ row.status }}">{{ icons.status_icon(row.status) }}{{ row.status }}</span>
     <span class="history-row-what">
       {% if row.edit %}
-      edited &middot; dest: <code>{{ row.edit.dest.old }}</code> &rarr; <code>{{ row.edit.dest.new }}</code>
+      edited &middot; dest:
+      <details class="path-disclosure"><summary>{{ (row.edit.dest.old | short_path) }} &rarr; {{ (row.edit.dest.new | short_path) }}</summary><span class="full-path">{{ row.edit.dest.old }} &rarr; {{ row.edit.dest.new }}</span></details>
       {% if row.edit.group_key.old != row.edit.group_key.new %}
       &middot; group: <code>{{ row.edit.group_key.old or "ungrouped" }}</code> &rarr; <code>{{ row.edit.group_key.new or "ungrouped" }}</code>
       {% endif %}
       {% else %}
       <strong>{{ row.action }}</strong>
-      {% if row.group_key %}&middot; {{ row.group_key }}{% endif %}
+      {% if row.group_key %}&middot; <span title="{{ row.group_key }}">{{ parsed.bucket or parsed.pipeline }} &middot; {{ parsed.location | short_path }}</span>{% endif %}
       {% endif %}
     </span>
     <span class="history-row-timestamp meta">{{ row.timestamp }}</span>
   </div>
-  <p class="entry-path">src: {{ row.src }}</p>
+  <p class="entry-path">
+    <strong>{{ row.src | basename }}</strong> &middot;
+    <details class="path-disclosure"><summary>{{ (row.src | short_path) }}</summary><span class="full-path">{{ row.src }}</span></details>
+  </p>
   {% if row.dest %}
-  <p class="entry-path">dest: {{ row.dest }}</p>
+  <p class="entry-path">
+    to
+    <details class="path-disclosure"><summary>{{ (row.dest | short_path) }}</summary><span class="full-path">{{ row.dest }}</span></details>
+  </p>
   {% endif %}
 
   {% if row.is_latest %}
     {% if row.can_undo %}
     <form method="post" action="{{ url_for('ui.undo_entry', entry_id=row.entry_id) }}" data-action="undo">
-      <button type="submit">Undo</button>
+      <button type="submit" data-intent="ghost">Undo</button>
     </form>
     {% elif row.executed_at %}
     <!-- The single most safety-critical property of this whole view: an

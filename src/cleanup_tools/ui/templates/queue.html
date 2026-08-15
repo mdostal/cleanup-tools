@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_status_icon.html" as icons %}
 {% block title %}Review Queue - Cleanup Approvals{% endblock %}
 {% block content %}
 <h1>Review Queue <span style="font-weight:normal; color:var(--ink-soft);">({{ total_pending }} pending)</span></h1>
@@ -16,27 +17,39 @@
      card also has its own approve/reject/undo forms, and HTML forms can't
      nest, so associating far-apart checkboxes to one shared form by id
      (rather than by DOM position) is what lets the bulk-select checkboxes
-     live inside each entry card without breaking the per-entry forms. -->
+     live inside each entry card without breaking the per-entry forms.
+     The two buttons below carry data-bulk-selected-action rather than a
+     fixed data-confirm -- the target count is only known client-side,
+     after the user has actually checked some boxes, so
+     static/confirm-actions.js builds that confirm message dynamically
+     from #bulk-selected-count at submit time instead. -->
 <form id="bulk-form" method="post"></form>
 
 <div class="bulk-action-bar">
-  <button type="submit" form="bulk-form" formaction="{{ url_for('ui.bulk_approve') }}">Approve selected</button>
-  <button type="submit" form="bulk-form" formaction="{{ url_for('ui.bulk_reject') }}">Reject selected</button>
+  <button type="submit" form="bulk-form" formaction="{{ url_for('ui.bulk_approve') }}" data-intent="primary" data-bulk-selected-action="Approve">Approve selected</button>
+  <button type="submit" form="bulk-form" formaction="{{ url_for('ui.bulk_reject') }}" data-intent="secondary" data-bulk-selected-action="Reject">Reject selected</button>
   <span id="bulk-selected-count" class="meta">0 selected</span>
 
   {% if group_keys %}
   <span class="bulk-group-actions">
     By group:
-    {% for gk in group_keys %}
+    {% for g in group_keys %}
+    {% set parsed = parse_group_key(g.group_key) %}
     <span class="bulk-group-item">
-      <span class="badge">{{ gk }}</span>
-      <form method="post" action="{{ url_for('ui.bulk_approve') }}" style="display:inline;">
-        <input type="hidden" name="group_key" value="{{ gk }}">
-        <button type="submit" title="Approve every pending entry in {{ gk }}">Approve group</button>
+      <span class="badge" title="{{ g.group_key }}">{{ parsed.bucket or parsed.pipeline or g.group_key }} &middot; {{ parsed.location | short_path }} &middot; {{ g.count }}</span>
+      <form
+        method="post" action="{{ url_for('ui.bulk_approve') }}" style="display:inline;"
+        data-confirm="Approve all {{ g.count }} pending item{{ "s" if g.count != 1 else "" }} in {{ parsed.bucket or parsed.pipeline or g.group_key }} ({{ parsed.location | short_path }})?"
+      >
+        <input type="hidden" name="group_key" value="{{ g.group_key }}">
+        <button type="submit" data-intent="primary" title="Approve every pending entry in {{ g.group_key }}">Approve group</button>
       </form>
-      <form method="post" action="{{ url_for('ui.bulk_reject') }}" style="display:inline;">
-        <input type="hidden" name="group_key" value="{{ gk }}">
-        <button type="submit" title="Reject every pending entry in {{ gk }}">Reject group</button>
+      <form
+        method="post" action="{{ url_for('ui.bulk_reject') }}" style="display:inline;"
+        data-confirm="Reject all {{ g.count }} pending item{{ "s" if g.count != 1 else "" }} in {{ parsed.bucket or parsed.pipeline or g.group_key }} ({{ parsed.location | short_path }})?"
+      >
+        <input type="hidden" name="group_key" value="{{ g.group_key }}">
+        <button type="submit" data-intent="secondary" title="Reject every pending entry in {{ g.group_key }}">Reject group</button>
       </form>
     </span>
     {% endfor %}
@@ -45,6 +58,7 @@
 </div>
 
 {% for entry in entries %}
+{% set parsed = parse_group_key(entry.group_key) %}
 <div class="entry-card" data-entry-id="{{ entry.id }}" tabindex="-1">
   <!-- Bulk-select checkbox: associated with #bulk-form by id (see above)
        rather than DOM nesting, and submitted as a repeated `entry_ids`
@@ -75,7 +89,12 @@
            badge below is kept, since unlike status it genuinely varies
            per card. -->
       <strong>{{ entry.action }}</strong>
-      &middot; {{ entry.group_key or "ungrouped" }}
+      &middot;
+      {% if entry.group_key %}
+      <span title="{{ entry.group_key }}">{{ parsed.bucket or parsed.pipeline }} &middot; {{ parsed.location | short_path }}</span>
+      {% else %}
+      ungrouped
+      {% endif %}
       &middot;
       {% if is_ai_source(entry.source) %}
       <span class="badge badge-ai" title="Proposed by {{ entry.source }}">AI-proposed</span>
@@ -83,20 +102,26 @@
       <span class="badge badge-manual">Manual</span>
       {% endif %}
     </p>
-    <p class="entry-path">src: {{ entry.src }}</p>
+    <p class="entry-path">
+      <strong>{{ entry.src | basename }}</strong> will move from
+      <details class="path-disclosure"><summary>{{ (entry.src | short_path) }}</summary><span class="full-path">{{ entry.src }}</span></details>
+    </p>
     {% if entry.dest %}
-    <p class="entry-path">dest: {{ entry.dest }}</p>
+    <p class="entry-path">
+      to
+      <details class="path-disclosure"><summary>{{ (entry.dest | short_path) }}</summary><span class="full-path">{{ entry.dest }}</span></details>
+    </p>
     {% endif %}
 
     <div class="entry-actions">
       <form method="post" action="{{ url_for('ui.approve_entry', entry_id=entry.id) }}" data-action="approve">
-        <button type="submit">Approve</button>
+        <button type="submit" data-intent="primary">Approve</button>
       </form>
       <form method="post" action="{{ url_for('ui.reject_entry', entry_id=entry.id) }}" data-action="reject">
-        <button type="submit">Reject</button>
+        <button type="submit" data-intent="secondary">Reject</button>
       </form>
       <form method="post" action="{{ url_for('ui.undo_entry', entry_id=entry.id) }}" data-action="undo">
-        <button type="submit">Undo</button>
+        <button type="submit" data-intent="ghost">Undo</button>
       </form>
     </div>
   </div>

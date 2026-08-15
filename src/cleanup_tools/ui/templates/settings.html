@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_status_icon.html" as icons %}
 {% block title %}Settings - Cleanup Approvals{% endblock %}
 {% block content %}
 <h1>Settings</h1>
@@ -80,8 +81,8 @@
                 <button type="submit" formaction="{{ url_for('ui.move_bucket_rule', index=loop.index0) }}" name="direction" value="down" {% if loop.last %}disabled{% endif %}>&darr;</button>
               </td>
               <td>
-                <button type="submit">Save</button>
-                <button type="submit" formaction="{{ url_for('ui.remove_bucket_rule', index=loop.index0) }}">Remove</button>
+                <button type="submit" data-intent="primary">Save</button>
+                <button type="submit" formaction="{{ url_for('ui.remove_bucket_rule', index=loop.index0) }}" data-intent="secondary">Remove</button>
               </td>
             </form>
           </tr>
@@ -96,7 +97,7 @@
         <input type="text" name="extensions" placeholder="Extensions (e.g. log, txt)" required>
         <input type="text" name="bucket" placeholder="Bucket name" required>
         <input type="text" name="filename_pattern" placeholder="Filename pattern (optional)">
-        <button type="submit">Add rule</button>
+        <button type="submit" data-intent="primary">Add rule</button>
       </form>
 
       <h3>Defaults <span class="meta">(fixed, always applied last)</span></h3>
@@ -127,10 +128,10 @@
       <ul class="settings-list">
         {% for root in search_roots %}
         <li>
-          <code>{{ root }}</code>
+          <details class="path-disclosure"><summary>{{ root | short_path }}</summary><span class="full-path">{{ root }}</span></details>
           <form method="post" action="{{ url_for('ui.remove_search_root') }}" style="display:inline;">
             <input type="hidden" name="path" value="{{ root }}">
-            <button type="submit">Remove</button>
+            <button type="submit" data-intent="secondary">Remove</button>
           </form>
         </li>
         {% endfor %}
@@ -140,7 +141,7 @@
       {% endif %}
       <form method="post" action="{{ url_for('ui.add_search_root') }}" class="settings-add-form">
         <input type="text" name="path" placeholder="/absolute/path/to/a/location" required>
-        <button type="submit">Add location</button>
+        <button type="submit" data-intent="primary">Add location</button>
       </form>
     </section>
 
@@ -154,26 +155,26 @@
       <ul class="settings-list">
         {% for mp in master_paths %}
         <li>
-          <code>{{ mp.path }}</code>
+          <details class="path-disclosure"><summary>{{ mp.path | short_path }}</summary><span class="full-path">{{ mp.path }}</span></details>
           <span class="badge {% if mp.backed_up %}badge-status-approved{% else %}badge-status-pending{% endif %}">
-            {{ "Backed up" if mp.backed_up else "NOT backed up -- delete-refusal active" }}
+            {% if mp.backed_up %}{{ icons.status_icon("approved") }}Backed up{% else %}{{ icons.status_icon("pending") }}NOT backed up -- delete-refusal active{% endif %}
           </span>
           <form
             method="post"
             action="{{ url_for('ui.toggle_master_path_backed_up') }}"
             style="display:inline;"
             {% if mp.backed_up %}
-            onsubmit="return confirm('Mark {{ mp.path }} as NOT backed up? This turns reclaim\'s delete-refusal back ON for this path.');"
+            data-confirm="Mark {{ mp.path }} as NOT backed up? This turns reclaim's delete-refusal back ON for this path."
             {% else %}
-            onsubmit="return confirm('Mark {{ mp.path }} as backed up? This REMOVES reclaim\'s delete-refusal for this path -- reclaim will be allowed to delete things under it.');"
+            data-confirm="Mark {{ mp.path }} as backed up? This REMOVES reclaim's delete-refusal for this path -- reclaim will be allowed to delete things under it."
             {% endif %}
           >
             <input type="hidden" name="path" value="{{ mp.path }}">
-            <button type="submit">{{ "Mark NOT backed up" if mp.backed_up else "Mark backed up" }}</button>
+            <button type="submit" data-intent="secondary">{{ "Mark NOT backed up" if mp.backed_up else "Mark backed up" }}</button>
           </form>
           <form method="post" action="{{ url_for('ui.remove_master_path') }}" style="display:inline;">
             <input type="hidden" name="path" value="{{ mp.path }}">
-            <button type="submit">Remove</button>
+            <button type="submit" data-intent="secondary">Remove</button>
           </form>
         </li>
         {% endfor %}
@@ -184,7 +185,7 @@
       <form method="post" action="{{ url_for('ui.add_master_path') }}" class="settings-add-form">
         <input type="text" name="path" placeholder="/absolute/path/to/protect" required>
         <label class="kickoff-option"><input type="checkbox" name="backed_up"> Already backed up</label>
-        <button type="submit">Add master path</button>
+        <button type="submit" data-intent="primary">Add master path</button>
       </form>
     </section>
 
@@ -192,12 +193,12 @@
       <h2>AI provider</h2>
       {% if ai_status.configured %}
       <p class="meta">
-        <span class="badge badge-status-approved">Configured</span>
+        <span class="badge badge-status-approved">{{ icons.status_icon("approved") }}Configured</span>
         via {{ ai_status.source }}. The key itself is never shown here.
       </p>
       {% else %}
       <p class="meta">
-        <span class="badge badge-status-pending">Not configured</span>
+        <span class="badge badge-status-pending">{{ icons.status_icon("pending") }}Not configured</span>
         Set the <code>ANTHROPIC_API_KEY</code> environment variable, or create
         <code>~/.config/cleanup-tools/credentials</code> (mode 0600) containing the key, to enable
         "Propose with AI".

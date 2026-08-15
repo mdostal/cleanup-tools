@@ -32,6 +32,7 @@ from cleanup_tools.ui.routes import (
     _is_protected_path,
     _location_for_src,
     parse_group_key,
+    short_path,
 )
 
 
@@ -156,13 +157,18 @@ def test_dashboard_groups_by_group_key_with_sizes_and_status_counts(adapter, cli
     html = resp.data.decode()
 
     # Group "sort:photos": 2 items, 1 MiB + 2 MiB = 3 MiB exactly -> "3.0 MB".
+    # The item count is promoted to its own headline-number element,
+    # separate from the "item(s) · N MB" meta text next to it (see
+    # dashboard.html's .branch-count) -- so these check the count and the
+    # unit text independently rather than as one contiguous "2 items"
+    # substring.
     assert "sort:photos" in html
-    assert "2 items" in html
+    assert ">2<" in html
     assert "3.0 MB" in html
 
     # Group "reclaim:os_junk": 1 item, 512 KiB exactly -> "0.5 MB".
     assert "reclaim:os_junk" in html
-    assert "1 item" in html
+    assert ">1<" in html
     assert "0.5 MB" in html
 
     # Per-status breakdown for the sort:photos group specifically: one
@@ -407,6 +413,48 @@ def test_plan_sort_missing_downloads_dir_does_not_crash(adapter, client, home):
     job_id = resp.get_json()["job_id"]
     payload = _poll_job_until_terminal(client, job_id)
     assert payload["status"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# 1a2. short_path: the display-shortening transform that came directly out
+#      of the UI design review (every persona's #1 or #2 complaint was raw,
+#      60-100+ character paths repeated verbatim across the page).
+# ---------------------------------------------------------------------------
+
+
+def test_short_path_not_under_home_short_path_returned_unchanged():
+    # A synthetic short path -- never under the real Path.home() in any
+    # sane test environment, and short enough (<=3 parts) to exercise the
+    # "leave it alone" branch rather than the ellipsis-capping one.
+    assert short_path("/mnt/data") == "/mnt/data"
+
+
+def test_short_path_not_under_home_long_path_capped_to_last_two_segments(tmp_path):
+    long_path = tmp_path / "a" / "b" / "c" / "d"
+    result = short_path(str(long_path))
+    assert result == "…/c/d"
+
+
+def test_short_path_home_itself_returns_tilde(monkeypatch, tmp_path):
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    assert short_path(str(fake_home)) == "~"
+
+
+def test_short_path_one_or_two_segments_under_home_gets_tilde_prefix(monkeypatch, tmp_path):
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    assert short_path(str(fake_home / "Downloads")) == "~/Downloads"
+    assert short_path(str(fake_home / "Downloads" / "sub")) == "~/Downloads/sub"
+
+
+def test_short_path_more_than_two_segments_under_home_capped_with_ellipsis(monkeypatch, tmp_path):
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    deep = fake_home / "Documents" / "work" / "archive" / "2019"
+    assert short_path(str(deep)) == "…/archive/2019"
 
 
 # ---------------------------------------------------------------------------
@@ -2802,3 +2850,178 @@ def test_history_nav_link_present_and_marked_current(client):
 
     dashboard_link = _nav_link_block(html, "Dashboard")
     assert "aria-current" not in dashboard_link
+
+
+# ---------------------------------------------------------------------------
+# 14. UI design-review baseline fixes: short paths, action buttons visually
+#     distinct from status badges, status is icon+text everywhere, and
+#     every bulk action confirms a real count/target before it fires. See
+#     the published design-review artifact for the full rationale -- these
+#     five fixes are shared across every screen, not a per-page style choice.
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_kickoff_location_picker_shows_short_path_with_full_path_available(
+    adapter, client, home
+):
+    deep = home / "Documents" / "work" / "archive" / "2019"
+    deep.mkdir(parents=True)
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(deep)]),
+    )
+
+    html = client.get("/").data.decode()
+    assert "…/archive/2019" in html
+    # Full path never disappears entirely -- reachable via title tooltip
+    # and a screen-reader-only span, not mouse-hover-only.
+    assert str(deep) in html
+
+
+def test_dashboard_location_tree_branch_uses_short_path_with_disclosure(adapter, client, tmp_path):
+    entry = _entry_with_size(tmp_path, "a.jpg", 1024, f"sort:{tmp_path}:photos")
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/").data.decode()
+    # The <details>/<summary> disclosure pattern -- keyboard/focus
+    # operable, not mouse-hover-only (a specific, repeated design-review
+    # finding across multiple personas).
+    assert 'class="location-branch"' in html
+    assert "Full path:" in html
+    assert f"<code>{tmp_path}</code>" in html
+
+
+def test_settings_search_roots_and_master_paths_use_short_path_disclosure(adapter, client, tmp_path):
+    root = tmp_path / "a" / "b" / "c" / "d"
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root)]),
+    )
+    client.post("/settings/master-paths/add", data={"path": str(root)})
+
+    html = client.get("/settings").data.decode()
+    assert html.count("…/c/d") >= 2  # once in search-roots, once in master-paths
+    assert html.count(str(root)) >= 2
+
+
+def test_history_view_entry_paths_show_basename_prominently_with_short_path_disclosure(
+    adapter, client, tmp_path
+):
+    entry = _make_entry(tmp_path, "report.pdf", group_key="sort:misc", status="pending")
+    entry.status_history = [{"status": "pending", "timestamp": "2026-01-01T00:00:00+00:00"}]
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/history").data.decode()
+    assert "<strong>report.pdf</strong>" in html
+
+
+def test_approve_reject_undo_buttons_carry_distinct_data_intent(adapter, client, tmp_path):
+    """The single finding two independent personas (safety-focused and
+    accessibility-focused) hit from opposite directions: action buttons
+    must never be visually indistinguishable from each other or from a
+    status badge. Pinned down structurally via data-intent, not just
+    visually -- primary/secondary/ghost are three genuinely different
+    risk levels, not a re-skin of the same button three times.
+    """
+    entry = _make_entry(tmp_path, "a.txt", group_key="sort:misc", status="pending")
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/queue").data.decode()
+    card = html.split(f'data-entry-id="{entry.id}"')[1].split("</div>\n</div>")[0]
+    assert 'data-intent="primary"' in card
+    assert 'data-intent="secondary"' in card
+    assert 'data-intent="ghost"' in card
+
+
+def test_dashboard_bucket_row_actions_carry_distinct_data_intent(adapter, client, tmp_path):
+    entry = _entry_with_size(tmp_path, "a.jpg", 1024, f"sort:{tmp_path}:photos")
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/").data.decode()
+    assert 'data-intent="primary"' in html  # Approve all
+    assert 'data-intent="secondary"' in html  # Reject all
+    assert 'data-intent="ghost"' in html  # Undo all
+
+
+def test_status_badges_render_an_icon_alongside_the_text_everywhere(adapter, client, tmp_path):
+    """Never color-alone -- the accessibility-review finding. Checked
+    across every surface that renders a status: the dashboard tree,
+    history, and settings (master-paths backed_up, AI provider).
+    """
+    entry = _entry_with_size(tmp_path, "a.jpg", 1024, f"sort:{tmp_path}:photos", status="approved")
+    entry.status_history = [{"status": "approved", "timestamp": "2026-01-01T00:00:00+00:00"}]
+    _seed_queue(adapter, [entry])
+
+    dashboard_html = client.get("/").data.decode()
+    assert 'class="status-icon"' in dashboard_html
+
+    history_html = client.get("/history").data.decode()
+    assert 'class="status-icon"' in history_html
+
+    settings_html = client.get("/settings").data.decode()
+    assert 'class="status-icon"' in settings_html  # AI-provider "Not configured" badge
+
+
+def test_dashboard_bucket_row_approve_all_has_confirm_with_real_count_and_label(
+    adapter, client, tmp_path
+):
+    entries = [
+        _entry_with_size(tmp_path, f"f{i}.jpg", 1024, f"sort:{tmp_path}:photos") for i in range(3)
+    ]
+    _seed_queue(adapter, entries)
+
+    html = client.get("/").data.decode()
+    assert 'data-confirm="Approve all 3 pending items in photos?"' in html
+    assert 'data-confirm="Reject all 3 pending items in photos?"' in html
+
+
+def test_queue_bulk_group_button_has_confirm_with_real_count_and_short_location(
+    adapter, client, tmp_path
+):
+    entries = [
+        _make_entry(tmp_path, f"f{i}.jpg", group_key=f"sort:{tmp_path}:photos") for i in range(2)
+    ]
+    _seed_queue(adapter, entries)
+
+    html = client.get("/queue").data.decode()
+    assert "Approve all 2 pending items in photos" in html
+
+
+def test_master_path_toggle_uses_data_confirm_not_inline_onsubmit(adapter, client, tmp_path):
+    """Regression guard: the old onsubmit="return confirm('...' + path)"
+    pattern breaks (or is a minor injection surface) the moment a
+    user-entered path contains a single quote, since it's spliced
+    directly into a JS string literal in markup. data-confirm sidesteps
+    this entirely -- confirm-actions.js reads it as plain attribute text,
+    never as JS source.
+    """
+    tricky_path = str(tmp_path / "Bob's Files")
+    client.post("/settings/master-paths/add", data={"path": tricky_path})
+
+    html = client.get("/settings").data.decode()
+    assert "onsubmit=" not in html
+    assert "data-confirm=" in html
+    assert "REMOVES reclaim" in html
+
+
+def test_confirm_actions_js_is_served(client):
+    resp = client.get("/static/confirm-actions.js")
+    assert resp.status_code == 200
+    assert b"data-bulk-selected-action" in resp.data
+
+
+def test_status_icon_macro_renders_distinct_svg_per_status():
+    from flask import Flask
+
+    app = Flask(__name__, template_folder=str(Path(__file__).parent.parent / "src" / "cleanup_tools" / "ui" / "templates"))
+    with app.app_context():
+        template = app.jinja_env.from_string(
+            '{% import "_status_icon.html" as icons %}{{ icons.status_icon(status) }}'
+        )
+        approved = template.render(status="approved")
+        rejected = template.render(status="rejected")
+        pending = template.render(status="pending")
+
+    assert "<svg" in approved and "<svg" in rejected and "<svg" in pending
+    assert approved != rejected != pending
+    assert 'aria-hidden="true"' in approved

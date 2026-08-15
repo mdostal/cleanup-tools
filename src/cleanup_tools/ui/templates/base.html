@@ -133,6 +133,19 @@
 
   * { box-sizing: border-box; }
 
+  /* Visually hidden but still announced by screen readers -- e.g. the
+     full path alongside a short_path()-shortened label where there's no
+     room (or no sensible place) for a visible disclosure control. */
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   body {
     font-family: var(--font-body);
     background: var(--bg);
@@ -322,10 +335,29 @@
   }
   .location-branch-title {
     font-family: var(--font-mono);
-    font-size: 0.95rem;
+    font-size: 1.05rem;
+    font-weight: 700;
     color: var(--ink);
-    word-break: break-all;
   }
+  /* Item counts promoted to headline numbers -- direct answer to the
+     design-review finding that every fact on the dashboard read at the
+     same visual weight regardless of importance. A count is the thing a
+     user scans for first when triaging a branch/bucket, so it's now the
+     biggest thing in the row, not folded into the same .meta text as
+     "MB" and punctuation. */
+  .branch-count {
+    font-family: var(--font-mono);
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: var(--accent);
+  }
+  .branch-count-sm { font-size: 1.05rem; }
+  .full-path-hint {
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+    margin: 0 0 0.6rem;
+  }
+  .full-path-hint code { font-family: var(--font-mono); word-break: break-all; }
   .bucket-list {
     display: flex;
     flex-direction: column;
@@ -559,6 +591,67 @@
     font-family: var(--font-ui);
   }
   button:hover { border-color: var(--accent); color: var(--accent); }
+  button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+  /* Action-intent buttons (Approve/Reject/Undo, at any scale -- a single
+     entry or a whole bucket/group). Direct answer to this project's UI
+     design review: two independent personas (a safety-focused archivist
+     and an accessibility reviewer) separately flagged the SAME bug --
+     every action button rendered as an identical thin outline pill,
+     visually indistinguishable from a plain status badge or a neutral
+     utility button. Three distinct risk levels now get three distinct,
+     unmistakable treatments, consistent everywhere this attribute is
+     used (entry cards, bucket-row actions, bulk-action bar, history
+     rows) -- never per-template one-off styling. */
+  button[data-intent="primary"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--surface);
+    font-weight: 700;
+  }
+  button[data-intent="primary"]:hover { background: var(--accent); color: var(--surface); filter: brightness(1.08); }
+  button[data-intent="secondary"] {
+    background: transparent;
+    border: 1.5px solid var(--line-strong);
+    color: var(--ink);
+    font-weight: 600;
+  }
+  button[data-intent="secondary"]:hover { border-color: var(--pending); color: var(--pending); }
+  button[data-intent="ghost"] {
+    background: transparent;
+    border: 1.5px dashed var(--line-strong);
+    color: var(--ink-soft);
+  }
+  button[data-intent="ghost"]:hover { border-color: var(--ink-soft); color: var(--ink); }
+
+  /* Status: icon + text, always -- never color alone. Direct answer to
+     the accessibility review finding that a bare colored pill (or worse,
+     a colored dot/stripe with no text, as in the old chart legend) gives
+     a screen reader or a color-blind viewer nothing to go on. The SVG
+     icon is decorative (aria-hidden) because the adjacent text already
+     names the status -- the icon is reinforcement, not the only signal. */
+  .status-icon { display: inline-block; vertical-align: -0.15em; margin-right: 0.3rem; }
+
+  /* Path disclosure: short_path()'s companion UI -- native <details>/
+     <summary> so the full path is reachable by keyboard/focus, not only
+     mouse hover (a specific, repeated ask across the design review). */
+  .path-disclosure { display: inline-block; }
+  .path-disclosure summary {
+    cursor: pointer;
+    list-style: none;
+    font-family: var(--font-mono);
+  }
+  .path-disclosure summary::-webkit-details-marker { display: none; }
+  .path-disclosure summary:hover, .path-disclosure summary:focus-visible { color: var(--accent); }
+  .path-disclosure .full-path {
+    display: block;
+    margin-top: 0.15rem;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    word-break: break-all;
+  }
+
   .flash { border: 1px solid var(--line); border-radius: var(--radius-card); padding: 0.75rem 1rem; margin-bottom: 1rem; background: var(--surface); }
   .flash.error { border-color: var(--pending); color: var(--pending); background: var(--pending-soft); }
 
@@ -851,6 +944,7 @@
 <script src="{{ url_for('static', filename='settings.js') }}"></script>
 <script src="{{ url_for('static', filename='settings-shell.js') }}"></script>
 <script src="{{ url_for('static', filename='settings-shortcut.js') }}"></script>
+<script src="{{ url_for('static', filename='confirm-actions.js') }}"></script>
 <script src="{{ url_for('static', filename='update-checker.js') }}"></script>
 </body>
 </html>
