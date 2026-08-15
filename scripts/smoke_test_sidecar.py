@@ -421,10 +421,44 @@ def run_main_route_sweep(binary: Path, port: int) -> None:
             _check(resp.status == 200, f"GET /healthz expected 200, got {resp.status}")
             _check(resp.text().strip() == '{"status":"ok"}' or '"status"' in resp.text(), f"GET /healthz unexpected body: {resp.text()}")
 
-            # GET /plan/sort -- stages 6 move entries from the seeded Downloads.
+            # GET /settings + POST /settings/icon -- proves settings.html,
+            # static/settings.js, and static/icon-choices/*.png all made it
+            # into the frozen binary's datas= (see cleanup_ui.spec), the
+            # same class of easy-to-forget-a-file risk /static/keyboard.js
+            # above already guards against.
+            resp = _get(base, "/settings")
+            _check(resp.status == 200, f"GET /settings expected 200, got {resp.status}")
+            _check(b"icon-choice-grid" in resp.body, "GET /settings missing icon-choice-grid")
+            _check(b"broom-folder" in resp.body, "GET /settings missing the broom-folder icon choice")
+
+            resp = _get(base, "/static/settings.js")
+            _check(resp.status == 200, f"GET /static/settings.js expected 200, got {resp.status}")
+
+            resp = _get(base, "/static/icon-choices/broom-folder.png")
+            _check(resp.status == 200, f"GET /static/icon-choices/broom-folder.png expected 200, got {resp.status}")
+
+            resp = _post(base, "/settings/icon", json_data={"choice": "recycle-folder"})
+            _check(resp.status == 200, f"POST /settings/icon expected 200, got {resp.status}")
+            _check(
+                json.loads(resp.text()).get("choice") == "recycle-folder",
+                f"POST /settings/icon unexpected body: {resp.text()}",
+            )
+
+            resp = _post(base, "/settings/icon", json_data={"choice": "not-a-real-choice"})
+            _check(resp.status == 400, f"POST /settings/icon (invalid) expected 400, got {resp.status}")
+
+            # GET /plan/sort -- kicks off a background job (see
+            # cleanup_tools.ui.jobs) and returns {"job_id": ...} immediately
+            # rather than blocking/redirecting; stages 6 move entries from
+            # the seeded Downloads. Mirrors /plan/reclaim's polling below.
             resp = _get(base, "/plan/sort")
-            _check(resp.status == 302, f"GET /plan/sort expected 302, got {resp.status}")
-            _check("staged=6" in (resp.location() or ""), f"GET /plan/sort unexpected Location: {resp.location()}")
+            _check(resp.status == 200, f"GET /plan/sort expected 200 (job_id), got {resp.status}")
+            job_id = json.loads(resp.text())["job_id"]
+            _check(bool(job_id), "GET /plan/sort returned an empty job_id")
+
+            job_payload = _poll_job(base, job_id)
+            _check(job_payload["status"] == "done", f"/plan/sort background job did not finish cleanly: {job_payload}")
+            _check(job_payload["result"]["count"] == 6, f"/plan/sort job result expected count=6, got {job_payload['result']}")
 
             # GET /plan/reclaim -- kicks off a background job (see
             # cleanup_tools.ui.jobs) and returns {"job_id": ...} immediately
@@ -517,18 +551,24 @@ def run_main_route_sweep(binary: Path, port: int) -> None:
                 f"propose-ai (no key) Location didn't carry the expected CredentialsError message: {location}",
             )
 
-            # GET /plan/corral-screenshots -- synchronous route, same
-            # dry-run-then-stage-then-redirect shape as /plan/sort above
-            # (see routes.py's plan_corral_screenshots/plan_sort, both
-            # `redirect(url_for("ui.dashboard", staged=len(added)))` on
-            # success). Stages the single seeded Desktop screenshot from
-            # _seed_home; run down here, after every other route's own
-            # staged/pending-count assertions, so this doesn't perturb them.
+            # GET /plan/corral-screenshots -- same background-job shape as
+            # /plan/sort above (see routes.py's plan_corral_screenshots).
+            # Stages the single seeded Desktop screenshot from _seed_home;
+            # run down here, after every other route's own staged/pending
+            # -count assertions, so this doesn't perturb them.
             resp = _get(base, "/plan/corral-screenshots")
-            _check(resp.status == 302, f"GET /plan/corral-screenshots expected 302, got {resp.status}")
+            _check(resp.status == 200, f"GET /plan/corral-screenshots expected 200 (job_id), got {resp.status}")
+            job_id = json.loads(resp.text())["job_id"]
+            _check(bool(job_id), "GET /plan/corral-screenshots returned an empty job_id")
+
+            job_payload = _poll_job(base, job_id)
             _check(
-                "staged=1" in (resp.location() or ""),
-                f"GET /plan/corral-screenshots unexpected Location: {resp.location()}",
+                job_payload["status"] == "done",
+                f"/plan/corral-screenshots background job did not finish cleanly: {job_payload}",
+            )
+            _check(
+                job_payload["result"]["count"] == 1,
+                f"/plan/corral-screenshots job result expected count=1, got {job_payload['result']}",
             )
 
     print("[smoke] main route sweep: PASS (all routes exercised, no key configured)")
