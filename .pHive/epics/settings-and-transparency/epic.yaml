@@ -1,0 +1,41 @@
+name: settings-and-transparency
+title: Gear-icon settings shell, full config CRUD, advanced view, and a real history/undo view
+description: |
+  Grows Settings from a single icon-picker page into a real settings surface: every
+  Config field editable, a dedicated gear-icon entry point, progressive-disclosure
+  Advanced view, and a History view that answers "we need more transparency" with a
+  genuine per-item audit trail -- a real differentiator, since the closest commercial
+  competitor (CleanMyMac) has no exportable log or scan history at all.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [backend, ui, flask, no-bundler-frontend, settings, transparency]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    ui: "Entirely a UI/UX epic -- settings shell restructure, gear icon, history view -- informed directly by a dedicated prior-art research pass."
+    transparency: "History view is the direct, explicit answer to the product owner's 'we need more transparency' ask."
+  confidence: high
+  gate_decisions:
+    grill: N/A this round -- design discussion revised in-line during authoring (executed_at/undo gap self-caught before presentation, not via a separate grill invocation)
+    collaborative_review: solo-orchestrator self-review (no separate spawned personas this run)
+
+stories:
+  - id: settings-shell-and-core-crud
+    title: Gear icon + settings sidebar shell + bucket-rules/search-roots/master-paths CRUD
+    complexity: high
+    depends_on: []
+  - id: advanced-config-view
+    title: Advanced pane -- read-only config JSON view
+    complexity: low
+    depends_on: [settings-shell-and-core-crud]
+  - id: history-view
+    title: History view -- paginated status_history feed with executed-gated undo
+    complexity: high
+    depends_on: [settings-shell-and-core-crud]

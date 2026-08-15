@@ -1,0 +1,92 @@
+id: entry-level-control
+epic: guided-sort-and-cluster
+title: Entry-level control -- edit primitive + bulk reject/undo parity
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+parallel_allowed: true
+parallel_rationale: bounded-slice
+
+description: |
+  Add queue.edit_entry() -- today queue.py only supports changing status (set_status)
+  or reverting to the prior status (undo); there is no way to change a pending entry's
+  proposed dest/group_key before approving it. Same locking discipline as set_status,
+  appends to status_history so edits are auditable identically to status changes.
+  Extend _bulk_target_ids with prefix-aware resolution (a branch identifier like
+  "sort:downloads:" matches every group_key with that prefix) so bulk reject/undo can
+  target a tree branch, not just an exact group_key -- additive, today's exact-match
+  bulk-approve/reject keeps working unchanged.
+
+acceptance_criteria:
+  - "Given a pending entry, when POST /queue/<id>/edit is called with a new dest/group_key, then the entry's proposed values change and status_history records the edit, under the same file-lock discipline as set_status."
+  - "Given a non-pending entry, when an edit is attempted, then it is rejected the same way set_status guards against invalid transitions."
+  - "Given a group_key prefix (e.g. `sort:downloads:`), when POST /queue/bulk-reject or /queue/bulk-undo is called with that prefix, then every entry whose group_key starts with it is affected, without touching entries under a different prefix."
+  - "Given the existing exact-match group_key bulk-approve/reject flow, when this story ships, then it continues to behave identically (regression-free)."
+
+steps:
+  - id: research
+    description: Re-read set_status/undo's exact locking and status_history append pattern in queue.py to mirror precisely for edit_entry.
+    agent: researcher
+  - id: implement
+    description: Implement queue.edit_entry(); add the /queue/<id>/edit route; extend _bulk_target_ids with prefix matching alongside exact-match.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Concurrency tests for edit_entry mirroring test_queue.py's existing real-race
+      tests (test_concurrent_stage_entries_with_distinct_srcs_loses_no_entries-style).
+      Prefix-match bulk reject/undo tests, plus explicit regression tests proving the
+      existing exact-match bulk-approve/reject test (test_bulk_approve_group_key_is_exact_match_not_substring)
+      still passes unchanged.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review locking correctness and prefix-match boundary cases (e.g. "sort:downloads:" must not accidentally match "sort:downloads2:").
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/queue.py
+      purpose: set_status/undo (lines 207-272) are the exact pattern edit_entry must mirror -- same lock, same status_history append discipline.
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_bulk_target_ids (693-716) does exact-match only today; this story adds prefix matching alongside it."
+
+files_to_modify:
+  - file: src/cleanup_tools/queue.py
+    change: Add edit_entry(adapter, entry_id, new_dest, new_group_key, queue_path).
+  - file: src/cleanup_tools/ui/routes.py
+    change: New POST /queue/<id>/edit route; extend _bulk_target_ids with prefix-aware resolution.
+
+design_decisions:
+  - decision: edit_entry only ever touches pending entries.
+    rationale: Editing an already-approved/rejected/executed entry's proposed destination is meaningless or dangerous -- keep the primitive narrow.
+  - decision: Prefix matching is additive, never replaces exact matching.
+    rationale: Preserves the existing, tested, exact-match bulk-approve/reject/undo behavior byte-for-byte.
+
+risks:
+  - severity: medium
+    description: New primitive on the queue's locking contract needs its own concurrency proof, not assumed-safe-by-analogy.
+    mitigation: Extend test_queue.py's existing real-concurrency-race test pattern rather than writing only single-threaded tests.
+  - severity: low
+    description: Prefix-match boundary bugs (accidental partial-segment matches).
+    mitigation: Match on a trailing delimiter (e.g. require the prefix to end in ":" or be the full string) so "sort:downloads:" never matches "sort:downloads2:".
+
+references:
+  - path: .pHive/epics/guided-sort-and-cluster/docs/design-discussion.md
+    relevant_excerpt: |
+      queue.edit_entry(adapter, entry_id, new_dest, new_group_key, queue_path)-shaped
+      function, same locking discipline as set_status, appends to status_history.
+
+metric:
+  applies: false
+  justification: Backend primitive story; its value is realized by the dependent UI story and by settings-and-transparency's History view, not independently observable here.
+
+manual_verdict:
+  scenario_ref: null

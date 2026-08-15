@@ -1,0 +1,40 @@
+name: guided-sort-and-cluster
+title: Arbitrary-location queue hierarchy, entry-level control, and dashboard tree
+description: |
+  Epic #1 of a four-part product-owner request (dashboard tree bulk-approve,
+  AI-sort scope, chat agent, semantic clustering), scoped to the shared foundation the
+  other three build on: any-and-all configured locations (not a fixed enum), full
+  entry-level control (approve/reject/undo/edit), and the dashboard tree view itself.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [backend, queue-schema, ui, flask, no-bundler-frontend]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    backend: "Schema/command-layer changes (queue.py, sort.py) dominate this epic's real risk."
+    ui: "Dashboard tree + kickoff-bar picker are the user-visible payoff, built on a Flask+vanilla-JS stack with zero bundler."
+  confidence: high
+  gate_decisions:
+    grill: ran, round 1, 5 findings resolved before user review
+    collaborative_review: solo-orchestrator self-review (no separate spawned personas this run)
+
+stories:
+  - id: multi-root-sort-and-hierarchy
+    title: Multi-root sort + location-aware group_key
+    complexity: medium
+    depends_on: []
+  - id: entry-level-control
+    title: Entry-level control -- edit primitive + bulk reject/undo parity
+    complexity: medium
+    depends_on: []
+  - id: dashboard-tree-and-location-picker
+    title: Dashboard tree view + kickoff-bar location picker
+    complexity: high
+    depends_on: [multi-root-sort-and-hierarchy, entry-level-control]

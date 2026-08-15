@@ -1,0 +1,114 @@
+id: multi-root-sort-and-hierarchy
+epic: guided-sort-and-cluster
+title: Multi-root sort + location-aware group_key
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Extend `cleanup sort` to scan multiple configured locations (Config.search_roots),
+  matching the pattern `reclaim.py`/`corral_screenshots.py` already use -- sort.py is
+  the one outlier today, hardcoded to a single target_dir. Change every queue-staging
+  function in routes.py to embed a location segment into group_key, so a tree view can
+  later group by "which configured location" as well as "which bucket." Root is NOT a
+  fixed enum -- whichever of the user's actual configured/selected locations an entry's
+  src falls under, "other" fallback for everything else. Parse old-format (pre-epic)
+  group_keys defensively (no crash), since the real queue will be reset before this
+  ships and does not need a proven historical-data migration path.
+
+acceptance_criteria:
+  - "Given search_roots configured with multiple paths, when `cleanup sort` runs with no explicit dir argument, then it scans every configured root, matching reclaim's existing multi-root behavior."
+  - "Given a CLI-supplied explicit dir, when `cleanup sort <dir>` runs, then that dir wins over configured search_roots (matches reclaim/corral-screenshots' existing precedence)."
+  - "Given an entry staged under a configured root, when its group_key is constructed, then it embeds that root's identity (e.g. `sort:<root>:<bucket>`), never a fixed enum member."
+  - "Given an entry whose src falls outside every configured root, when its group_key is constructed, then it falls back to an explicit 'other' root segment, never crashes."
+  - "Given an old-format group_key (`sort:<bucket>`, `reclaim:<category>`, `corral-screenshots`, or None) from before this schema existed, when it's read by any consumer, then it parses without raising, per the format table in the design discussion."
+
+steps:
+  - id: research
+    description: |
+      Audit every place sort.py threads target_dir (run(), _plan(), _run_from_queue(),
+      CLI arg parsing) -- confirm the exact shape to mirror from reclaim.py's
+      _resolve_roots-style helper. Grep the whole repo for every `.group_key` read/write
+      site and confirm each treats it as opaque (per grill finding H3) before changing
+      the format.
+    agent: researcher
+  - id: implement
+    description: |
+      Extend sort.py to multi-root (mirroring reclaim.py's pattern exactly). Update
+      _stage_sort_plan/_stage_reclaim_plan/_stage_corral_screenshots_plan in routes.py
+      to embed the location segment. Write the defensive old-format parser per the
+      design discussion's table (branch on segment count: 0, 2, or 3 -- never a
+      general-purpose parser).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Cover multi-root sort scanning, group_key construction (all root/bucket
+      combinations plus the "other" fallback), and defensive parsing of every
+      old-format group_key confirmed in the research brief -- build fixtures from the
+      real formats, not just happy-path synthetic data.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review for correctness against reclaim.py's proven multi-root pattern and the group_key format table.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/commands/sort.py
+      purpose: The one pipeline still hardcoded to a single target_dir -- this story's main implementation target.
+    - path: src/cleanup_tools/commands/reclaim.py
+      purpose: "Already-working multi-root reference pattern (lines ~421-430: CLI dirs win, else search_roots, else default set)."
+    - path: src/cleanup_tools/config.py
+      purpose: "Config.search_roots (line 45) -- already exists, no schema change needed."
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_stage_sort_plan/_stage_reclaim_plan/_stage_corral_screenshots_plan construct group_key today -- all three need the new location segment."
+
+files_to_modify:
+  - file: src/cleanup_tools/commands/sort.py
+    change: Accept multiple roots via Config.search_roots, matching reclaim.py's precedence (CLI dirs win, else configured search_roots, else default).
+  - file: src/cleanup_tools/ui/routes.py
+    change: Embed a location segment into group_key in all three staging functions; add the defensive old-format parser.
+
+code_examples:
+  - title: Existing multi-root pattern to mirror
+    file: src/cleanup_tools/commands/reclaim.py
+    snippet: |
+      """CLI-supplied dirs win; else configured search_roots; else Documents+Desktop."""
+      if config.search_roots:
+          return [Path(r) for r in config.search_roots]
+
+design_decisions:
+  - decision: Root is an open-ended value derived from actual configured/selected locations, not a fixed enum.
+    rationale: Explicit product-owner correction -- "it should be able to sort ANY and all locations."
+  - decision: Old-format group_keys get defensive (not migration-proven) parsing.
+    rationale: The real queue will be reset before this ships, per the product owner -- de-scopes the original, much riskier backward-compatibility requirement.
+
+risks:
+  - severity: medium
+    description: sort.py's single-target-dir assumption runs deeper than the public run() signature (also _plan, _run_from_queue, CLI parsing).
+    mitigation: Audit all call sites during research step, not just the entry point; mirror reclaim.py's already-proven shape exactly rather than inventing a new one.
+
+references:
+  - path: .pHive/epics/guided-sort-and-cluster/docs/design-discussion.md
+    relevant_excerpt: |
+      Schema: extend group_key's string format to carry a source-root segment...
+      Root derived from actual configured/selected locations, open-ended by design.
+  - path: .pHive/epics/guided-sort-and-cluster/docs/research-brief.md
+    relevant_excerpt: |
+      search_roots already exists as the multi-location hook... sort.py is the one
+      outlier needing the same extension.
+
+metric:
+  applies: false
+  justification: Backend/schema story with no independently observable user-facing metric of its own -- its outcome is verified by the dependent tree-UI story's usability, not a standalone number.
+
+manual_verdict:
+  scenario_ref: null

@@ -1,0 +1,119 @@
+id: dashboard-tree-and-location-picker
+epic: guided-sort-and-cluster
+title: Dashboard tree view + kickoff-bar location picker
+status: pending
+complexity: high
+methodology: classic
+depends_on: [multi-root-sort-and-hierarchy, entry-level-control]
+
+description: |
+  The user-visible payoff: a collapsible dashboard tree grouped by location then bucket
+  (~/Downloads > screenshots (42, 1.2GB) [Approve all] [Reject all] [Undo all], an
+  always-present "Other" branch), built on the now-real location-aware group_key
+  (multi-root-sort-and-hierarchy) and prefix-aware bulk actions (entry-level-control).
+  Also adds a location multi-select to the existing kickoff bar so a plan can be scoped
+  to a subset of configured locations ("select a subset and say just do this, go").
+  Aggregates only -- never renders per-entry inline, matching why pagination exists on
+  the flat queue view today. Protected paths (per the DaisyDisk-inspired research
+  finding) must be hard-blocked from ever being stageable, not just flagged in the UI.
+
+acceptance_criteria:
+  - "Given entries staged under multiple configured locations, when the dashboard loads, then a collapsible tree shows each location as a root branch, each bucket as a sub-branch, with real counts and sizes -- never a flat per-entry list."
+  - "Given a branch with a large count, when 'Approve all' is clicked, then it calls the prefix-aware bulk-approve endpoint scoped to exactly that branch, not neighboring branches."
+  - "Given entries outside every configured location, when the tree renders, then they appear under an always-visible 'Other' branch, never silently omitted."
+  - "Given the kickoff bar, when a user selects a subset of configured locations and clicks Run, then only those locations are scanned/planned, not the full default set."
+  - "Given a path under a hard-blocked protected class (system paths, home root itself), when any staging function considers it, then it is refused from ever entering the queue, not merely flagged."
+
+steps:
+  - id: research
+    description: Confirm plan-trigger.js's fetch/data-attribute pattern and the kickoff bar's current checkbox structure to extend consistently.
+    agent: researcher
+  - id: implement
+    description: |
+      Dashboard tree template + new static JS (vanilla, no bundler, matching
+      plan-trigger.js's pattern). Kickoff-bar location multi-select wired to the now
+      multi-root-aware /plan/* routes. Hard-block protected paths at the staging layer.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Route-level tests for tree-data rendering and scoped kickoff runs. Explicit test
+      proving a protected path is refused at staging time (not just UI-hidden). Manual
+      click-through per the story's acceptance criteria.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review tree-rendering performance at realistic entry counts (thousands) -- confirm aggregates-only, no eager per-entry enumeration anywhere in the render path.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/ui/templates/dashboard.html
+      purpose: Today's flat .group-grid card list -- this story replaces/extends it with the tree.
+    - path: src/cleanup_tools/ui/static/plan-trigger.js
+      purpose: The exact fetch/data-attribute pattern the tree's JS and the kickoff-bar picker must match -- no bundler, no framework.
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_group_entries (123-166) is the current flat grouping logic -- needs a hierarchical variant for the tree."
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/templates/dashboard.html
+    change: Collapsible tree markup, location multi-select on the kickoff bar.
+  - file: src/cleanup_tools/ui/routes.py
+    change: New hierarchical grouping function for the tree's data; protected-path hard-block in staging functions.
+  - file: src/cleanup_tools/ui/static/
+    change: New tree-interaction JS matching plan-trigger.js's established pattern.
+
+design_decisions:
+  - decision: Tree only ever shows aggregate counts/sizes per branch, never per-entry inline.
+    rationale: Repeating the pre-pagination performance mistake at real scale (thousands of entries) is the single most-cited risk across both this epic's own risk list and the prior-art research.
+  - decision: Protected paths are hard-blocked at the staging layer, not just hidden/warned in the UI.
+    rationale: Direct application of DaisyDisk's Collector pattern from the 2026-08-15 prior-art research -- a UI-only warning is weaker than a structural refusal.
+
+risks:
+  - severity: high
+    description: A naive tree implementation that eagerly enumerates leaves would repeat the exact performance mistake pagination/background-jobs were built to fix elsewhere in this app.
+    mitigation: Design and review explicitly gate on "aggregates only" before any implementation lands; test against a realistic entry-count fixture, not a handful of rows.
+  - severity: medium
+    description: Location-picker UX at real scale if search_roots grows large.
+    mitigation: Same aggregates-only discipline applied to the picker, not just the tree.
+
+references:
+  - path: .pHive/research/prior-art-cleaning-and-settings-ux.md
+    relevant_excerpt: |
+      Hard-block protected paths from ever entering the queue (DaisyDisk's Collector
+      rejects /System, /Library, home-root outright)... Require expansion of
+      aggregated/grouped items before bulk action.
+  - path: .pHive/epics/guided-sort-and-cluster/docs/design-discussion.md
+    relevant_excerpt: |
+      UI: a collapsible tree on the dashboard... Large branches never render per-entry
+      inline -- the tree only ever shows counts/sizes per branch.
+
+cross_cutting:
+  - concern: real-scale-performance
+    action: "Aggregates-only rendering enforced at both the tree and the picker; tested against a realistic (thousands-of-entries) fixture, not a toy example."
+
+metric:
+  applies: true
+  name: dashboard.time_to_first_bulk_approve
+  direction: down
+  unit: seconds
+  baseline: unknown (no tree view exists today -- baseline is "must navigate to /queue and find the right group manually")
+  target: subjectively "fast" -- the product owner should be able to bulk-approve a whole location/bucket branch within a couple of clicks from the dashboard, not a multi-step queue-page hunt
+  window: first real usage session after this ships
+  source:
+    kind: manual
+    ref: product owner's own real-queue usage session
+  verify_at: integrate
+  owner: developer
+
+manual_verdict:
+  scenario_ref: .pHive/test-scenarios/dashboard-tree-and-location-picker-manual.yaml
+  verdict: null
+  timestamp: null
+  agent: null
