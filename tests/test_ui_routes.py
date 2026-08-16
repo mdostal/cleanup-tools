@@ -3159,3 +3159,103 @@ def test_console_mode_data_attribute_present_for_density_css(adapter, client, tm
 
     html = client.get("/queue").data.decode()
     assert 'data-ui-mode="console"' in html
+
+
+# ---------------------------------------------------------------------------
+# 16. Chat: GET /chat renders the page; POST /chat/new creates a
+#     conversation; POST /chat/<id>/message validates its input and kicks
+#     off a background job (see jobs.py's wants_partial=True path); GET
+#     /chat/status/<job_id> is the dedicated poll route for that job.
+#
+#     get_raw_client and chat_engine.run_turn are always monkeypatched
+#     below before a message is ever sent -- the real Anthropic client is
+#     never constructed and no real network call is possible from this
+#     file, mirroring test_chat_engine.py's own no-real-network discipline.
+# ---------------------------------------------------------------------------
+
+
+def _stub_chat_engine(monkeypatch, *, final_text="Sure, here's what I found."):
+    import cleanup_tools.ui.routes as routes_module
+
+    monkeypatch.setattr(routes_module, "get_raw_client", lambda **_kwargs: object())
+
+    def fake_run_turn(client, adapter, history, user_message, *, partial_callback=None, **_kwargs):
+        if partial_callback is not None:
+            partial_callback(final_text[: max(1, len(final_text) // 2)])
+        return {"text": final_text, "staged_entry_ids": []}
+
+    monkeypatch.setattr(routes_module.chat_engine, "run_turn", fake_run_turn)
+
+
+def test_chat_view_renders_the_page(client):
+    resp = client.get("/chat")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert 'id="chat-transcript"' in html
+    assert 'id="chat-form"' in html
+
+
+def test_chat_nav_link_present_and_marked_current_on_the_chat_page(client):
+    html = client.get("/chat").data.decode()
+    assert ">Chat<" in html
+    assert 'href="/chat"' in html
+
+
+def test_chat_new_creates_a_conversation_and_returns_its_id(client):
+    resp = client.post("/chat/new")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["conversation_id"]
+
+
+def test_chat_message_empty_body_returns_400(client):
+    conversation_id = client.post("/chat/new").get_json()["conversation_id"]
+
+    resp = client.post(f"/chat/{conversation_id}/message", json={"message": "   "})
+    assert resp.status_code == 400
+
+
+def test_chat_message_unknown_conversation_returns_404(client, monkeypatch):
+    _stub_chat_engine(monkeypatch)
+
+    resp = client.post("/chat/not-a-real-conversation/message", json={"message": "hi"})
+    assert resp.status_code == 404
+
+
+def test_chat_message_full_turn_streams_partial_then_completes(client, monkeypatch):
+    _stub_chat_engine(monkeypatch, final_text="Your Downloads folder has 12 PDFs.")
+    conversation_id = client.post("/chat/new").get_json()["conversation_id"]
+
+    resp = client.post(f"/chat/{conversation_id}/message", json={"message": "what's in Downloads?"})
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+
+    payload = _poll_chat_job_until_terminal(client, job_id)
+    assert payload["status"] == "done"
+    assert payload["result"]["text"] == "Your Downloads folder has 12 PDFs."
+
+
+def test_chat_status_unknown_job_id_returns_404(client):
+    resp = client.get("/chat/status/not-a-real-job")
+    assert resp.status_code == 404
+
+
+def _poll_chat_job_until_terminal(client, job_id: str, timeout: float = 5.0) -> dict:
+    """Poll GET /chat/status/<job_id> until it reports "done" or "error".
+
+    Mirrors ``_poll_job_until_terminal`` above, against the dedicated chat
+    status route (a different result shape than the generic one -- see
+    ``chat_job_status``'s docstring in routes.py).
+    """
+    import time
+
+    deadline = time.time() + timeout
+    payload = None
+    while time.time() < deadline:
+        resp = client.get(f"/chat/status/{job_id}")
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        if payload["status"] in ("done", "error"):
+            return payload
+        time.sleep(0.01)
+    raise AssertionError(f"chat job {job_id} did not reach a terminal status within {timeout}s: {payload}")

@@ -36,9 +36,11 @@ from PIL import Image, UnidentifiedImageError
 
 from .. import config as config_module
 from .. import queue as queue_module
-from ..ai import CredentialsError, default_credentials_path, get_provider
+from ..ai import CredentialsError, default_credentials_path, get_provider, get_raw_client
 from ..ai.wiring import DEFAULT_CAP as DEFAULT_AI_CAP
 from ..ai.wiring import propose_for_other_bucket
+from ..chat import engine as chat_engine
+from ..chat import state as chat_state
 from ..commands import corral_screenshots as corral_screenshots_module
 from ..commands import reclaim as reclaim_module
 from ..commands import sort as sort_module
@@ -395,23 +397,6 @@ def _status_counts(entries: list[queue_module.QueueEntry]) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def _configured_locations(config: config_module.Config, adapter) -> list[str]:
-    """The location strings the kickoff-bar's location picker offers.
-
-    Exactly ``_location_for_src``'s own resolution (configured
-    ``search_roots``, else the downloads/desktop/documents fallback trio)
-    so a location the picker offers is always one a plan can actually be
-    scoped to via ``?dirs=``.
-    """
-    if config.search_roots:
-        return [str(Path(r).resolve()) for r in config.search_roots]
-    return [
-        str(adapter.resolve_standard_dir("downloads")),
-        str(adapter.resolve_standard_dir("desktop")),
-        str(adapter.resolve_standard_dir("documents")),
-    ]
-
-
 @bp.route("/")
 def dashboard():
     entries = _load_entries()
@@ -421,7 +406,7 @@ def dashboard():
         "dashboard.html",
         groups=_group_entries(entries),
         location_tree=_group_entries_hierarchical(entries),
-        configured_locations=_configured_locations(config, adapter),
+        configured_locations=config_module.configured_locations(config, adapter),
         overall_status_counts=_status_counts(entries),
         total_entries=len(entries),
         staged=request.args.get("staged"),
@@ -764,6 +749,114 @@ def job_status(job_id):
     payload: dict = {"status": job.status, "current": job.current, "total": job.total}
     if job.status == jobs.STATUS_DONE:
         payload["result"] = _serialize_staged_entries(job.result)
+    elif job.status == jobs.STATUS_ERROR:
+        payload["error"] = job.error
+    return jsonify(payload)
+
+
+# ---------------------------------------------------------------------------
+# Chat: an in-app conversation with an agent that can read real queue/
+# config/filesystem state and propose moves -- never execute anything
+# itself (see chat/engine.py and chat/tools.py's module docstrings, and
+# .pHive/epics/chat-agent-plan-builder/docs/design-discussion.md). A chat
+# turn reuses the exact same background-job/polling pattern every other
+# long-running action in this app already uses (jobs.start_job,
+# wants_partial=True for the growing streamed-text case) -- see
+# JobState.partial's docstring -- rather than a new transport.
+# ---------------------------------------------------------------------------
+
+
+@bp.route("/chat")
+def chat_view():
+    return render_template("chat.html")
+
+
+@bp.route("/chat/new", methods=["POST"])
+def chat_new():
+    """Start a fresh, empty conversation and return its id.
+
+    Conversation state is in-memory only (see chat/state.py's module
+    docstring) -- nothing here touches queue.yaml or config.yaml.
+    """
+    conversation_id = chat_state.create_conversation()
+    return jsonify({"conversation_id": conversation_id})
+
+
+def _chat_turn_job(
+    adapter, conversation_id: str, user_message: str, progress_callback, partial_callback
+) -> dict:
+    """The ``target_fn`` run on a chat turn's background job thread.
+
+    Resolves the conversation's prior history, runs the engine's
+    tool-calling loop for exactly one turn (see chat/engine.py's ``run_turn``
+    docstring for what "one turn" means), then appends both the user's
+    message and the assistant's final response to that conversation's
+    history -- so the NEXT turn (a separate job, separate call to this
+    function) sees the full prior exchange.
+
+    Deliberately does NOT catch/translate any exception (credential
+    resolution failure, a raw ``anthropic.APIError``, ...) -- jobs.py's
+    ``start_job`` already catches anything a target_fn raises and records
+    it as a terminal job error; translating here too would just be
+    redundant, less-informative error handling (mirrors ``run_turn``'s own
+    documented reasoning for the same choice).
+    """
+    conv = chat_state.get_conversation(conversation_id)
+    if conv is None:
+        raise ValueError(f"unknown conversation: {conversation_id!r}")
+
+    history = [{"role": m.role, "text": m.text} for m in conv.messages]
+    client = get_raw_client()
+    result = chat_engine.run_turn(
+        client, adapter, history, user_message, partial_callback=partial_callback
+    )
+
+    chat_state.append_message(conversation_id, "user", user_message)
+    chat_state.append_message(conversation_id, "assistant", result["text"])
+    return result
+
+
+@bp.route("/chat/<conversation_id>/message", methods=["POST"])
+def chat_message(conversation_id):
+    """Send one message in an existing conversation; kicks off the turn as
+    a background job (streamed via ``partial``) and returns its ``job_id``
+    immediately, mirroring ``plan_sort``/``plan_reclaim``'s async pattern.
+
+    Unknown ``conversation_id`` -> 404, checked here (before a job is even
+    started) rather than surfacing as a job error -- an unknown
+    conversation is a request-shape problem, not something that happened
+    while doing real work.
+    """
+    data = request.get_json(silent=True) or {}
+    user_message = (data.get("message") or "").strip()
+    if not user_message:
+        return jsonify({"error": "message is required"}), 400
+    if chat_state.get_conversation(conversation_id) is None:
+        abort(404, description=f"No such conversation: {conversation_id!r}")
+
+    adapter = _adapter()
+    job_id = jobs.start_job(
+        _chat_turn_job, adapter, conversation_id, user_message, wants_partial=True
+    )
+    return jsonify({"job_id": job_id})
+
+
+@bp.route("/chat/status/<job_id>")
+def chat_job_status(job_id):
+    """Poll a chat turn's background job -- a dedicated route rather than
+    reusing ``GET /status/<job_id>`` above, because that route's "done"
+    handling always calls ``_serialize_staged_entries`` (a list of
+    ``QueueEntry`` objects); a chat job's result is
+    ``{"text", "staged_entry_ids"}``, a different shape entirely. Same
+    unknown-``job_id`` -> 404 contract as the other route.
+    """
+    job = jobs.get_job(job_id)
+    if job is None:
+        abort(404, description=f"No such job: {job_id!r}")
+
+    payload: dict = {"status": job.status, "partial": job.partial}
+    if job.status == jobs.STATUS_DONE:
+        payload["result"] = job.result
     elif job.status == jobs.STATUS_ERROR:
         payload["error"] = job.error
     return jsonify(payload)

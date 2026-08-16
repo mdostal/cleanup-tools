@@ -34,6 +34,7 @@ from cleanup_tools.ai import (
     CredentialsError,
     ProposalResult,
     get_provider,
+    get_raw_client,
 )
 from cleanup_tools.ai.anthropic_provider import _parse_response
 
@@ -465,6 +466,52 @@ def test_model_override_is_passed_through(tmp_path, monkeypatch):
     provider = get_provider(model="claude-opus-5", credentials_path=creds_path)
 
     assert provider._model == "claude-opus-5"
+
+
+# ---------------------------------------------------------------------------
+# get_raw_client() -- same credential resolution as get_provider(), but
+# returns the raw SDK client (chat-agent-plan-builder's engine needs
+# streaming, which AnthropicProvider's narrow interface doesn't expose).
+# ---------------------------------------------------------------------------
+
+
+def test_get_raw_client_env_var_wins_when_set(tmp_path, monkeypatch):
+    creds_path = tmp_path / "credentials"
+    creds_path.write_text("file-key-should-not-be-used")
+    creds_path.chmod(0o600)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
+
+    client = get_raw_client(credentials_path=creds_path)
+
+    assert client.api_key == "env-key"
+
+
+def test_get_raw_client_falls_back_to_credentials_file_when_env_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    creds_path = tmp_path / "credentials"
+    creds_path.write_text("file-key\n")
+    creds_path.chmod(0o600)
+
+    client = get_raw_client(credentials_path=creds_path)
+
+    assert client.api_key == "file-key"
+
+
+def test_get_raw_client_missing_key_raises_credentials_error(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    missing_path = tmp_path / "credentials"
+
+    with pytest.raises(CredentialsError):
+        get_raw_client(credentials_path=missing_path)
+
+
+def test_get_raw_client_returns_a_real_anthropic_client_not_a_provider_wrapper(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
+
+    client = get_raw_client(credentials_path=tmp_path / "unused")
+
+    assert isinstance(client, anthropic.Anthropic)
+    assert not isinstance(client, AnthropicProvider)
 
 
 # ---------------------------------------------------------------------------

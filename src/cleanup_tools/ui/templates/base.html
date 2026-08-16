@@ -903,6 +903,63 @@
   }
 
   /* -------------------------------------------------------------------
+   * Chat page (chat.html/chat.js): a scrolling transcript of message
+   * bubbles plus a fixed-height input row, matching this app's existing
+   * card/surface language (var(--surface-2)/var(--accent)) rather than
+   * a generic chat-widget look.
+   * ------------------------------------------------------------------- */
+  .chat-transcript {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    max-height: 55vh;
+    overflow-y: auto;
+    padding: 0.75rem;
+    margin: 1rem 0;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--surface-1);
+  }
+  .chat-bubble {
+    max-width: 75%;
+    padding: 0.55rem 0.8rem;
+    border-radius: 0.65rem;
+    font-size: var(--text-sm);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .chat-bubble-user {
+    align-self: flex-end;
+    background: var(--accent);
+    color: var(--accent-ink, #fff);
+  }
+  .chat-bubble-assistant {
+    align-self: flex-start;
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+  .chat-bubble-error { border: 1px solid var(--danger, #b3261e); }
+  .chat-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+  }
+  .chat-form textarea {
+    flex: 1;
+    resize: vertical;
+    font: inherit;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    background: var(--surface-1);
+    color: var(--ink);
+  }
+  .chat-status-error { color: var(--danger, #b3261e); }
+  html[data-ui-mode="console"] .chat-transcript { max-height: 65vh; padding: 0.5rem; }
+  html[data-ui-mode="console"] .chat-bubble { font-size: 0.85rem; padding: 0.45rem 0.65rem; }
+
+  /* -------------------------------------------------------------------
    * Console mode: a density/copy-style preference (config.ui_mode),
    * orthogonal to the Ledger/Sonar/Tide color theme -- see
    * config.Config.ui_mode's docstring. Built entirely as a CSS overlay
@@ -970,6 +1027,11 @@
     class="nav-link"
     {% if request.endpoint == 'ui.history_view' %}aria-current="page"{% endif %}
   >History</a>
+  <a
+    href="{{ url_for('ui.chat_view') }}"
+    class="nav-link"
+    {% if request.endpoint == 'ui.chat_view' %}aria-current="page"{% endif %}
+  >Chat</a>
   <a
     href="{{ url_for('ui.plan_sort') }}"
     class="plan-trigger-link"

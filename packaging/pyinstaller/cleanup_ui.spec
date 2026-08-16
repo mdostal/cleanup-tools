@@ -128,6 +128,7 @@ datas = [
     (os.path.join(UI_TEMPLATES, "queue.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_TEMPLATES, "settings.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_TEMPLATES, "history.html"), "cleanup_tools/ui/templates"),
+    (os.path.join(UI_TEMPLATES, "chat.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_TEMPLATES, "_status_icon.html"), "cleanup_tools/ui/templates"),
     (os.path.join(UI_STATIC, "keyboard.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "plan-trigger.js"), "cleanup_tools/ui/static"),
@@ -137,6 +138,7 @@ datas = [
     (os.path.join(UI_STATIC, "settings-shortcut.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "confirm-actions.js"), "cleanup_tools/ui/static"),
     (os.path.join(UI_STATIC, "update-checker.js"), "cleanup_tools/ui/static"),
+    (os.path.join(UI_STATIC, "chat.js"), "cleanup_tools/ui/static"),
     (
         os.path.join(UI_STATIC, "icon-choices", "broom-folder.png"),
         "cleanup_tools/ui/static/icon-choices",

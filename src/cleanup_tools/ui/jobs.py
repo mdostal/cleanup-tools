@@ -50,6 +50,16 @@ class JobState:
 
     ``result`` is only meaningful once ``status == "done"``; ``error`` is
     only meaningful once ``status == "error"``.
+
+    ``partial`` is a generalization of the same "report progress while
+    still running" idea, for jobs whose meaningful progress is growing
+    TEXT rather than a numeric current/total (e.g. an LLM streaming a
+    response one token at a time) -- a job body calls the
+    ``partial_callback`` passed to it (alongside ``progress_callback``) to
+    overwrite this field at any point before completion. ``None`` means
+    "nothing reported yet," not "empty string reported." Every existing
+    caller that only ever reads ``current``/``total``/``result``/``error``
+    is unaffected -- this is purely additive.
     """
 
     status: str = STATUS_RUNNING
@@ -57,6 +67,7 @@ class JobState:
     total: int = 0
     result: Any = None
     error: str | None = None
+    partial: Any = None
 
 
 # Module-level registry + the lock guarding every read/write of it (and of
@@ -76,11 +87,13 @@ def _copy(job: JobState) -> JobState:
         total=job.total,
         result=job.result,
         error=job.error,
+        partial=job.partial,
     )
 
 
-def start_job(target_fn: Callable[..., Any], *args: Any) -> str:
-    """Start ``target_fn(*args, progress_callback)`` on a background thread.
+def start_job(target_fn: Callable[..., Any], *args: Any, wants_partial: bool = False) -> str:
+    """Start ``target_fn(*args, progress_callback[, partial_callback])`` on a
+    background thread.
 
     Registers a fresh ``JobState(status="running")`` under a new random
     ``job_id`` before the thread is even started (so a caller that polls
@@ -88,11 +101,26 @@ def start_job(target_fn: Callable[..., Any], *args: Any) -> str:
     that "doesn't exist yet"), then spawns a daemon thread running
     ``target_fn``.
 
-    ``target_fn`` is called as ``target_fn(*args, progress_callback)``,
-    where ``progress_callback(current, total)`` updates that job's
-    ``current``/``total`` in the registry -- ``target_fn`` is expected to
-    call it with genuine progress as real work happens (e.g. once per
-    candidate directory sized), not a fixed/fake value.
+    ``target_fn`` is always called with ``progress_callback`` as its last
+    positional argument, exactly as before (every existing caller's
+    signature -- one trailing callback parameter -- is untouched). When
+    ``wants_partial=True`` is passed EXPLICITLY by the caller of
+    ``start_job`` (never inferred from ``target_fn``'s signature), a second
+    trailing ``partial_callback`` is also appended, and ``target_fn`` must
+    declare a parameter to receive it. This is an opt-in the caller states,
+    not something ``start_job`` guesses -- appending an extra positional
+    argument to a call whose callee doesn't expect it would be a
+    ``TypeError``, so no existing ``target_fn`` (``_sort_job``,
+    ``_reclaim_job``, ``_corral_screenshots_job``, ...) is ever affected
+    unless it opts in by also being updated to accept the second
+    parameter.
+
+    ``progress_callback(current, total)`` updates that job's
+    ``current``/``total`` in the registry (numeric progress -- e.g. once
+    per candidate directory sized). ``partial_callback(value)`` (only
+    passed when ``wants_partial=True``) overwrites that job's ``partial``
+    (growing non-numeric progress, e.g. accumulated streamed text -- see
+    ``JobState.partial``'s docstring).
 
     The ENTIRE call to ``target_fn`` runs inside a ``try/except Exception``:
     whatever it raises -- including a bare ``TimeoutError`` from a queue
@@ -113,9 +141,18 @@ def start_job(target_fn: Callable[..., Any], *args: Any) -> str:
                 job.current = current
                 job.total = total
 
+    def _partial_callback(value: Any) -> None:
+        with _lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job.partial = value
+
     def _run() -> None:
         try:
-            result = target_fn(*args, _progress_callback)
+            if wants_partial:
+                result = target_fn(*args, _progress_callback, _partial_callback)
+            else:
+                result = target_fn(*args, _progress_callback)
         except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
             with _lock:
                 job = _jobs.get(job_id)

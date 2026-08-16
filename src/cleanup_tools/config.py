@@ -136,6 +136,29 @@ def resolve_bucket(filename: str, rules: list[BucketRule]) -> str:
     return "other"
 
 
+def configured_locations(config: Config, adapter: OSAdapter) -> list[str]:
+    """Every location sort/reclaim/corral-screenshots would scan by default:
+    configured ``search_roots`` if any, else the downloads/desktop/documents
+    fallback trio.
+
+    Lives here (not ``ui/routes.py``, where this was originally written)
+    because it's pure ``Config``+``OSAdapter`` logic with no Flask/UI
+    dependency, and the chat-agent-plan-builder epic's ``chat/`` package
+    needs the identical resolution without creating a ``chat -> ui.routes``
+    import (which would cycle back, since ``ui/routes.py`` needs to import
+    the chat engine/tools to wire up its chat routes). ``ui/routes.py``'s
+    dashboard kickoff-bar location picker calls this exact function, so the
+    agent's answer and the UI's own picker can never disagree.
+    """
+    if config.search_roots:
+        return [str(Path(r).resolve()) for r in config.search_roots]
+    return [
+        str(adapter.resolve_standard_dir("downloads")),
+        str(adapter.resolve_standard_dir("desktop")),
+        str(adapter.resolve_standard_dir("documents")),
+    ]
+
+
 DEFAULT_CONFIG = Config(bucket_rules=DEFAULT_BUCKET_RULES)
 
 CONFIG_FILENAME = "config.yaml"

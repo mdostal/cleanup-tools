@@ -21,6 +21,7 @@ from cleanup_tools.config import (
     Config,
     MasterPath,
     config_to_dict,
+    configured_locations,
     default_config_path,
     load_config,
     resolve_bucket,
@@ -366,6 +367,34 @@ def test_config_to_dict_never_includes_credential_material():
         "icon_choice",
         "ui_mode",
     }
+
+
+def test_configured_locations_returns_search_roots_when_configured(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    root = tmp_path / "custom-root"
+    config = Config(bucket_rules=[], search_roots=[str(root)])
+
+    assert configured_locations(config, adapter) == [str(root.resolve())]
+
+
+def test_configured_locations_falls_back_to_standard_trio_when_no_search_roots(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config = Config(bucket_rules=[])
+
+    locations = configured_locations(config, adapter)
+    assert locations == [
+        str(adapter.resolve_standard_dir("downloads")),
+        str(adapter.resolve_standard_dir("desktop")),
+        str(adapter.resolve_standard_dir("documents")),
+    ]
 
 
 def test_save_config_uses_default_config_path_under_tmp_path_home(tmp_path):
