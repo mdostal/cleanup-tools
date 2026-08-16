@@ -1,0 +1,111 @@
+id: chat-propose-and-approve
+epic: chat-agent-plan-builder
+title: propose_moves write path + in-chat Approve-these-N action
+status: pending
+complexity: high
+methodology: classic
+depends_on: [chat-queue-and-filesystem-tools]
+
+description: |
+  The epic's headline capability and its highest-risk story: propose_moves, the ONE
+  write tool the agent has. For each model-proposed {src, dest_bucket} pair, computes
+  location via the existing _location_for_src, builds dest using the same
+  _sorted/<bucket>/ convention every pipeline already uses, and constructs group_key as
+  the current 3-segment sort:<location>:<bucket> scheme -- then runs every candidate
+  through the SAME _is_protected_path check _stage_sort_plan/_stage_reclaim_plan already
+  enforce, and validates dest_bucket against a plain bucket-name shape, BEFORE ever
+  calling queue.stage_entries(). Staged entries get source="ai:chat" (distinct from the
+  existing single-shot "ai:anthropic" tag). The chat UI then shows what was just
+  proposed and an "Approve these N" button that POSTs the existing /queue/bulk-approve
+  with an explicit entry_ids list -- the same id-list bulk primitive already built and
+  tested, not a new approval code path.
+
+acceptance_criteria:
+  - "Given the agent proposes moving a file, when propose_moves runs, then the staged QueueEntry's dest/group_key are built via _location_for_src + sort.SORTED_SUBDIR + the 3-segment scheme -- identical in shape to a manually-planned entry for the same bucket."
+  - "Given a proposed src that resolves under a protected path (per _is_protected_path), when propose_moves runs, then that candidate is refused and never staged -- structurally, not merely flagged -- exactly like every other staging path in this app."
+  - "Given a proposed dest_bucket containing a path separator, '..', or an absolute path, when propose_moves runs, then that candidate is rejected before any path is constructed with it, never trusted from the model's raw tool-call arguments."
+  - "Given a successful propose_moves call, when the chat UI renders the turn's result, then it shows the real staged entry_ids with an Approve-these-N button that POSTs /queue/bulk-approve with those exact ids, reusing the existing id-list bulk mechanism unchanged."
+  - "Given entries staged by propose_moves, when viewed on the Dashboard tree or Review Queue, then they render identically to a manually-planned or batch-AI-proposed entry -- same group_key scheme, same badges, only the source tag differs (ai:chat vs ai:anthropic vs manual)."
+
+steps:
+  - id: research
+    description: Re-confirm _is_protected_path's exact signature/import path and _location_for_src's signature (both already built this session) to call unmodified rather than reimplemented.
+    agent: researcher
+  - id: implement
+    description: |
+      Add propose_moves to tools.py with its two mandatory guards. Tag staged entries
+      source="ai:chat". New chat.js UI: render proposed-entries summary + Approve-these-N
+      button posting entry_ids to the existing /queue/bulk-approve.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Dedicated tests for BOTH guards independently (a protected-path candidate is
+      refused; a malformed dest_bucket is rejected) using real fixture paths, not just
+      happy-path proposals. Test that staged entries round-trip through the dashboard
+      tree/History exactly like manual entries. Test the in-chat Approve-these-N button's
+      POST against the real bulk-approve route.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Specifically verify no code path can call queue.stage_entries() from propose_moves without both guards having run first -- this is the single regression that must never ship, mirroring history-view's own "never a working Undo next to an executed entry" review discipline.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_is_protected_path, _location_for_src, _stage_sort_plan (the exact pattern propose_moves' guards and path construction mirror) -- all already built and tested this session."
+    - path: src/cleanup_tools/queue.py
+      purpose: "stage_entries() -- the one landing point for propose_moves' output, same function every other pipeline uses."
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_bulk_target_ids' entry_ids branch -- the exact primitive the in-chat Approve-these-N button reuses, unmodified."
+
+files_to_modify:
+  - file: src/cleanup_tools/chat/tools.py
+    change: Add propose_moves with path construction + two mandatory guards.
+  - file: src/cleanup_tools/ui/static/chat.js
+    change: Render proposed-entries summary + Approve-these-N action.
+
+design_decisions:
+  - decision: propose_moves reuses _is_protected_path and _location_for_src unmodified rather than reimplementing equivalent checks.
+    rationale: A parallel protected-path check could drift from the real one over time; reuse is the only way to guarantee they can never disagree.
+  - decision: In-chat approval reuses the existing entry_ids bulk-approve primitive rather than inventing a per-conversation group_key namespace.
+    rationale: "Zero new approval code path -- design discussion §2.4's explicit decision after considering (and rejecting) a conversation-scoped group_key prefix."
+
+risks:
+  - severity: high
+    description: This is the first AI-initiated write path into the queue -- a bug in either guard (protected-path or dest-bucket validation) has real filesystem-safety consequences once an entry is later approved and executed via --from-queue.
+    mitigation: Guards are the SAME functions other staging paths already use (not reimplemented), plus dedicated adversarial tests per guard, plus the review step's explicit regression callout.
+  - severity: medium
+    description: A model could propose an implausible or nonsensical bucket name that's still syntactically valid per the dest-bucket regex.
+    mitigation: Out of scope for this story's safety guarantees -- an implausible bucket is a quality/UX issue the user catches at approval time (they see the real proposed dest before clicking Approve), not a safety issue; the guards exist to prevent structural harm, not bad taste.
+
+references:
+  - path: .pHive/epics/chat-agent-plan-builder/docs/design-discussion.md
+    relevant_excerpt: |
+      §2.3: propose_moves' path construction and two mandatory guards, checked before
+      stage_entries is ever called... §2.4: in-chat approval maps onto the existing
+      entry_ids bulk primitive exactly as it exists today.
+
+metric:
+  applies: true
+  name: chat.propose_moves_protected_path_bypass_count
+  direction: down
+  unit: count
+  baseline: "N/A (feature doesn't exist yet)"
+  target: "0, always -- this is a correctness invariant, not a trend to improve over time"
+  window: every test run, permanently
+  source:
+    kind: events
+    ref: this story's dedicated protected-path/dest-bucket guard tests
+  verify_at: test
+  owner: tester
+
+manual_verdict:
+  scenario_ref: null

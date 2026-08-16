@@ -1,0 +1,50 @@
+name: chat-agent-plan-builder
+title: In-app chat agent that proposes plans into the existing approval queue
+description: |
+  Epic #2 of the four-part product-owner request (dashboard tree bulk-approve, AI-sort
+  scope, chat agent, semantic clustering) -- a real, in-app conversation with an agent
+  that can read queue/config/filesystem state and propose moves, landing every proposal
+  in the SAME approval queue every other pipeline uses (never a parallel state store,
+  never an execute path of its own). Absorbs epic #3 (user-controlled AI-sort scope)
+  entirely: scope becomes conversation ("sort everything" / "just the leftovers" / "look
+  inside my photos bucket") rather than a fixed three-way UI selector. Builds on
+  guided-sort-and-cluster (group_key scheme, bulk prefix routes, protected paths) and
+  settings-and-transparency (settings shell, ui_mode) -- both shipped this session.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [backend, ai, async-jobs, ui, flask, no-bundler-frontend, security]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    ai: "First multi-turn/tool-calling AI surface in the codebase -- the existing ai/ module is single-call, forced-tool-choice only."
+    async-jobs: "Streaming is delivered by extending the existing jobs.py background-thread/polling pattern, not a new transport."
+    security: "propose_moves is the first AI-initiated write path into the queue -- protected-path reuse and dest-bucket validation are load-bearing, not optional hardening."
+  confidence: high
+  gate_decisions:
+    grill: ran, round 1, 4 findings resolved before user review
+    collaborative_review: solo-orchestrator self-review (no separate spawned personas this run)
+
+stories:
+  - id: chat-engine-and-minimal-ui
+    title: Tool-calling engine + jobs.py streaming extension + minimal chat UI
+    complexity: high
+    depends_on: []
+  - id: chat-queue-and-filesystem-tools
+    title: Read-only queue/filesystem tools (list_queue_summary, scan_location, list_candidate_files)
+    complexity: medium
+    depends_on: [chat-engine-and-minimal-ui]
+  - id: chat-propose-and-approve
+    title: propose_moves write path + in-chat Approve-these-N action
+    complexity: high
+    depends_on: [chat-queue-and-filesystem-tools]
+  - id: chat-cost-control-and-settings
+    title: Turn/file caps, usage indicator, AI Provider settings fields, epic-3 absorption
+    complexity: medium
+    depends_on: [chat-propose-and-approve]
