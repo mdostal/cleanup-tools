@@ -141,38 +141,20 @@ def is_image_entry(entry: queue_module.QueueEntry) -> bool:
     return Path(entry.src).suffix.lower() in IMAGE_EXTENSIONS
 
 
-def _is_ai_source(source: str) -> bool:
-    """Whether a QueueEntry's ``source`` tag marks it as AI-proposed.
-
-    AI-sourced entries carry ``source=f"ai:<provider>"`` (see
-    ``ai.wiring._provider_source``, e.g. ``"ai:anthropic"``). Every other
-    source convention currently in use -- the ``QueueEntry`` default
-    ``"manual"``, and this module's own ``"ui-plan-sort"``/
-    ``"ui-plan-reclaim"`` plan-staging tags -- is a human-triggered source
-    and therefore NOT AI-proposed. This is purely a rendering distinction
-    (see ``queue.html``'s per-entry badge and ``dashboard.html``'s
-    per-group AI count): it never changes approve/reject/undo/bulk
-    behavior, which treats every entry identically regardless of source.
-    """
-    return source.startswith("ai:")
+# Relocated to queue.py (as is_ai_source/entry_size/parse_group_key/
+# group_entries_hierarchical) so chat/tools.py can reuse the exact same
+# aggregate shapes without importing from ui.routes -- see queue.py's
+# group_entries_hierarchical docstring. Kept as module-level aliases here
+# (not re-defined) so every existing call site/import in this module and
+# in tests/test_ui_routes.py keeps working unchanged.
+_is_ai_source = queue_module.is_ai_source
+_entry_size = queue_module.entry_size
+parse_group_key = queue_module.parse_group_key
+_group_entries_hierarchical = queue_module.group_entries_hierarchical
 
 
 def _pending_entries() -> list[queue_module.QueueEntry]:
     return [e for e in _load_entries() if e.status == "pending"]
-
-
-def _entry_size(entry: queue_module.QueueEntry) -> int:
-    """Best-effort size for dashboard totals, from the entry's plan_snapshot.
-
-    Directories and non-file paths don't carry a "size" key in
-    plan_snapshot (see ``queue.build_plan_snapshot``), so those contribute
-    0 rather than raising or requiring a fresh (possibly slow) du call on
-    every dashboard load.
-    """
-    snapshot = entry.plan_snapshot
-    if not isinstance(snapshot, dict):
-        return 0
-    return snapshot.get("size") or 0
 
 
 def _location_for_src(src: str, config: config_module.Config, adapter) -> str:
@@ -260,42 +242,6 @@ def short_path(path: str) -> str:
     return "…/" + "/".join(parts[-2:])
 
 
-def parse_group_key(group_key: str | None) -> dict:
-    """Defensively split a ``group_key`` into ``{"pipeline", "location", "bucket"}``.
-
-    Not a general-purpose parser -- it branches on the known pipeline
-    prefix plus segment count, per the design discussion's simplified
-    (non-migration-proven) parsing rule: the real queue resets before this
-    schema ships, so this only needs to never raise on every format
-    actually ever written, not round-trip arbitrary historical data.
-
-    Formats handled:
-      - None / "" -> no pipeline, "other" location, no bucket.
-      - New (post-epic), 3 segments: ``sort:<location>:<bucket>``,
-        ``reclaim:<location>:<category>``.
-      - New (post-epic), 2 segments: ``corral-screenshots:<location>``.
-      - Old (pre-epic), 2 segments: ``sort:<bucket>``, ``reclaim:<category>``
-        -- no location segment existed yet, so location falls back to "other".
-      - Old (pre-epic), 1 segment: ``corral-screenshots`` -- same fallback.
-      - Anything else unrecognized -> no pipeline, "other" location, no bucket.
-    """
-    if not group_key:
-        return {"pipeline": None, "location": "other", "bucket": None}
-    parts = group_key.split(":")
-    pipeline = parts[0]
-    if pipeline in ("sort", "reclaim"):
-        if len(parts) == 3:
-            return {"pipeline": pipeline, "location": parts[1], "bucket": parts[2]}
-        if len(parts) == 2:
-            return {"pipeline": pipeline, "location": "other", "bucket": parts[1]}
-        return {"pipeline": pipeline, "location": "other", "bucket": None}
-    if pipeline == "corral-screenshots":
-        if len(parts) == 2:
-            return {"pipeline": pipeline, "location": parts[1], "bucket": None}
-        return {"pipeline": pipeline, "location": "other", "bucket": None}
-    return {"pipeline": None, "location": "other", "bucket": None}
-
-
 def _group_entries(entries: list[queue_module.QueueEntry]) -> list[dict]:
     """Group ``entries`` by ``group_key`` (falling back to "ungrouped").
 
@@ -319,70 +265,6 @@ def _group_entries(entries: list[queue_module.QueueEntry]) -> list[dict]:
             group["ai_count"] += 1
 
     return sorted(groups.values(), key=lambda g: g["total_size"], reverse=True)
-
-
-def _group_entries_hierarchical(entries: list[queue_module.QueueEntry]) -> list[dict]:
-    """Aggregate ``entries`` into a location -> bucket tree for the
-    dashboard's collapsible tree view, via ``parse_group_key``.
-
-    Single pass over ``entries``, aggregates only -- never materializes a
-    per-entry list anywhere in the returned structure (repeating the
-    pre-pagination performance mistake at real, thousands-of-entries scale
-    is the single most-cited risk for this story; see the story's own
-    risk list and the prior-art research). Each bucket node is keyed by
-    the entry's literal ``group_key`` (not just the parsed bucket label),
-    so a bucket row's "Approve all"/"Reject all"/"Undo all" action -- an
-    exact match against that literal group_key -- reaches every entry in
-    that row and nothing outside it, even across the rare case of two
-    different literal group_key strings (e.g. an old- and new-format
-    group_key) that happen to parse to the same display label.
-
-    Entries whose ``group_key`` doesn't resolve to a real configured
-    location (``parse_group_key``'s "other" fallback, including entries
-    with no ``group_key`` at all) land under an "other" location branch --
-    it appears in the returned list like any other location whenever at
-    least one such entry exists, never silently dropped.
-
-    Both levels are sorted by descending total_size, largest first --
-    same convention as ``_group_entries``.
-    """
-    locations: dict[str, dict] = {}
-
-    for entry in entries:
-        parsed = parse_group_key(entry.group_key)
-        location = parsed["location"]
-        size = _entry_size(entry)
-
-        loc = locations.setdefault(
-            location,
-            {"location": location, "count": 0, "total_size": 0, "status_counts": {}, "buckets": {}},
-        )
-        loc["count"] += 1
-        loc["total_size"] += size
-        loc["status_counts"][entry.status] = loc["status_counts"].get(entry.status, 0) + 1
-
-        bucket = loc["buckets"].setdefault(
-            entry.group_key,
-            {
-                "group_key": entry.group_key,
-                "label": parsed["bucket"] or parsed["pipeline"] or "ungrouped",
-                "count": 0,
-                "total_size": 0,
-                "status_counts": {},
-                "ai_count": 0,
-            },
-        )
-        bucket["count"] += 1
-        bucket["total_size"] += size
-        bucket["status_counts"][entry.status] = bucket["status_counts"].get(entry.status, 0) + 1
-        if _is_ai_source(entry.source):
-            bucket["ai_count"] += 1
-
-    result = []
-    for loc in locations.values():
-        loc["buckets"] = sorted(loc["buckets"].values(), key=lambda b: b["total_size"], reverse=True)
-        result.append(loc)
-    return sorted(result, key=lambda loc: loc["total_size"], reverse=True)
 
 
 def _status_counts(entries: list[queue_module.QueueEntry]) -> dict[str, int]:

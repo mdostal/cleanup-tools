@@ -1,7 +1,7 @@
 id: chat-queue-and-filesystem-tools
 epic: chat-agent-plan-builder
 title: Read-only queue/filesystem tools (list_queue_summary, scan_location, list_candidate_files)
-status: pending
+status: done
 complexity: medium
 methodology: classic
 depends_on: [chat-engine-and-minimal-ui]

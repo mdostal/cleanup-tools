@@ -1,7 +1,7 @@
 id: chat-engine-and-minimal-ui
 epic: chat-agent-plan-builder
 title: Tool-calling engine + jobs.py streaming extension + minimal chat UI
-status: pending
+status: done
 complexity: high
 methodology: classic
 depends_on: []
