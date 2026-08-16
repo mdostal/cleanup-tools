@@ -10,6 +10,7 @@ from cleanup_tools import config as config_module
 from cleanup_tools import queue as queue_module
 from cleanup_tools.adapters import MacOSAdapter
 from cleanup_tools.chat import tools
+from cleanup_tools.commands.sort import SORTED_SUBDIR
 from cleanup_tools.queue import QueueEntry, build_plan_snapshot
 
 
@@ -199,3 +200,156 @@ def test_scan_location_and_list_candidate_files_schemas_require_location():
 
     files_schema = next(s for s in tools.TOOL_SCHEMAS if s["name"] == "list_candidate_files")
     assert set(files_schema["input_schema"]["required"]) == {"location", "bucket"}
+
+
+# ---------------------------------------------------------------------------
+# propose_moves: the ONE write tool -- stages ordinary pending QueueEntry
+# "move" proposals, never touches a real file. Every candidate must pass
+# BOTH the protected-path guard and the bucket-name-shape guard before
+# queue.stage_entries is ever called for it; a failing candidate is refused
+# (never staged) and reported back with a reason, never silently dropped.
+# ---------------------------------------------------------------------------
+
+
+def _configure_search_root(adapter, root) -> None:
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root)]),
+    )
+
+
+def test_propose_moves_stages_entry_with_dest_and_group_key_matching_manual_shape(adapter, tmp_path):
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    f = root / "report.pdf"
+    f.write_bytes(b"x")
+    _configure_search_root(adapter, root)
+
+    result = tools.propose_moves(adapter, moves=[{"src": str(f), "dest_bucket": "pdfs"}])
+
+    assert result["refused"] == []
+    assert len(result["staged_entry_ids"]) == 1
+
+    entries = queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.id == result["staged_entry_ids"][0]
+    assert entry.action == "move"
+    assert entry.src == str(f.resolve())
+    assert entry.dest == str(root.resolve() / SORTED_SUBDIR / "pdfs" / "report.pdf")
+    assert entry.group_key == f"sort:{root.resolve()}:pdfs"
+    assert entry.source == "ai:chat"
+    assert entry.status == "pending"
+
+
+def test_propose_moves_refuses_protected_path_and_stages_nothing(adapter, tmp_path, monkeypatch):
+    fake_system_root = tmp_path / "FakeSystem"
+    fake_system_root.mkdir()
+    protected_file = fake_system_root / "important.plist"
+    protected_file.write_bytes(b"do-not-touch")
+    monkeypatch.setattr(queue_module, "PROTECTED_PATH_ROOTS", [fake_system_root])
+
+    result = tools.propose_moves(adapter, moves=[{"src": str(protected_file), "dest_bucket": "pdfs"}])
+
+    assert result["staged_entry_ids"] == []
+    assert result["refused"] == [
+        {"src": str(protected_file), "dest_bucket": "pdfs", "reason": "protected_path"}
+    ]
+    assert queue_module.load_queue(adapter, queue_module.default_queue_path(adapter)) == []
+
+
+@pytest.mark.parametrize(
+    "malicious_bucket", ["../../etc", "/etc/passwd", "a/b", "..", "a.b", ""]
+)
+def test_propose_moves_refuses_malformed_dest_bucket_before_any_path_is_built(
+    adapter, tmp_path, malicious_bucket
+):
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    f = root / "report.pdf"
+    f.write_bytes(b"x")
+    _configure_search_root(adapter, root)
+
+    result = tools.propose_moves(adapter, moves=[{"src": str(f), "dest_bucket": malicious_bucket}])
+
+    assert result["staged_entry_ids"] == []
+    assert len(result["refused"]) == 1
+    assert result["refused"][0]["reason"] in ("invalid_bucket_name", "missing_or_invalid_input")
+    assert queue_module.load_queue(adapter, queue_module.default_queue_path(adapter)) == []
+    # Never wrote anything under a bucket dir named after the malicious input.
+    assert not (root / SORTED_SUBDIR).exists()
+
+
+def test_propose_moves_refuses_a_src_that_does_not_exist(adapter, tmp_path):
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    _configure_search_root(adapter, root)
+    missing = root / "ghost.pdf"
+
+    result = tools.propose_moves(adapter, moves=[{"src": str(missing), "dest_bucket": "pdfs"}])
+
+    assert result["staged_entry_ids"] == []
+    assert result["refused"] == [{"src": str(missing), "dest_bucket": "pdfs", "reason": "does_not_exist"}]
+
+
+def test_propose_moves_partial_batch_stages_valid_and_refuses_invalid_independently(
+    adapter, tmp_path, monkeypatch
+):
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    valid_file = root / "report.pdf"
+    valid_file.write_bytes(b"x")
+    _configure_search_root(adapter, root)
+
+    fake_system_root = tmp_path / "FakeSystem"
+    fake_system_root.mkdir()
+    protected_file = fake_system_root / "important.plist"
+    protected_file.write_bytes(b"do-not-touch")
+    monkeypatch.setattr(queue_module, "PROTECTED_PATH_ROOTS", [fake_system_root])
+
+    result = tools.propose_moves(
+        adapter,
+        moves=[
+            {"src": str(valid_file), "dest_bucket": "pdfs"},
+            {"src": str(protected_file), "dest_bucket": "pdfs"},
+            {"src": str(root / "ghost.jpg"), "dest_bucket": "../escape"},
+        ],
+    )
+
+    assert len(result["staged_entry_ids"]) == 1
+    reasons = {r["reason"] for r in result["refused"]}
+    assert reasons == {"protected_path", "invalid_bucket_name"}
+
+    entries = queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
+    assert len(entries) == 1
+    assert entries[0].src == str(valid_file.resolve())
+
+
+def test_propose_moves_never_stages_when_every_candidate_is_refused(adapter, tmp_path, monkeypatch):
+    """Mirrors the review step's core regression check: no code path can
+    reach queue.stage_entries() with an entry that failed either guard.
+    """
+    fake_system_root = tmp_path / "FakeSystem"
+    fake_system_root.mkdir()
+    protected_file = fake_system_root / "important.plist"
+    protected_file.write_bytes(b"do-not-touch")
+    monkeypatch.setattr(queue_module, "PROTECTED_PATH_ROOTS", [fake_system_root])
+
+    result = tools.propose_moves(
+        adapter,
+        moves=[
+            {"src": str(protected_file), "dest_bucket": "pdfs"},
+            {"src": str(protected_file), "dest_bucket": "../escape"},
+        ],
+    )
+
+    assert result["staged_entry_ids"] == []
+    path = queue_module.default_queue_path(adapter)
+    assert not path.exists() or queue_module.load_queue(adapter, path) == []
+
+
+def test_propose_moves_schema_requires_moves_with_src_and_dest_bucket():
+    schema = next(s for s in tools.TOOL_SCHEMAS if s["name"] == "propose_moves")
+    assert schema["input_schema"]["required"] == ["moves"]
+    item_schema = schema["input_schema"]["properties"]["moves"]["items"]
+    assert set(item_schema["required"]) == {"src", "dest_bucket"}

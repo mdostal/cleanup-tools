@@ -183,6 +183,52 @@ def group_entries_hierarchical(entries: list[QueueEntry]) -> list[dict]:
     return sorted(result, key=lambda loc: loc["total_size"], reverse=True)
 
 
+# Hard-coded macOS system locations that must NEVER be staged as a move or
+# delete candidate, regardless of what a user configures search_roots to
+# (a typo'd or overly broad root -- e.g. "/" -- must not turn into a plan
+# to reorganize/delete system files). Modeled directly on DaisyDisk's
+# Collector pattern (see the prior-art research): these are refused
+# structurally, at the staging layer, in every staging path that constructs
+# a QueueEntry (ui/routes.py's _stage_sort_plan/_stage_reclaim_plan/
+# _stage_corral_screenshots_plan, chat/tools.py's propose_moves) -- never
+# merely flagged-but-still-queued the way reclaim.py's user-configurable
+# master_paths are (see MASTER_PATH_REFUSAL_REASON in reclaim.py, a related
+# but distinct mechanism: opt-in and per-project, not this always-on
+# system-path floor).
+#
+# Relocated here (from ui/routes.py, which still exposes it as
+# PROTECTED_PATH_ROOTS/_is_protected_path for backward compatibility) so
+# chat/tools.py's propose_moves can reuse this exact guard, unmodified,
+# without chat/ importing from ui.routes -- see queue.group_entries_hierarchical's
+# docstring for the same reasoning applied elsewhere in this epic. This is
+# the epic's core safety property: a chat-proposed write can never disagree
+# with what every other staging path already refuses.
+PROTECTED_PATH_ROOTS = [
+    Path("/System"),
+    Path("/Library"),
+    Path("/bin"),
+    Path("/sbin"),
+    Path("/usr"),
+    Path("/Applications"),
+]
+
+
+def is_protected_path(path: str | Path, adapter: OSAdapter) -> bool:
+    """True if ``path`` is a hard-blocked protected system location, or
+    falls under one -- including the user's home directory itself (never a
+    subdirectory *inside* home, which is exactly what this whole app
+    exists to organize).
+
+    Symlinks are resolved before comparison (``Path.resolve()``) so a
+    symlinked path can't dodge the check by pointing at a protected
+    location through an unresolved alias.
+    """
+    resolved = Path(path).resolve()
+    if resolved == adapter.resolve_home().resolve():
+        return True
+    return any(resolved == root or root in resolved.parents for root in PROTECTED_PATH_ROOTS)
+
+
 QUEUE_FILENAME = "approval_queue.yaml"
 
 

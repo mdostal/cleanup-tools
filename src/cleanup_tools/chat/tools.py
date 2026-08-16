@@ -19,6 +19,7 @@ to where that helper itself now lives.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -32,6 +33,12 @@ from ..commands import sort as sort_module
 # see list_candidate_files' docstring and the design discussion's "flat
 # context cost regardless of queue size" principle.
 _FILE_LIST_CAP = 50
+
+# propose_moves' second mandatory guard: a bare bucket-name identifier only
+# -- no path separator, no "..", no leading "/". This is checked BEFORE
+# dest_bucket is ever interpolated into a Path, so a model-supplied value
+# like "../../etc" or "/System" can never reach path construction at all.
+_BUCKET_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # Every tool's Anthropic tool-use schema, in the shape the Messages API's
 # `tools=[...]` parameter expects -- mirrors ai/anthropic_provider.py's
@@ -106,6 +113,47 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": ["location", "bucket"],
+        },
+    },
+    {
+        "name": "propose_moves",
+        "description": (
+            "Stage one or more proposed file moves as ordinary pending queue "
+            "entries for the user to review -- this is the ONLY tool that "
+            "writes anything, and it never moves or deletes a real file "
+            "itself. Every candidate is checked against the same protected-"
+            "path and bucket-name guards every other part of this app "
+            "already uses; a candidate that fails either guard is refused "
+            "(never staged) and reported back with a reason. Staged entries "
+            "show up in the Review Queue / dashboard exactly like any other "
+            "proposal, waiting for the user to click Approve."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "moves": {
+                    "type": "array",
+                    "description": "One or more {src, dest_bucket} pairs to propose.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "src": {
+                                "type": "string",
+                                "description": "Absolute path to the real file to propose moving.",
+                            },
+                            "dest_bucket": {
+                                "type": "string",
+                                "description": (
+                                    "Bare bucket name (e.g. 'photos', 'pdfs') -- no path "
+                                    "separators, no '..'."
+                                ),
+                            },
+                        },
+                        "required": ["src", "dest_bucket"],
+                    },
+                },
+            },
+            "required": ["moves"],
         },
     },
 ]
@@ -185,6 +233,79 @@ def list_candidate_files(adapter: OSAdapter, location: str, bucket: str, **_kwar
     }
 
 
+def propose_moves(adapter: OSAdapter, moves: list[dict], **_kwargs: Any) -> dict:
+    """The one write tool this agent has: stage proposed ``{src, dest_bucket}``
+    pairs as ordinary pending ``QueueEntry`` "move" proposals. Never moves,
+    deletes, or executes anything itself -- see this module's docstring.
+
+    Every candidate passes two mandatory guards, in this order, BEFORE
+    ``queue.stage_entries`` is ever called for it:
+
+    1. A bare bucket-name shape check on ``dest_bucket`` (``_BUCKET_NAME_RE``)
+       -- rejected before ``dest_bucket`` is ever interpolated into a
+       ``Path``, since it is untrusted, model-supplied input. This alone
+       blocks path separators, ``".."``, and absolute paths.
+    2. ``queue.is_protected_path`` on ``src`` -- the exact same hard-blocked
+       system-path check every other staging path in this app already
+       enforces (see ``queue.PROTECTED_PATH_ROOTS``'s docstring). Reused
+       unmodified, not reimplemented, so this write path can never disagree
+       with any other.
+
+    A candidate missing/malformed input, or pointing at a src that doesn't
+    exist, is refused the same way (never staged). Every refusal is
+    reported back in ``refused`` with a ``reason`` -- never a silent drop,
+    so the agent's response to the user can say what happened and why.
+
+    ``dest``/``group_key`` are built identically to every other staging
+    path (``config.location_for_src`` + ``sort.SORTED_SUBDIR`` + the
+    3-segment ``sort:<location>:<bucket>`` scheme -- see
+    ``config.location_for_src``'s docstring) so a chat-proposed entry is
+    structurally indistinguishable from a manually-planned one, except its
+    ``source`` tag: ``"ai:chat"`` (distinct from the existing single-shot
+    batch proposal's ``"ai:anthropic"``), purely for display -- it never
+    changes approve/reject/undo/bulk behavior.
+    """
+    config = config_module.load_config(adapter)
+    queue_path = queue_module.default_queue_path(adapter)
+
+    new_entries: list[queue_module.QueueEntry] = []
+    refused: list[dict] = []
+
+    for move in moves:
+        src = move.get("src")
+        dest_bucket = move.get("dest_bucket")
+
+        if not isinstance(src, str) or not src or not isinstance(dest_bucket, str) or not dest_bucket:
+            refused.append({"src": src, "dest_bucket": dest_bucket, "reason": "missing_or_invalid_input"})
+            continue
+        if not _BUCKET_NAME_RE.match(dest_bucket):
+            refused.append({"src": src, "dest_bucket": dest_bucket, "reason": "invalid_bucket_name"})
+            continue
+        if queue_module.is_protected_path(src, adapter):
+            refused.append({"src": src, "dest_bucket": dest_bucket, "reason": "protected_path"})
+            continue
+        if not Path(src).exists():
+            refused.append({"src": src, "dest_bucket": dest_bucket, "reason": "does_not_exist"})
+            continue
+
+        resolved_src = Path(src).resolve()
+        location = config_module.location_for_src(src, config, adapter)
+        dest = Path(location) / sort_module.SORTED_SUBDIR / dest_bucket / resolved_src.name
+        new_entries.append(
+            queue_module.QueueEntry(
+                action="move",
+                src=str(resolved_src),
+                dest=str(dest),
+                source="ai:chat",
+                group_key=f"sort:{location}:{dest_bucket}",
+                plan_snapshot=queue_module.build_plan_snapshot(resolved_src),
+            )
+        )
+
+    staged = queue_module.stage_entries(adapter, new_entries, queue_path) if new_entries else []
+    return {"staged_entry_ids": [entry.id for entry in staged], "refused": refused}
+
+
 # Dispatch table the engine uses to call a tool by the name the model chose.
 # **kwargs always includes every input_schema property the model supplied
 # (validated against the schema by the API itself before this ever runs) --
@@ -195,4 +316,5 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
     "list_queue_summary": list_queue_summary,
     "scan_location": scan_location,
     "list_candidate_files": list_candidate_files,
+    "propose_moves": propose_moves,
 }

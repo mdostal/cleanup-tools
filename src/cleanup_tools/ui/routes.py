@@ -66,41 +66,17 @@ QUEUE_BUSY_MESSAGE = "Queue is busy -- try again in a moment."
 # even for an already-small source image.
 THUMBNAIL_MAX_PX = 256
 
-# Hard-coded macOS system locations that must NEVER be staged as a move or
-# delete candidate, regardless of what a user configures search_roots to
-# (a typo'd or overly broad root -- e.g. "/" -- must not turn into a plan
-# to reorganize/delete system files). Modeled directly on DaisyDisk's
-# Collector pattern (see the prior-art research): these are refused
-# structurally, at the staging layer, in every one of _stage_sort_plan/
-# _stage_reclaim_plan/_stage_corral_screenshots_plan below -- never merely
-# flagged-but-still-queued the way reclaim.py's user-configurable
-# master_paths are (see MASTER_PATH_REFUSAL_REASON in reclaim.py, a
-# related but distinct mechanism: opt-in and per-project, not this
-# always-on system-path floor).
-PROTECTED_PATH_ROOTS = [
-    Path("/System"),
-    Path("/Library"),
-    Path("/bin"),
-    Path("/sbin"),
-    Path("/usr"),
-    Path("/Applications"),
-]
-
-
-def _is_protected_path(path: str | Path, adapter) -> bool:
-    """True if ``path`` is a hard-blocked protected system location, or
-    falls under one -- including the user's home directory itself (never a
-    subdirectory *inside* home, which is exactly what this whole app
-    exists to organize).
-
-    Symlinks are resolved before comparison (``Path.resolve()``) so a
-    symlinked path can't dodge the check by pointing at a protected
-    location through an unresolved alias.
-    """
-    resolved = Path(path).resolve()
-    if resolved == adapter.resolve_home().resolve():
-        return True
-    return any(resolved == root or root in resolved.parents for root in PROTECTED_PATH_ROOTS)
+# Relocated to queue.py (as PROTECTED_PATH_ROOTS/is_protected_path) so
+# chat/tools.py's propose_moves can reuse this exact guard without chat/
+# importing from ui.routes -- see queue.py's PROTECTED_PATH_ROOTS docstring.
+# Kept as module-level aliases here (not re-defined) so every existing call
+# site/import in this module and in tests/test_ui_routes.py keeps working
+# unchanged -- including monkeypatching: tests that need to override the
+# protected roots now patch queue_module.PROTECTED_PATH_ROOTS (the real
+# module ``_is_protected_path``/``is_protected_path`` reads from), not this
+# alias.
+PROTECTED_PATH_ROOTS = queue_module.PROTECTED_PATH_ROOTS
+_is_protected_path = queue_module.is_protected_path
 
 
 # ---------------------------------------------------------------------------
@@ -157,35 +133,11 @@ def _pending_entries() -> list[queue_module.QueueEntry]:
     return [e for e in _load_entries() if e.status == "pending"]
 
 
-def _location_for_src(src: str, config: config_module.Config, adapter) -> str:
-    """The configured/selected location ``src`` falls under, or "other".
-
-    Any-and-all configured locations (``config.search_roots``), never a
-    fixed downloads/desktop/documents enum -- per guided-sort-and-cluster's
-    design discussion, which explicitly rejected a fixed enum after
-    product-owner correction ("it should be able to sort ANY and all
-    locations"). Falls back to the standard-dir trio (downloads/desktop/
-    documents) only when no ``search_roots`` are configured at all, so a
-    fresh install's implicit defaults still get a meaningful location
-    rather than everything landing in "other". The location segment is the
-    resolved root's absolute path itself, not a slug -- unambiguous, and
-    the tree UI (a later story) can prettify it for display (e.g. ``~``
-    substitution) without needing a separate naming scheme here.
-    """
-    resolved_src = Path(src).resolve()
-    roots = (
-        [Path(r).resolve() for r in config.search_roots]
-        if config.search_roots
-        else [
-            adapter.resolve_standard_dir("downloads"),
-            adapter.resolve_standard_dir("desktop"),
-            adapter.resolve_standard_dir("documents"),
-        ]
-    )
-    for root in roots:
-        if resolved_src == root or root in resolved_src.parents:
-            return str(root)
-    return "other"
+# Relocated to config.py (alongside configured_locations, for the same
+# reason -- see that function's docstring) so chat/tools.py's propose_moves
+# can build a proposed entry's dest/group_key identically to every other
+# staging path, without chat/ importing from ui.routes.
+_location_for_src = config_module.location_for_src
 
 
 BUCKET_ICONS = {

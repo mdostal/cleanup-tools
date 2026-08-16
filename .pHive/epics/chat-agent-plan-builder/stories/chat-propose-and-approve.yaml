@@ -1,7 +1,7 @@
 id: chat-propose-and-approve
 epic: chat-agent-plan-builder
 title: propose_moves write path + in-chat Approve-these-N action
-status: pending
+status: done
 complexity: high
 methodology: classic
 depends_on: [chat-queue-and-filesystem-tools]

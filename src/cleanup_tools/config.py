@@ -159,6 +159,41 @@ def configured_locations(config: Config, adapter: OSAdapter) -> list[str]:
     ]
 
 
+def location_for_src(src: str, config: Config, adapter: OSAdapter) -> str:
+    """The configured/selected location ``src`` falls under, or "other".
+
+    Any-and-all configured locations (``config.search_roots``), never a
+    fixed downloads/desktop/documents enum -- per guided-sort-and-cluster's
+    design discussion, which explicitly rejected a fixed enum after
+    product-owner correction ("it should be able to sort ANY and all
+    locations"). Falls back to the standard-dir trio (downloads/desktop/
+    documents) only when no ``search_roots`` are configured at all, so a
+    fresh install's implicit defaults still get a meaningful location
+    rather than everything landing in "other". The location segment is the
+    resolved root's absolute path itself, not a slug -- unambiguous.
+
+    Relocated here (from ``ui/routes.py``, alongside ``configured_locations``
+    for the same reason -- see that function's docstring) so
+    ``chat/tools.py``'s ``propose_moves`` can build a proposed entry's
+    ``dest``/``group_key`` identically to every other staging path, without
+    ``chat/`` importing from ``ui.routes``.
+    """
+    resolved_src = Path(src).resolve()
+    roots = (
+        [Path(r).resolve() for r in config.search_roots]
+        if config.search_roots
+        else [
+            adapter.resolve_standard_dir("downloads"),
+            adapter.resolve_standard_dir("desktop"),
+            adapter.resolve_standard_dir("documents"),
+        ]
+    )
+    for root in roots:
+        if resolved_src == root or root in resolved_src.parents:
+            return str(root)
+    return "other"
+
+
 DEFAULT_CONFIG = Config(bucket_rules=DEFAULT_BUCKET_RULES)
 
 CONFIG_FILENAME = "config.yaml"

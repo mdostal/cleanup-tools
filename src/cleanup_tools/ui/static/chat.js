@@ -50,6 +50,54 @@
       sendButton.disabled = !enabled;
     }
 
+    // If a turn's propose_moves tool actually staged anything, show an
+    // "Approve these N" action right under the assistant's reply -- POSTs
+    // the exact same JSON entry_ids shape /queue/bulk-approve already
+    // accepts (queue.html's own bulk-action bar uses this same route),
+    // never a new approval code path. See chat-propose-and-approve's
+    // design discussion §2.4.
+    function addProposalActions(entryIds) {
+      var wrap = document.createElement("div");
+      wrap.className = "chat-bubble chat-proposal-actions";
+
+      var label = document.createElement("span");
+      label.textContent =
+        entryIds.length + (entryIds.length === 1 ? " move proposed. " : " moves proposed. ");
+      wrap.appendChild(label);
+
+      var approveButton = document.createElement("button");
+      approveButton.type = "button";
+      approveButton.textContent = "Approve these " + entryIds.length;
+      approveButton.setAttribute("data-intent", "primary");
+      wrap.appendChild(approveButton);
+
+      approveButton.addEventListener("click", function () {
+        approveButton.disabled = true;
+        fetch("/queue/bulk-approve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ entry_ids: entryIds }),
+        })
+          .then(function (resp) {
+            if (!resp.ok) {
+              throw new Error("approve failed (HTTP " + resp.status + ")");
+            }
+            return resp.json();
+          })
+          .then(function (payload) {
+            label.textContent = "Approved " + payload.count + ".";
+            approveButton.remove();
+          })
+          .catch(function (err) {
+            approveButton.disabled = false;
+            setStatus(err.message, true);
+          });
+      });
+
+      transcript.appendChild(wrap);
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
     // Create the conversation as soon as the page is ready -- a fresh
     // conversation_id per page load, matching the "in-memory, ephemeral"
     // design (chat/state.py never persists across a process restart, so
@@ -90,6 +138,9 @@
           if (payload.status === "done") {
             assistantBubble.textContent = payload.result.text;
             transcript.scrollTop = transcript.scrollHeight;
+            if (payload.result.staged_entry_ids && payload.result.staged_entry_ids.length > 0) {
+              addProposalActions(payload.result.staged_entry_ids);
+            }
             setStatus("");
             setInputEnabled(true);
             input.focus();

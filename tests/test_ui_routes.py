@@ -306,16 +306,17 @@ def test_is_protected_path_false_for_ordinary_paths_inside_home(adapter, home):
 def test_plan_sort_never_stages_a_protected_path(adapter, client, home, monkeypatch):
     """A misconfigured search_root pointing at a protected system location
     must never produce a queue entry -- refused structurally at staging
-    time, not merely hidden in the UI. Monkeypatches PROTECTED_PATH_ROOTS
-    to include this test's own tmp-scoped "system" dir, since a real
-    /System doesn't exist (or isn't writable) on the test machine.
+    time, not merely hidden in the UI. Monkeypatches queue_module's
+    PROTECTED_PATH_ROOTS (the real source of truth is_protected_path reads
+    from -- see queue.py's docstring; routes.PROTECTED_PATH_ROOTS is now
+    just an alias to it) to include this test's own tmp-scoped "system"
+    dir, since a real /System doesn't exist (or isn't writable) on the test
+    machine.
     """
-    import cleanup_tools.ui.routes as routes_module
-
     fake_system_root = home / "FakeSystem"
     fake_system_root.mkdir()
     (fake_system_root / "important.plist").write_bytes(b"do-not-touch")
-    monkeypatch.setattr(routes_module, "PROTECTED_PATH_ROOTS", [fake_system_root])
+    monkeypatch.setattr(queue_module, "PROTECTED_PATH_ROOTS", [fake_system_root])
 
     config_module.save_config(
         adapter,
@@ -3259,3 +3260,61 @@ def _poll_chat_job_until_terminal(client, job_id: str, timeout: float = 5.0) -> 
             return payload
         time.sleep(0.01)
     raise AssertionError(f"chat job {job_id} did not reach a terminal status within {timeout}s: {payload}")
+
+
+# ---------------------------------------------------------------------------
+# 17. Chat propose_moves + in-chat approval: a chat turn that actually calls
+#     the real propose_moves tool stages real pending entries, and the
+#     "Approve these N" action is nothing but a POST of those exact ids to
+#     the existing /queue/bulk-approve route -- the same primitive the
+#     queue's own bulk-action bar already uses, unmodified.
+# ---------------------------------------------------------------------------
+
+
+def test_chat_propose_moves_end_to_end_then_bulk_approve_via_existing_route(
+    adapter, client, tmp_path, monkeypatch
+):
+    import cleanup_tools.ui.routes as routes_module
+    from cleanup_tools.chat import tools as chat_tools
+
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    f = root / "report.pdf"
+    f.write_bytes(b"x")
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root)]),
+    )
+
+    def fake_run_turn(client, adapter, history, user_message, *, partial_callback=None, **_kwargs):
+        # Exercises the REAL propose_moves tool (not a stub) against the
+        # real adapter/queue -- this is what proves the chat route wiring,
+        # propose_moves' guards, and /queue/bulk-approve all fit together
+        # end to end, not just each in isolation.
+        result = chat_tools.propose_moves(adapter, moves=[{"src": str(f), "dest_bucket": "pdfs"}])
+        return {"text": "Proposed moving report.pdf to pdfs.", "staged_entry_ids": result["staged_entry_ids"]}
+
+    monkeypatch.setattr(routes_module, "get_raw_client", lambda **_kwargs: object())
+    monkeypatch.setattr(routes_module.chat_engine, "run_turn", fake_run_turn)
+
+    conversation_id = client.post("/chat/new").get_json()["conversation_id"]
+    resp = client.post(f"/chat/{conversation_id}/message", json={"message": "sort my downloads"})
+    job_id = resp.get_json()["job_id"]
+
+    payload = _poll_chat_job_until_terminal(client, job_id)
+    assert payload["status"] == "done"
+    staged_ids = payload["result"]["staged_entry_ids"]
+    assert len(staged_ids) == 1
+
+    entries = _reload_queue(adapter)
+    assert len(entries) == 1
+    assert entries[0].id == staged_ids[0]
+    assert entries[0].status == "pending"
+    assert entries[0].source == "ai:chat"
+
+    approve_resp = client.post("/queue/bulk-approve", json={"entry_ids": staged_ids})
+    assert approve_resp.status_code == 200
+    assert approve_resp.get_json()["updated_ids"] == staged_ids
+
+    reloaded = _reload_queue(adapter)
+    assert reloaded[0].status == "approved"
