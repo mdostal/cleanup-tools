@@ -10,11 +10,14 @@ entry is just an ordinary pending ``QueueEntry``, and only a human clicking
 Approve (in the queue, on the dashboard tree, or via the chat's own
 Approve-these-N action) can make anything actually happen on disk.
 
-This module depends only on ``config``/``queue``/``commands``/``adapters``
--- never on ``ui.routes`` -- so ``ui/routes.py`` can safely import FROM this
-package (to wire up the new chat routes) without a circular import; see
-``config.configured_locations``'s docstring for the same reasoning applied
-to where that helper itself now lives.
+This module depends only on ``config``/``queue``/``commands``/``adapters``/
+``chat.state`` -- never on ``ui.routes`` -- so ``ui/routes.py`` can safely
+import FROM this package (to wire up the new chat routes) without a
+circular import; see ``config.configured_locations``'s docstring for the
+same reasoning applied to where that helper itself now lives.
+``chat.state`` is a safe sibling dependency here (it doesn't import this
+module or ``chat.engine``), used only to read/update a conversation's
+running staged-file total for :func:`propose_moves`'s per-conversation cap.
 """
 
 from __future__ import annotations
@@ -27,12 +30,20 @@ from .. import config as config_module
 from .. import queue as queue_module
 from ..adapters.base import OSAdapter
 from ..commands import sort as sort_module
+from . import state as chat_state
 
 # Every list-of-files tool caps its output at this many filenames per call,
 # with an explicit truncated/total_count signal rather than a silent cut --
 # see list_candidate_files' docstring and the design discussion's "flat
 # context cost regardless of queue size" principle.
 _FILE_LIST_CAP = 50
+
+# propose_moves' hard, per-conversation ceiling on TOTAL files staged across
+# every propose_moves call in a conversation's lifetime -- stops one runaway
+# turn (or several) from staging an enormous plan with no review checkpoint
+# (design discussion §2.6). Unlike chat_turn_cap, this is NOT a Config field
+# / not user-configurable -- a fixed safety ceiling, not a preference.
+_CONVERSATION_FILE_CAP = 500
 
 # propose_moves' second mandatory guard: a bare bucket-name identifier only
 # -- no path separator, no "..", no leading "/". This is checked BEFORE
@@ -233,7 +244,9 @@ def list_candidate_files(adapter: OSAdapter, location: str, bucket: str, **_kwar
     }
 
 
-def propose_moves(adapter: OSAdapter, moves: list[dict], **_kwargs: Any) -> dict:
+def propose_moves(
+    adapter: OSAdapter, moves: list[dict], conversation_id: str | None = None, **_kwargs: Any
+) -> dict:
     """The one write tool this agent has: stage proposed ``{src, dest_bucket}``
     pairs as ordinary pending ``QueueEntry`` "move" proposals. Never moves,
     deletes, or executes anything itself -- see this module's docstring.
@@ -264,11 +277,24 @@ def propose_moves(adapter: OSAdapter, moves: list[dict], **_kwargs: Any) -> dict
     ``source`` tag: ``"ai:chat"`` (distinct from the existing single-shot
     batch proposal's ``"ai:anthropic"``), purely for display -- it never
     changes approve/reject/undo/bulk behavior.
+
+    ``conversation_id`` -- injected by the engine (never something the
+    model supplies as tool-call input; it isn't in this tool's
+    ``input_schema``) -- is used to enforce ``_CONVERSATION_FILE_CAP``: once
+    every candidate has passed both guards above, only as many of the
+    survivors as fit in the conversation's REMAINING budget are actually
+    staged (the rest are refused with reason ``"conversation_file_cap_reached"``)
+    -- a pre-call gate exactly like ``ai/wiring.py``'s own cap discipline
+    (slice BEFORE calling ``stage_entries``, never call-then-discard). If
+    ``conversation_id`` is ``None`` or unknown (e.g. a direct/test call),
+    the cap is enforced against a fresh ``_CONVERSATION_FILE_CAP`` budget
+    with no persisted running total.
     """
     config = config_module.load_config(adapter)
     queue_path = queue_module.default_queue_path(adapter)
 
-    new_entries: list[queue_module.QueueEntry] = []
+    candidates: list[queue_module.QueueEntry] = []
+    candidate_moves: list[tuple[str, str]] = []
     refused: list[dict] = []
 
     for move in moves:
@@ -291,7 +317,7 @@ def propose_moves(adapter: OSAdapter, moves: list[dict], **_kwargs: Any) -> dict
         resolved_src = Path(src).resolve()
         location = config_module.location_for_src(src, config, adapter)
         dest = Path(location) / sort_module.SORTED_SUBDIR / dest_bucket / resolved_src.name
-        new_entries.append(
+        candidates.append(
             queue_module.QueueEntry(
                 action="move",
                 src=str(resolved_src),
@@ -301,8 +327,24 @@ def propose_moves(adapter: OSAdapter, moves: list[dict], **_kwargs: Any) -> dict
                 plan_snapshot=queue_module.build_plan_snapshot(resolved_src),
             )
         )
+        candidate_moves.append((src, dest_bucket))
 
-    staged = queue_module.stage_entries(adapter, new_entries, queue_path) if new_entries else []
+    remaining_budget = _CONVERSATION_FILE_CAP
+    if conversation_id is not None:
+        conv = chat_state.get_conversation(conversation_id)
+        if conv is not None:
+            remaining_budget = max(0, _CONVERSATION_FILE_CAP - conv.staged_file_count)
+
+    to_stage = candidates[:remaining_budget]
+    for over_cap_src, over_cap_bucket in candidate_moves[len(to_stage) :]:
+        refused.append(
+            {"src": over_cap_src, "dest_bucket": over_cap_bucket, "reason": "conversation_file_cap_reached"}
+        )
+
+    staged = queue_module.stage_entries(adapter, to_stage, queue_path) if to_stage else []
+    if conversation_id is not None and staged:
+        chat_state.record_staged_files(conversation_id, len(staged))
+
     return {"staged_entry_ids": [entry.id for entry in staged], "refused": refused}
 
 

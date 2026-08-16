@@ -1,7 +1,7 @@
 id: chat-cost-control-and-settings
 epic: chat-agent-plan-builder
 title: Turn/file caps, usage indicator, AI Provider settings fields, epic-3 absorption
-status: pending
+status: done
 complexity: medium
 methodology: classic
 depends_on: [chat-propose-and-approve]

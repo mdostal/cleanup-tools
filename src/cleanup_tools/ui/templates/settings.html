@@ -218,6 +218,34 @@
         "Propose with AI".
       </p>
       {% endif %}
+
+      <h3>Chat</h3>
+      <p class="meta">
+        The in-app <a href="{{ url_for('ui.chat_view') }}">Chat</a> agent uses the same credentials
+        above. These two settings only affect it.
+      </p>
+      <form method="post" action="{{ url_for('ui.set_chat_options') }}" class="settings-add-form">
+        <label>
+          Turn cap per conversation
+          <input
+            type="number"
+            name="chat_turn_cap"
+            min="1"
+            step="1"
+            value="{{ current_chat_turn_cap }}"
+            required
+          >
+        </label>
+        <label>
+          Model
+          <input type="text" name="chat_model" value="{{ current_chat_model }}" required>
+        </label>
+        <button type="submit" data-intent="primary">Save</button>
+      </form>
+      <p class="meta heading-detail">
+        A conversation refuses to start a new turn once it reaches this many -- the turn already in
+        progress always finishes. Defaults to the same cheap/fast model "Propose with AI" uses.
+      </p>
     </section>
 
     <section id="advanced" class="settings-pane" aria-label="Advanced">

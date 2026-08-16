@@ -23,8 +23,10 @@ from cleanup_tools.adapters import MacOSAdapter
 from cleanup_tools import config as config_module
 from cleanup_tools import queue as queue_module
 from cleanup_tools.queue import QueueEntry, build_plan_snapshot
+from cleanup_tools.ui import jobs
 from cleanup_tools.ui.app import create_app
 from cleanup_tools.ui.routes import (
+    CHAT_TURN_CAP_MESSAGE,
     DEFAULT_ICON_CHOICE,
     ICON_CHOICES,
     PROTECTED_PATH_ROOTS,
@@ -3318,3 +3320,125 @@ def test_chat_propose_moves_end_to_end_then_bulk_approve_via_existing_route(
 
     reloaded = _reload_queue(adapter)
     assert reloaded[0].status == "approved"
+
+
+# ---------------------------------------------------------------------------
+# 18. Chat cost control: chat_turn_cap is a pre-call gate on new turns
+#     (checked before jobs.start_job, never after), and chat_turn_cap/
+#     chat_model are persisted via the AI Provider settings pane.
+# ---------------------------------------------------------------------------
+
+
+def test_chat_new_response_includes_the_configured_turn_cap(adapter, client):
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, chat_turn_cap=7),
+    )
+
+    resp = client.post("/chat/new")
+
+    assert resp.get_json()["turn_cap"] == 7
+
+
+def test_chat_message_refuses_before_starting_a_new_turn_once_at_the_cap(adapter, client, monkeypatch):
+    """The turn cap is a PRE-CALL gate -- this asserts the job is never
+    even started once the conversation is at its cap, not merely that its
+    result gets discarded afterward.
+    """
+    import cleanup_tools.ui.routes as routes_module
+
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, chat_turn_cap=1),
+    )
+
+    calls = []
+    real_start_job = jobs.start_job
+
+    def counting_start_job(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_start_job(*args, **kwargs)
+
+    monkeypatch.setattr(routes_module.jobs, "start_job", counting_start_job)
+    _stub_chat_engine(monkeypatch, final_text="ok")
+
+    conversation_id = client.post("/chat/new").get_json()["conversation_id"]
+
+    # First turn: under the cap (turn_count starts at 0, cap is 1) -- allowed.
+    resp1 = client.post(f"/chat/{conversation_id}/message", json={"message": "first"})
+    assert resp1.status_code == 200
+    _poll_chat_job_until_terminal(client, resp1.get_json()["job_id"])
+    assert len(calls) == 1
+
+    # Second turn: now at the cap (turn_count == 1 == cap) -- refused
+    # BEFORE a new job starts.
+    resp2 = client.post(f"/chat/{conversation_id}/message", json={"message": "second"})
+    assert resp2.status_code == 409
+    assert resp2.get_json()["error"] == CHAT_TURN_CAP_MESSAGE
+    assert len(calls) == 1  # unchanged -- no second job was ever started
+
+
+def test_chat_message_under_the_cap_is_allowed(adapter, client, monkeypatch):
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, chat_turn_cap=20),
+    )
+    _stub_chat_engine(monkeypatch)
+
+    conversation_id = client.post("/chat/new").get_json()["conversation_id"]
+    resp = client.post(f"/chat/{conversation_id}/message", json={"message": "hi"})
+
+    assert resp.status_code == 200
+    assert "job_id" in resp.get_json()
+
+
+def test_ai_provider_pane_shows_current_chat_turn_cap_and_model(adapter, client):
+    config_module.save_config(
+        adapter,
+        config_module.Config(
+            bucket_rules=config_module.DEFAULT_BUCKET_RULES, chat_turn_cap=9, chat_model="claude-sonnet-5"
+        ),
+    )
+
+    html = client.get("/settings").data.decode()
+
+    assert 'name="chat_turn_cap"' in html
+    assert 'value="9"' in html
+    assert 'name="chat_model"' in html
+    assert 'value="claude-sonnet-5"' in html
+
+
+def test_set_chat_options_persists_turn_cap_and_model(adapter, client):
+    resp = client.post(
+        "/settings/chat-options", data={"chat_turn_cap": "15", "chat_model": "claude-sonnet-5"}
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("#ai-provider")
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.chat_turn_cap == 15
+    assert reloaded.chat_model == "claude-sonnet-5"
+
+
+def test_set_chat_options_rejects_non_numeric_turn_cap_and_does_not_persist(adapter, client):
+    resp = client.post("/settings/chat-options", data={"chat_turn_cap": "not-a-number", "chat_model": "x"})
+    assert resp.status_code == 400
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.chat_turn_cap == 20  # default, unchanged
+
+
+def test_set_chat_options_rejects_zero_or_negative_turn_cap(adapter, client):
+    resp = client.post("/settings/chat-options", data={"chat_turn_cap": "0", "chat_model": "x"})
+    assert resp.status_code == 400
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.chat_turn_cap == 20
+
+
+def test_set_chat_options_rejects_blank_model_and_does_not_persist(adapter, client):
+    resp = client.post("/settings/chat-options", data={"chat_turn_cap": "10", "chat_model": "  "})
+    assert resp.status_code == 400
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.chat_model == "claude-haiku-4-5"  # default, unchanged

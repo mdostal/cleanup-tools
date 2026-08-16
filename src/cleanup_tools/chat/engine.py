@@ -82,6 +82,7 @@ def run_turn(
     history: list[dict[str, str]],
     user_message: str,
     *,
+    conversation_id: str | None = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     partial_callback: Callable[[str], None] | None = None,
@@ -96,9 +97,16 @@ def run_turn(
     happens between two rounds of text (there is typically little or no
     text before the first tool call, but this holds regardless).
 
+    ``conversation_id``, if given, is passed through to every tool call as
+    an extra ``conversation_id=`` keyword -- ambient context injected by
+    THIS function, never something the model supplies (it isn't part of
+    any tool's ``input_schema``). Every existing tool function accepts
+    ``**_kwargs`` and silently ignores it; only ``propose_moves`` actually
+    uses it, to enforce its per-conversation file-proposal cap (see that
+    function's docstring). This mirrors how ``adapter`` is already ambient
+    context every tool receives, not model-supplied input.
+
     Returns ``{"text": str, "staged_entry_ids": list[str]}``.
-    ``staged_entry_ids`` is always empty until the ``propose_moves`` tool
-    exists (a later story) -- ``list_locations`` never stages anything.
 
     Raises whatever the underlying ``client.messages.stream(...)`` call
     raises (e.g. ``anthropic.APIError`` subclasses) -- unlike
@@ -153,7 +161,17 @@ def run_turn(
             if tool_fn is None:
                 result: dict = {"error": f"unknown tool: {block.name!r}"}
             else:
-                result = tool_fn(adapter, **(block.input or {}))
+                # This engine's own conversation_id always wins over
+                # anything of the same name in the model's tool-call input
+                # -- block.input is untrusted (no input_schema declares
+                # "conversation_id", but nothing stops a model from
+                # including an extra property anyway), so it's popped
+                # before the call rather than risking a duplicate-keyword
+                # TypeError or, worse, letting model-supplied input silently
+                # override ambient, trusted context.
+                tool_kwargs = dict(block.input or {})
+                tool_kwargs.pop("conversation_id", None)
+                result = tool_fn(adapter, conversation_id=conversation_id, **tool_kwargs)
             staged_entry_ids.extend(result.get("staged_entry_ids", []))
             tool_results.append(
                 {

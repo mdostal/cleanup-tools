@@ -610,14 +610,19 @@ def chat_new():
     """Start a fresh, empty conversation and return its id.
 
     Conversation state is in-memory only (see chat/state.py's module
-    docstring) -- nothing here touches queue.yaml or config.yaml.
+    docstring) -- nothing here touches queue.yaml or config.yaml. Also
+    returns the conversation's turn cap (``config.chat_turn_cap``) so the
+    client can render a running "Turn N of Cap" usage indicator without a
+    separate round trip -- see the chat-cost-control-and-settings design
+    discussion §2.6.
     """
     conversation_id = chat_state.create_conversation()
-    return jsonify({"conversation_id": conversation_id})
+    config = config_module.load_config(_adapter())
+    return jsonify({"conversation_id": conversation_id, "turn_cap": config.chat_turn_cap})
 
 
 def _chat_turn_job(
-    adapter, conversation_id: str, user_message: str, progress_callback, partial_callback
+    adapter, conversation_id: str, user_message: str, chat_model: str, progress_callback, partial_callback
 ) -> dict:
     """The ``target_fn`` run on a chat turn's background job thread.
 
@@ -627,6 +632,11 @@ def _chat_turn_job(
     message and the assistant's final response to that conversation's
     history -- so the NEXT turn (a separate job, separate call to this
     function) sees the full prior exchange.
+
+    ``chat_model`` (resolved from ``config.chat_model`` by the caller,
+    while still inside the request -- this function runs on a background
+    thread with no Flask request context to resolve it against) is passed
+    through to ``run_turn`` unchanged.
 
     Deliberately does NOT catch/translate any exception (credential
     resolution failure, a raw ``anthropic.APIError``, ...) -- jobs.py's
@@ -642,12 +652,21 @@ def _chat_turn_job(
     history = [{"role": m.role, "text": m.text} for m in conv.messages]
     client = get_raw_client()
     result = chat_engine.run_turn(
-        client, adapter, history, user_message, partial_callback=partial_callback
+        client,
+        adapter,
+        history,
+        user_message,
+        conversation_id=conversation_id,
+        model=chat_model,
+        partial_callback=partial_callback,
     )
 
     chat_state.append_message(conversation_id, "user", user_message)
     chat_state.append_message(conversation_id, "assistant", result["text"])
     return result
+
+
+CHAT_TURN_CAP_MESSAGE = "Conversation limit reached -- start a new one."
 
 
 @bp.route("/chat/<conversation_id>/message", methods=["POST"])
@@ -660,17 +679,32 @@ def chat_message(conversation_id):
     started) rather than surfacing as a job error -- an unknown
     conversation is a request-shape problem, not something that happened
     while doing real work.
+
+    The conversation's turn cap (``config.chat_turn_cap``) is ALSO checked
+    here, before ``jobs.start_job`` is ever called -- a pre-call gate,
+    mirroring ``ai/wiring.py``'s own "slice before calling, never
+    call-then-discard" cap discipline applied to a new surface. A
+    conversation already at its cap gets a 409 with an explicit message
+    instead of a new turn silently starting; the turn already in flight
+    (if any) when a cap is reached is never touched by this check, since it
+    only runs before a NEW turn's job starts.
     """
     data = request.get_json(silent=True) or {}
     user_message = (data.get("message") or "").strip()
     if not user_message:
         return jsonify({"error": "message is required"}), 400
-    if chat_state.get_conversation(conversation_id) is None:
+
+    conv = chat_state.get_conversation(conversation_id)
+    if conv is None:
         abort(404, description=f"No such conversation: {conversation_id!r}")
+
+    config = config_module.load_config(_adapter())
+    if chat_state.turn_count(conv) >= config.chat_turn_cap:
+        return jsonify({"error": CHAT_TURN_CAP_MESSAGE}), 409
 
     adapter = _adapter()
     job_id = jobs.start_job(
-        _chat_turn_job, adapter, conversation_id, user_message, wants_partial=True
+        _chat_turn_job, adapter, conversation_id, user_message, config.chat_model, wants_partial=True
     )
     return jsonify({"job_id": job_id})
 
@@ -1291,6 +1325,8 @@ def settings():
         search_roots=config.search_roots,
         master_paths=config.master_paths,
         ai_status=_ai_credentials_status(),
+        current_chat_turn_cap=config.chat_turn_cap,
+        current_chat_model=config.chat_model,
         # Advanced pane: read-only, formatted JSON of the SAME dict
         # config.py's own save_config() persists (config_to_dict is the
         # single source of truth both go through) -- so this can never
@@ -1348,6 +1384,42 @@ def set_ui_mode():
     config = dataclasses.replace(config_module.load_config(adapter), ui_mode=mode)
     config_module.save_config(adapter, config)
     return redirect(url_for("ui.settings") + "#general")
+
+
+@bp.route("/settings/chat-options", methods=["POST"])
+def set_chat_options():
+    """Persist ``chat_turn_cap``/``chat_model`` to ``config.yaml`` -- the
+    two chat cost-control knobs surfaced on the AI Provider pane (see
+    config.Config's own docstring on these fields). Plain form POST +
+    redirect, same convention as ``set_ui_mode``.
+
+    ``chat_turn_cap`` must be a positive integer -- a cap of 0 or less
+    would make every conversation unusable, and a non-numeric value can't
+    be compared against a turn count at all; both are rejected with 400
+    rather than silently coerced or persisted. ``chat_model`` just needs to
+    be non-blank -- unlike ``ui_mode``/``icon_choice``, there's no fixed
+    enum to validate against here (see the design discussion §2.6: BYOK
+    already means the user can point this at any model string their key
+    can call, not just a hardcoded shortlist).
+    """
+    raw_cap = request.form.get("chat_turn_cap", "")
+    try:
+        chat_turn_cap = int(raw_cap)
+    except ValueError:
+        return f"chat_turn_cap must be a whole number, got {raw_cap!r}", 400
+    if chat_turn_cap < 1:
+        return f"chat_turn_cap must be at least 1, got {chat_turn_cap}", 400
+
+    chat_model = (request.form.get("chat_model") or "").strip()
+    if not chat_model:
+        return "chat_model must not be blank", 400
+
+    adapter = _adapter()
+    config = dataclasses.replace(
+        config_module.load_config(adapter), chat_turn_cap=chat_turn_cap, chat_model=chat_model
+    )
+    config_module.save_config(adapter, config)
+    return redirect(url_for("ui.settings") + "#ai-provider")
 
 
 # ---------------------------------------------------------------------------

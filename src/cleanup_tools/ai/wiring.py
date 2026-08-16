@@ -108,10 +108,16 @@ def propose_for_other_bucket(
     - ``source=f"ai:<provider>"`` (e.g. ``"ai:anthropic"``, see
       ``_provider_source``)
     - ``action="move"``, ``status="pending"`` (the ``QueueEntry`` default)
-    - ``group_key=f"sort:{bucket}"`` -- the exact grouping convention
-      ``routes.py``'s manual sort staging uses, so an AI-proposed
+    - ``group_key=f"sort:{location}:{bucket}"`` -- the current 3-segment,
+      location-aware grouping scheme (via ``config.location_for_src``)
+      every other staging path in this app uses, so an AI-proposed
       "screenshots" entry lands in the same dashboard group as a
-      manually-planned "screenshots" entry
+      manually-planned "screenshots" entry for the same location. (Fixed
+      from an old 2-segment ``sort:{bucket}`` format as part of the
+      chat-agent-plan-builder epic, which already touches this staging
+      convention elsewhere -- ``parse_group_key`` already defensively
+      handles the old format for any already-staged entries, so no
+      migration is needed.)
     - ``dest`` computed the same way ``sort._plan()`` computes it for a
       rule-matched bucket: ``target_dir / sort.SORTED_SUBDIR / bucket /
       filename``
@@ -186,6 +192,7 @@ def propose_for_other_bucket(
 
         bucket = result.bucket
         dest = target_dir / sort_module.SORTED_SUBDIR / bucket / filename
+        location = config_module.location_for_src(str(src_path), config, adapter)
         to_stage.append(
             queue_module.QueueEntry(
                 action="move",
@@ -193,7 +200,7 @@ def propose_for_other_bucket(
                 dest=str(dest),
                 source=source,
                 status="pending",
-                group_key=f"sort:{bucket}",
+                group_key=f"sort:{location}:{bucket}",
                 plan_snapshot=queue_module.build_plan_snapshot(src_path),
             )
         )

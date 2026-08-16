@@ -60,6 +60,19 @@ class Config:
     # can be in Console mode with the Ledger theme, or Guided mode with
     # Sonar -- the two axes don't force each other.
     ui_mode: str = "standard"
+    # Chat cost control -- see chat/engine.py's own docstring on "turn" and
+    # the chat-agent-plan-builder design discussion's §2.6. Persisted (not
+    # localStorage) for the same reason as ui_mode/icon_choice: a real
+    # preference, on par with those, that should survive across sessions.
+    # chat_turn_cap is a hard, pre-call ceiling on assistant turns per
+    # conversation (see ui/routes.py's chat_message route, which checks
+    # this BEFORE starting a new turn's background job -- mirroring
+    # ai/wiring.py's own "slice before calling, never call-then-discard"
+    # cap discipline). chat_model is the model the chat engine calls;
+    # defaults to the same cheap/fast model ai/anthropic_provider.py's
+    # propose_bucket already uses by default.
+    chat_turn_cap: int = 20
+    chat_model: str = "claude-haiku-4-5"
 
 
 # Order matters: rules are checked in sequence and the first match wins, so
@@ -304,6 +317,8 @@ def load_config(adapter: OSAdapter, path: Path | None = None) -> Config:
 
     icon_choice = parsed.get("icon_choice") or "broom-folder"
     ui_mode = parsed.get("ui_mode") or "standard"
+    chat_turn_cap = parsed.get("chat_turn_cap") or 20
+    chat_model = parsed.get("chat_model") or "claude-haiku-4-5"
 
     return Config(
         bucket_rules=bucket_rules,
@@ -311,6 +326,8 @@ def load_config(adapter: OSAdapter, path: Path | None = None) -> Config:
         master_paths=master_paths,
         icon_choice=icon_choice,
         ui_mode=ui_mode,
+        chat_turn_cap=chat_turn_cap,
+        chat_model=chat_model,
     )
 
 
@@ -341,6 +358,8 @@ def config_to_dict(config: Config) -> dict:
         "master_paths": [_master_path_to_dict(m) for m in config.master_paths],
         "icon_choice": config.icon_choice,
         "ui_mode": config.ui_mode,
+        "chat_turn_cap": config.chat_turn_cap,
+        "chat_model": config.chat_model,
     }
 
 

@@ -249,6 +249,73 @@ def test_run_turn_includes_prior_history_in_the_messages_payload(adapter):
     assert first_call_messages[2] == {"role": "user", "content": "follow-up question"}
 
 
+def test_run_turn_threads_conversation_id_into_propose_moves(adapter, tmp_path):
+    """conversation_id is ambient context the engine injects into every
+    tool call -- never something the model supplies -- so propose_moves
+    can enforce its per-conversation file cap. Verified end to end here:
+    a real conversation's staged_file_count actually updates.
+    """
+    from cleanup_tools import config as config_module
+    from cleanup_tools.chat import state as chat_state
+
+    root = tmp_path / "my-root"
+    root.mkdir()
+    f = root / "report.pdf"
+    f.write_bytes(b"x")
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root)]),
+    )
+
+    conv_id = chat_state.create_conversation()
+    client = _FakeClient(
+        [
+            _tool_use_response("propose_moves", {"moves": [{"src": str(f), "dest_bucket": "pdfs"}]}),
+            _text_only_response("Proposed moving report.pdf."),
+        ]
+    )
+
+    engine.run_turn(client, adapter, history=[], user_message="sort my downloads", conversation_id=conv_id)
+
+    assert chat_state.get_conversation(conv_id).staged_file_count == 1
+
+
+def test_run_turn_ambient_conversation_id_wins_over_a_model_supplied_duplicate(adapter, tmp_path):
+    """A model-supplied "conversation_id" tool-call argument (not part of
+    any real input_schema, but nothing stops a model from including an
+    extra property) must never crash the loop or override the engine's own
+    trusted value.
+    """
+    from cleanup_tools import config as config_module
+    from cleanup_tools.chat import state as chat_state
+
+    root = tmp_path / "my-root"
+    root.mkdir()
+    f = root / "report.pdf"
+    f.write_bytes(b"x")
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root)]),
+    )
+
+    real_conv_id = chat_state.create_conversation()
+    fake_conv_id = chat_state.create_conversation()
+    client = _FakeClient(
+        [
+            _tool_use_response(
+                "propose_moves",
+                {"moves": [{"src": str(f), "dest_bucket": "pdfs"}], "conversation_id": fake_conv_id},
+            ),
+            _text_only_response("done"),
+        ]
+    )
+
+    engine.run_turn(client, adapter, history=[], user_message="hi", conversation_id=real_conv_id)
+
+    assert chat_state.get_conversation(real_conv_id).staged_file_count == 1
+    assert chat_state.get_conversation(fake_conv_id).staged_file_count == 0
+
+
 def test_run_turn_passes_system_prompt_and_tool_schemas(adapter):
     captured_kwargs = []
 

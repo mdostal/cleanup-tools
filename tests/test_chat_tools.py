@@ -9,6 +9,7 @@ import pytest
 from cleanup_tools import config as config_module
 from cleanup_tools import queue as queue_module
 from cleanup_tools.adapters import MacOSAdapter
+from cleanup_tools.chat import state as chat_state
 from cleanup_tools.chat import tools
 from cleanup_tools.commands.sort import SORTED_SUBDIR
 from cleanup_tools.queue import QueueEntry, build_plan_snapshot
@@ -353,3 +354,124 @@ def test_propose_moves_schema_requires_moves_with_src_and_dest_bucket():
     assert schema["input_schema"]["required"] == ["moves"]
     item_schema = schema["input_schema"]["properties"]["moves"]["items"]
     assert set(item_schema["required"]) == {"src", "dest_bucket"}
+
+
+# ---------------------------------------------------------------------------
+# propose_moves' per-conversation file cap (_CONVERSATION_FILE_CAP): a
+# pre-call gate on the TOTAL files a conversation may stage across every
+# propose_moves call in its lifetime -- never call-then-discard.
+# ---------------------------------------------------------------------------
+
+
+def test_propose_moves_stages_only_the_remaining_budget_when_near_the_cap(
+    adapter, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tools, "_CONVERSATION_FILE_CAP", 3)
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    files = []
+    for i in range(3):
+        f = root / f"file-{i}.pdf"
+        f.write_bytes(b"x")
+        files.append(f)
+    _configure_search_root(adapter, root)
+
+    conv_id = chat_state.create_conversation()
+    chat_state.record_staged_files(conv_id, 2)  # 2 of 3 already used
+
+    result = tools.propose_moves(
+        adapter,
+        moves=[{"src": str(f), "dest_bucket": "pdfs"} for f in files],
+        conversation_id=conv_id,
+    )
+
+    assert len(result["staged_entry_ids"]) == 1
+    cap_refusals = [r for r in result["refused"] if r["reason"] == "conversation_file_cap_reached"]
+    assert len(cap_refusals) == 2
+
+    entries = queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
+    assert len(entries) == 1
+
+
+def test_propose_moves_never_stages_zero_when_budget_remains_and_over_when_it_doesnt(
+    adapter, tmp_path, monkeypatch
+):
+    """Not zero, not over -- exactly the remaining budget (acceptance
+    criterion for this story's file cap).
+    """
+    monkeypatch.setattr(tools, "_CONVERSATION_FILE_CAP", 5)
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    files = []
+    for i in range(4):
+        f = root / f"file-{i}.pdf"
+        f.write_bytes(b"x")
+        files.append(f)
+    _configure_search_root(adapter, root)
+
+    conv_id = chat_state.create_conversation()
+    chat_state.record_staged_files(conv_id, 1)  # 4 of 5 remain
+
+    result = tools.propose_moves(
+        adapter,
+        moves=[{"src": str(f), "dest_bucket": "pdfs"} for f in files],
+        conversation_id=conv_id,
+    )
+
+    assert len(result["staged_entry_ids"]) == 4  # exactly the remaining budget, not fewer
+    assert result["refused"] == []
+
+
+def test_propose_moves_updates_the_conversations_running_staged_file_count(adapter, tmp_path):
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    f = root / "report.pdf"
+    f.write_bytes(b"x")
+    _configure_search_root(adapter, root)
+
+    conv_id = chat_state.create_conversation()
+    assert chat_state.get_conversation(conv_id).staged_file_count == 0
+
+    tools.propose_moves(adapter, moves=[{"src": str(f), "dest_bucket": "pdfs"}], conversation_id=conv_id)
+
+    assert chat_state.get_conversation(conv_id).staged_file_count == 1
+
+
+def test_propose_moves_cap_is_never_exceeded_across_multiple_calls(adapter, tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "_CONVERSATION_FILE_CAP", 3)
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    _configure_search_root(adapter, root)
+
+    conv_id = chat_state.create_conversation()
+    total_staged = 0
+
+    for batch in range(3):  # 3 calls x 2 files each = 6 candidates against a cap of 3
+        batch_files = []
+        for i in range(2):
+            f = root / f"batch-{batch}-file-{i}.pdf"
+            f.write_bytes(b"x")
+            batch_files.append(f)
+        result = tools.propose_moves(
+            adapter,
+            moves=[{"src": str(bf), "dest_bucket": "pdfs"} for bf in batch_files],
+            conversation_id=conv_id,
+        )
+        total_staged += len(result["staged_entry_ids"])
+
+    assert total_staged == 3
+    assert chat_state.get_conversation(conv_id).staged_file_count == 3
+
+
+def test_propose_moves_with_unknown_conversation_id_falls_back_to_a_fresh_budget(adapter, tmp_path):
+    root = tmp_path / "my-downloads"
+    root.mkdir()
+    f = root / "report.pdf"
+    f.write_bytes(b"x")
+    _configure_search_root(adapter, root)
+
+    result = tools.propose_moves(
+        adapter, moves=[{"src": str(f), "dest_bucket": "pdfs"}], conversation_id="does-not-exist"
+    )
+
+    assert len(result["staged_entry_ids"]) == 1

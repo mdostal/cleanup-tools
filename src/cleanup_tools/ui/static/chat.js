@@ -25,8 +25,11 @@
     var input = document.getElementById("chat-input");
     var sendButton = document.getElementById("chat-send");
     var statusEl = document.getElementById("chat-status");
+    var turnCounterEl = document.getElementById("chat-turn-counter");
 
     var conversationId = null;
+    var turnCap = null;
+    var turnCount = 0;
 
     function setStatus(text, isError) {
       if (!statusEl) {
@@ -34,6 +37,18 @@
       }
       statusEl.textContent = text || "";
       statusEl.classList.toggle("chat-status-error", !!isError);
+    }
+
+    // Visible running usage indicator ("Turn 4 of 20") -- turnCount is
+    // incremented client-side once per completed ("done") turn, matching
+    // the server's own chat_state.turn_count definition (one full
+    // user-message-to-assistant-response cycle). The server is still the
+    // real gate (see the 409 handling below); this is display only.
+    function renderTurnCounter() {
+      if (!turnCounterEl || turnCap === null) {
+        return;
+      }
+      turnCounterEl.textContent = "Turn " + turnCount + " of " + turnCap;
     }
 
     function addBubble(role, text) {
@@ -111,6 +126,9 @@
       })
       .then(function (payload) {
         conversationId = payload.conversation_id;
+        turnCap = payload.turn_cap;
+        turnCount = 0;
+        renderTurnCounter();
       })
       .catch(function (err) {
         setStatus("Could not start a conversation: " + err.message, true);
@@ -141,9 +159,16 @@
             if (payload.result.staged_entry_ids && payload.result.staged_entry_ids.length > 0) {
               addProposalActions(payload.result.staged_entry_ids);
             }
-            setStatus("");
-            setInputEnabled(true);
-            input.focus();
+            turnCount += 1;
+            renderTurnCounter();
+            if (turnCap !== null && turnCount >= turnCap) {
+              setStatus("Conversation limit reached -- start a new one.", true);
+              setInputEnabled(false);
+            } else {
+              setStatus("");
+              setInputEnabled(true);
+              input.focus();
+            }
             return;
           }
           // payload.status === "error"
@@ -177,13 +202,25 @@
         body: JSON.stringify({ message: message }),
       })
         .then(function (resp) {
-          if (!resp.ok) {
-            throw new Error("could not send message (HTTP " + resp.status + ")");
-          }
-          return resp.json();
+          return resp.json().then(function (payload) {
+            return { ok: resp.ok, status: resp.status, payload: payload };
+          });
         })
-        .then(function (payload) {
-          pollTurn(payload.job_id, assistantBubble);
+        .then(function (result) {
+          if (!result.ok) {
+            // A 409 here is the server's own turn-cap gate (see
+            // chat_message's docstring) -- surfaced with its real message,
+            // never a generic "failed to send". The input stays disabled
+            // in this case (there is nothing more this conversation can
+            // do); any other non-ok status re-enables it so the user can
+            // retry.
+            assistantBubble.remove();
+            var isCapped = result.status === 409;
+            setStatus(result.payload.error || "could not send message", true);
+            setInputEnabled(!isCapped);
+            return;
+          }
+          pollTurn(result.payload.job_id, assistantBubble);
         })
         .catch(function (err) {
           assistantBubble.textContent = "(failed to send)";

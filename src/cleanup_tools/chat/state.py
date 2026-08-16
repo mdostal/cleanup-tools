@@ -34,6 +34,12 @@ class Message:
 class Conversation:
     id: str
     messages: list[Message] = field(default_factory=list)
+    # Running total of files this conversation has staged via propose_moves
+    # across every turn so far -- the state chat-cost-control-and-settings'
+    # per-conversation file cap is checked against (see
+    # tools.propose_moves and its ``_CONVERSATION_FILE_CAP`` docstring).
+    # Grows monotonically; never reset except by starting a new conversation.
+    staged_file_count: int = 0
 
 
 _lock = threading.Lock()
@@ -58,7 +64,9 @@ def get_conversation(conversation_id: str) -> Conversation | None:
         conv = _conversations.get(conversation_id)
         if conv is None:
             return None
-        return Conversation(id=conv.id, messages=list(conv.messages))
+        return Conversation(
+            id=conv.id, messages=list(conv.messages), staged_file_count=conv.staged_file_count
+        )
 
 
 def append_message(conversation_id: str, role: str, text: str) -> None:
@@ -72,3 +80,28 @@ def append_message(conversation_id: str, role: str, text: str) -> None:
         conv = _conversations.get(conversation_id)
         if conv is not None:
             conv.messages.append(Message(role=role, text=text))
+
+
+def turn_count(conversation: Conversation) -> int:
+    """How many complete turns ``conversation`` has had so far.
+
+    A pure function of ``conversation.messages``, not a separate counter
+    that could drift from it: ``append_message`` is only ever called twice
+    per completed turn (once "user", once "assistant" -- see
+    ``ui/routes.py``'s ``_chat_turn_job``, which appends both only AFTER
+    ``chat.engine.run_turn`` returns successfully, never on a failed/errored
+    turn), so ``len(messages) // 2`` is always exact.
+    """
+    return len(conversation.messages) // 2
+
+
+def record_staged_files(conversation_id: str, count: int) -> None:
+    """Add ``count`` to ``conversation_id``'s running staged-file total --
+    see ``Conversation.staged_file_count``'s docstring. Silently a no-op if
+    the conversation id is unknown, mirroring ``append_message``'s own
+    tolerance for the same reason.
+    """
+    with _lock:
+        conv = _conversations.get(conversation_id)
+        if conv is not None:
+            conv.staged_file_count += count

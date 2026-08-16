@@ -339,6 +339,8 @@ def test_config_to_dict_matches_the_shape_save_config_actually_persists(tmp_path
         "master_paths": [{"path": "/some/master", "backed_up": True}],
         "icon_choice": "recycle-folder",
         "ui_mode": "standard",
+        "chat_turn_cap": 20,
+        "chat_model": "claude-haiku-4-5",
     }
 
     class TmpHomeAdapter(MacOSAdapter):
@@ -366,6 +368,8 @@ def test_config_to_dict_never_includes_credential_material():
         "master_paths",
         "icon_choice",
         "ui_mode",
+        "chat_turn_cap",
+        "chat_model",
     }
 
 
@@ -452,6 +456,44 @@ def test_ui_mode_defaults_to_standard_when_absent_from_config_file(tmp_path):
 
 def test_ui_mode_defaults_to_standard_with_no_config_file_at_all():
     assert DEFAULT_CONFIG.ui_mode == "standard"
+
+
+def test_chat_turn_cap_and_chat_model_round_trip_through_save_and_load(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(
+        adapter,
+        Config(bucket_rules=[], chat_turn_cap=5, chat_model="claude-sonnet-5"),
+        path=config_path,
+    )
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.chat_turn_cap == 5
+    assert loaded.chat_model == "claude-sonnet-5"
+
+
+def test_chat_turn_cap_and_chat_model_default_when_absent_from_config_file(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("search_roots: []\n")  # no chat_turn_cap/chat_model keys at all
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.chat_turn_cap == 20
+    assert loaded.chat_model == "claude-haiku-4-5"
+
+
+def test_chat_turn_cap_and_chat_model_default_with_no_config_file_at_all():
+    assert DEFAULT_CONFIG.chat_turn_cap == 20
+    assert DEFAULT_CONFIG.chat_model == "claude-haiku-4-5"
 
 
 # ---------------------------------------------------------------------------
