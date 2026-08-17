@@ -136,6 +136,55 @@ def is_indexed(
         conn.close()
 
 
+def is_scanned(adapter: OSAdapter, content_hash: str, *, kind: str = KIND_DOCUMENT, path: Path | None = None) -> bool:
+    """Whether ``content_hash`` has been processed AT ALL for ``kind``,
+    regardless of how many (if any) real rows resulted -- distinguishes
+    "scanned, found nothing" from "never scanned yet", which
+    ``is_indexed``'s single-``face_index`` check alone can't: a photo with
+    ZERO detected faces and a photo that was never scanned both have zero
+    real (``face_index >= 0``) rows. Documents always use ``face_index=0``
+    and never need this distinction (``is_indexed`` already suffices
+    there); this exists specifically for the face domain's real "0 faces
+    is still a real answer" case -- see :func:`mark_scanned_no_faces`.
+    """
+    index_path = path or default_index_path(adapter)
+    conn = _connect(index_path)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM embeddings WHERE kind = ? AND content_hash = ? LIMIT 1",
+            (kind, content_hash),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def mark_scanned_no_faces(
+    adapter: OSAdapter, content_hash: str, file_path: str, *, kind: str = KIND_FACE, path: Path | None = None
+) -> None:
+    """Record that ``content_hash`` was scanned for ``kind`` and NOTHING
+    was found -- a sentinel row (``face_index=-1``, an empty embedding) so
+    a future incremental run doesn't keep re-scanning it forever. Sentinel
+    rows are never real detections: :func:`get_embeddings` filters them out
+    (``face_index >= 0`` only), so they can never accidentally participate
+    in clustering.
+    """
+    index_path = path or default_index_path(adapter)
+    conn = _connect(index_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO embeddings (kind, content_hash, face_index, path, bbox, text, embedding)
+            VALUES (?, ?, -1, ?, NULL, NULL, ?)
+            ON CONFLICT (kind, content_hash, face_index) DO NOTHING
+            """,
+            (kind, content_hash, file_path, _encode_embedding([])),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def add_embedding(
     adapter: OSAdapter,
     content_hash: str,
@@ -178,16 +227,21 @@ def add_embedding(
 def get_embeddings(
     adapter: OSAdapter, *, kind: str = KIND_DOCUMENT, path: Path | None = None
 ) -> list[IndexedEmbedding]:
-    """Every stored embedding of ``kind`` -- the input clustering operates over.
+    """Every REAL stored embedding of ``kind`` -- the input clustering
+    operates over.
 
     Never mixes kinds: a caller asking for ``kind="face"`` never sees a
-    ``"document"`` row, regardless of vector dimensions.
+    ``"document"`` row, regardless of vector dimensions. Never includes
+    :func:`mark_scanned_no_faces`'s sentinel rows (``face_index < 0``) --
+    those exist purely to make incremental re-scanning correct, never as
+    real clustering input.
     """
     index_path = path or default_index_path(adapter)
     conn = _connect(index_path)
     try:
         rows = conn.execute(
-            "SELECT content_hash, face_index, path, bbox, text, embedding FROM embeddings WHERE kind = ?",
+            "SELECT content_hash, face_index, path, bbox, text, embedding "
+            "FROM embeddings WHERE kind = ? AND face_index >= 0",
             (kind,),
         ).fetchall()
     finally:

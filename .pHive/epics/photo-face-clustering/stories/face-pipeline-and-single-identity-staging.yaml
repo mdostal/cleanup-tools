@@ -1,7 +1,7 @@
 id: face-pipeline-and-single-identity-staging
 epic: photo-face-clustering
 title: Reuse phase-1 walk + single-identity-only staging rule + by-person/ dest convention
-status: pending
+status: done
 complexity: high
 methodology: classic
 depends_on: [face-index-and-clustering]
@@ -103,3 +103,26 @@ metric:
 
 manual_verdict:
   scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T02:35:00Z"
+  agent: developer
+  notes: |
+    A real design gap self-caught during implementation (not planned): a photo with ZERO
+    detected faces is indistinguishable from a never-scanned one using only the embeddings
+    table, breaking incremental skip for zero-face photos specifically. Fixed with a new
+    sentinel-row mechanism (index.mark_scanned_no_faces/is_scanned, face_index=-1, filtered
+    out of get_embeddings()) -- properly attributed to this story even though the code lives
+    in index.py, since it was discovered here.
+
+    Refactored pipeline.py to extract _walk_candidate_files as a genuinely shared generator
+    between run() (documents) and the new run_faces() -- not a parallel reimplementation, per
+    the design discussion's own explicit requirement.
+
+    The multi-identity exclusion logic (the story's core safety property) was traced through
+    all 5 cases by hand during review (single face clustered/singleton, multi-face same/
+    different clusters, zero-face never appears in the staging loop at all) and is airtight
+    by construction: a photo's face-to-cluster-id set must be exactly one non-None value.
+
+    18 new tests (9 in this story's own file + fixed 5 accidental content-hash collisions in
+    early test fixtures where multiple files defaulted to identical bytes -- a real, if minor,
+    self-caught test bug, not a pipeline bug). 741 passed, 1 skipped, full suite.
