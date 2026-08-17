@@ -86,6 +86,32 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def get_text(
+    adapter: OSAdapter,
+    content_hash: str,
+    *,
+    kind: str = KIND_DOCUMENT,
+    face_index: int = 0,
+    path: Path | None = None,
+) -> str | None:
+    """The stored extracted text for one row, or ``None`` if unindexed or no
+    text was stored for it (e.g. a face row). A targeted single-row lookup
+    (unlike :func:`get_embeddings`, which returns every row of a kind) --
+    the UI's "why was this grouped here" snippet needs exactly one row per
+    rendered entry, not a full-index scan/decode per entry.
+    """
+    index_path = path or default_index_path(adapter)
+    conn = _connect(index_path)
+    try:
+        row = conn.execute(
+            "SELECT text FROM embeddings WHERE kind = ? AND content_hash = ? AND face_index = ?",
+            (kind, content_hash, face_index),
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
 def is_indexed(
     adapter: OSAdapter,
     content_hash: str,

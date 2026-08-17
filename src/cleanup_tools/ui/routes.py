@@ -44,6 +44,8 @@ from ..chat import state as chat_state
 from ..commands import corral_screenshots as corral_screenshots_module
 from ..commands import reclaim as reclaim_module
 from ..commands import sort as sort_module
+from ..semantic import index as semantic_index
+from ..semantic import pipeline as semantic_pipeline
 from . import jobs
 
 bp = Blueprint("ui", __name__, template_folder="templates")
@@ -508,6 +510,60 @@ def plan_sort():
     return jsonify({"job_id": job_id})
 
 
+def _cluster_documents_job(adapter, queue_path, dirs, threshold, progress_callback) -> list[queue_module.QueueEntry]:
+    """The ``target_fn`` run on ``/plan/cluster-documents``'s background job thread.
+
+    ``semantic.pipeline.run()``'s own return contract is a summary dict
+    (``{"staged_entry_ids", "clusters_found", "files_scanned",
+    "files_indexed"}``) -- deliberately not UI-route-shaped, since
+    ``pipeline.py`` has its own tests/contract independent of this route.
+    This function is the adaptation layer: it re-loads the actual staged
+    ``QueueEntry`` objects by id, so the result matches ``_sort_job``/
+    ``_reclaim_job``'s existing ``list[QueueEntry]`` shape exactly and the
+    EXISTING generic ``GET /status/<job_id>`` route (``_serialize_staged_entries``)
+    and ``plan-trigger.js`` work completely unchanged -- no new status route
+    needed, unlike chat's turn results, which really do have a different
+    shape.
+    """
+    try:
+        result = semantic_pipeline.run(
+            adapter, queue_path=queue_path, dirs=dirs, threshold=threshold, progress_callback=progress_callback
+        )
+    except TimeoutError as exc:
+        raise TimeoutError(QUEUE_BUSY_MESSAGE) from exc
+
+    staged_ids = set(result["staged_entry_ids"])
+    if not staged_ids:
+        return []
+    resolved_queue_path = queue_path or queue_module.default_queue_path(adapter)
+    entries = queue_module.load_queue(adapter, resolved_queue_path)
+    return [e for e in entries if e.id in staged_ids]
+
+
+@bp.route("/plan/cluster-documents")
+def plan_cluster_documents():
+    """Kick off local document-topic clustering on a background job thread
+    and return its ``job_id`` immediately -- mirrors ``plan_sort`` exactly
+    (see ``_cluster_documents_job``'s docstring for how its differently-
+    shaped pipeline result gets adapted to fit the same generic
+    ``/status/<job_id>`` contract every other "Plan: X" trigger already
+    uses).
+
+    Entirely local, zero network calls -- see
+    ``.pHive/epics/document-topic-clustering/docs/design-discussion.md``.
+    Same optional repeated ``?dirs=`` query param as every other "Plan: X"
+    trigger; the similarity threshold comes from
+    ``config.semantic_cluster_threshold`` (Settings > Semantic Clustering),
+    not a query param.
+    """
+    adapter = _adapter()
+    queue_path = _queue_path()
+    dirs = request.args.getlist("dirs") or None
+    config = config_module.load_config(adapter)
+    job_id = jobs.start_job(_cluster_documents_job, adapter, queue_path, dirs, config.semantic_cluster_threshold)
+    return jsonify({"job_id": job_id})
+
+
 def _reclaim_job(adapter, queue_path, dirs, progress_callback) -> list[queue_module.QueueEntry]:
     """The ``target_fn`` run on ``/plan/reclaim``'s background job thread.
 
@@ -878,6 +934,33 @@ def _paginate(entries: list, page_arg, per_page_arg) -> tuple[list, dict]:
     return page_entries, info
 
 
+_CLUSTER_SNIPPET_MAX_CHARS = 120
+
+
+def _cluster_snippet(entry: queue_module.QueueEntry) -> str | None:
+    """Short "why was this grouped here" excerpt for a ``source="local:cluster"``
+    entry -- looked up from the semantic index by content hash (never
+    re-extracted; see ``semantic.index.get_text``), capped to
+    ``_CLUSTER_SNIPPET_MAX_CHARS`` in every render path -- never the full
+    document. ``None`` for a non-cluster-sourced entry, or one with no
+    indexed text (e.g. the index was cleared since staging).
+    """
+    if entry.source != "local:cluster":
+        return None
+    if not isinstance(entry.plan_snapshot, dict):
+        return None
+    content_hash = entry.plan_snapshot.get("content_hash")
+    if not content_hash:
+        return None
+    text = semantic_index.get_text(_adapter(), content_hash)
+    if not text:
+        return None
+    snippet = " ".join(text.split())  # collapse all whitespace/newlines
+    if len(snippet) > _CLUSTER_SNIPPET_MAX_CHARS:
+        return snippet[:_CLUSTER_SNIPPET_MAX_CHARS].rstrip() + "…"
+    return snippet
+
+
 @bp.route("/queue")
 def queue_view():
     entries = _pending_entries()
@@ -910,6 +993,7 @@ def queue_view():
         group_keys=group_keys,
         is_image_entry=is_image_entry,
         is_ai_source=_is_ai_source,
+        cluster_snippet=_cluster_snippet,
         pagination=pagination,
     )
 
@@ -1327,6 +1411,7 @@ def settings():
         ai_status=_ai_credentials_status(),
         current_chat_turn_cap=config.chat_turn_cap,
         current_chat_model=config.chat_model,
+        current_semantic_cluster_threshold=config.semantic_cluster_threshold,
         # Advanced pane: read-only, formatted JSON of the SAME dict
         # config.py's own save_config() persists (config_to_dict is the
         # single source of truth both go through) -- so this can never
@@ -1420,6 +1505,32 @@ def set_chat_options():
     )
     config_module.save_config(adapter, config)
     return redirect(url_for("ui.settings") + "#ai-provider")
+
+
+@bp.route("/settings/semantic-options", methods=["POST"])
+def set_semantic_options():
+    """Persist ``semantic_cluster_threshold`` to ``config.yaml`` -- the
+    cosine-similarity threshold ``semantic/cluster.py``'s threshold+
+    union-find grouping uses (see config.Config's own docstring on this
+    field). Plain form POST + redirect, same convention as
+    ``set_chat_options``.
+
+    Must be a real number in ``[0.0, 1.0]`` -- cosine similarity's valid
+    range -- rejected with 400 (and not persisted) otherwise, mirroring
+    ``set_chat_options``' validation discipline.
+    """
+    raw_threshold = request.form.get("semantic_cluster_threshold", "")
+    try:
+        threshold = float(raw_threshold)
+    except ValueError:
+        return f"semantic_cluster_threshold must be a number, got {raw_threshold!r}", 400
+    if not (0.0 <= threshold <= 1.0):
+        return f"semantic_cluster_threshold must be between 0.0 and 1.0, got {threshold}", 400
+
+    adapter = _adapter()
+    config = dataclasses.replace(config_module.load_config(adapter), semantic_cluster_threshold=threshold)
+    config_module.save_config(adapter, config)
+    return redirect(url_for("ui.settings") + "#semantic-clustering")
 
 
 # ---------------------------------------------------------------------------

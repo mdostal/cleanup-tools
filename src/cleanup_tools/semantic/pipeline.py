@@ -31,6 +31,7 @@ def run(
     queue_path: Path | None = None,
     dirs: list[str] | None = None,
     threshold: float = cluster_module.DEFAULT_THRESHOLD,
+    progress_callback=None,
 ) -> dict:
     """Scan configured (or explicitly given) locations, extract+embed+index
     any new documents, cluster over the FULL accumulated index (not just this
@@ -43,8 +44,18 @@ def run(
     macOS-only in phase 1" scoping (extract.py/embeddings.py's own module
     docstrings).
 
+    ``progress_callback``, if given, is called once per scanned (guard-
+    passing) file as ``progress_callback(current, current)`` -- the total
+    file count isn't known upfront without a separate full listing pass, so
+    (like several other jobs in this app that can't know their total ahead
+    of time) it's reported growing together with ``current`` rather than
+    against a fixed denominator.
+
     Returns ``{"staged_entry_ids": list[str], "clusters_found": int,
-    "files_scanned": int, "files_indexed": int}``.
+    "files_scanned": int, "files_indexed": int}``. ``files_indexed`` counts
+    only files that were ACTUALLY newly embedded this run (not already in
+    the index, and real text was extracted) -- it is not simply
+    ``files_scanned`` under a different name.
     """
     embedder = embeddings_module.get_embedder(adapter)  # platform gate, fires before any scanning.
 
@@ -76,8 +87,10 @@ def run(
                 continue
 
             files_scanned += 1
-            _index_one_file(adapter, embedder, file_path)
-            files_indexed += 1
+            if _index_one_file(adapter, embedder, file_path):
+                files_indexed += 1
+            if progress_callback is not None:
+                progress_callback(files_scanned, files_scanned)
 
     new_entries, clusters_found = _stage_clusters(adapter, config, queue_path, threshold)
 
@@ -89,27 +102,32 @@ def run(
     }
 
 
-def _index_one_file(adapter: OSAdapter, embedder, file_path: Path) -> None:
+def _index_one_file(adapter: OSAdapter, embedder, file_path: Path) -> bool:
     """Extract+embed+index ``file_path`` if it isn't already indexed by
     content hash. A no-op if extraction returns nothing usable (unsupported
     type, corrupt file, ...) -- never raises for a real-but-unusual file.
+
+    Returns whether a new embedding was actually stored this call -- callers
+    use this to distinguish real work from an already-indexed/unextractable
+    skip, rather than treating every scanned file as "indexed."
     """
     snapshot = queue_module.build_plan_snapshot(file_path)
     content_hash = snapshot.get("content_hash")
     if not content_hash:
-        return  # not a plain file (directory, broken symlink, ...) -- nothing to embed.
+        return False  # not a plain file (directory, broken symlink, ...) -- nothing to embed.
 
     if index_module.is_indexed(adapter, content_hash, kind=index_module.KIND_DOCUMENT):
-        return  # incremental -- unchanged content already embedded.
+        return False  # incremental -- unchanged content already embedded.
 
     text = extract_module.extract_text(file_path, adapter)
     if text is None:
-        return
+        return False
 
     vector = embedder.embed(text)
     index_module.add_embedding(
         adapter, content_hash, str(file_path), vector, kind=index_module.KIND_DOCUMENT, text=text
     )
+    return True
 
 
 def _stage_clusters(

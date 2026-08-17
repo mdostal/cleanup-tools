@@ -100,6 +100,19 @@ def test_document_text_round_trips(adapter):
     assert results[0].text == "Invoice for Acme Corp."
 
 
+def test_get_text_returns_stored_text_for_one_row(adapter):
+    index.add_embedding(
+        adapter, "abc123", "/some/doc.pdf", [0.1, 0.2],
+        kind=index.KIND_DOCUMENT, text="Invoice for Acme Corp.",
+    )
+
+    assert index.get_text(adapter, "abc123") == "Invoice for Acme Corp."
+
+
+def test_get_text_returns_none_for_unindexed_content_hash(adapter):
+    assert index.get_text(adapter, "does-not-exist") is None
+
+
 def test_face_bbox_round_trips(adapter):
     index.add_embedding(
         adapter, "photo123", "/some/photo.jpg", [0.1, 0.2],

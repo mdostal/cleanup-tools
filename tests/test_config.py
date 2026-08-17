@@ -341,6 +341,7 @@ def test_config_to_dict_matches_the_shape_save_config_actually_persists(tmp_path
         "ui_mode": "standard",
         "chat_turn_cap": 20,
         "chat_model": "claude-haiku-4-5",
+        "semantic_cluster_threshold": 0.75,
     }
 
     class TmpHomeAdapter(MacOSAdapter):
@@ -370,6 +371,7 @@ def test_config_to_dict_never_includes_credential_material():
         "ui_mode",
         "chat_turn_cap",
         "chat_model",
+        "semantic_cluster_threshold",
     }
 
 
@@ -494,6 +496,55 @@ def test_chat_turn_cap_and_chat_model_default_when_absent_from_config_file(tmp_p
 def test_chat_turn_cap_and_chat_model_default_with_no_config_file_at_all():
     assert DEFAULT_CONFIG.chat_turn_cap == 20
     assert DEFAULT_CONFIG.chat_model == "claude-haiku-4-5"
+
+
+def test_semantic_cluster_threshold_round_trips_through_save_and_load(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], semantic_cluster_threshold=0.6), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_cluster_threshold == 0.6
+
+
+def test_semantic_cluster_threshold_zero_is_not_silently_replaced_by_default(tmp_path):
+    """Regression guard: `parsed.get(...) or default` would treat a real,
+    legitimately-persisted 0.0 as falsy and silently replace it -- this
+    field is read with an explicit `is None` check instead.
+    """
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], semantic_cluster_threshold=0.0), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_cluster_threshold == 0.0
+
+
+def test_semantic_cluster_threshold_defaults_when_absent_from_config_file(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("search_roots: []\n")  # no semantic_cluster_threshold key at all
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_cluster_threshold == 0.75
+
+
+def test_semantic_cluster_threshold_defaults_with_no_config_file_at_all():
+    assert DEFAULT_CONFIG.semantic_cluster_threshold == 0.75
 
 
 # ---------------------------------------------------------------------------

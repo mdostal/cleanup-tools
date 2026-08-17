@@ -144,6 +144,22 @@
     {% endif %}
     {% endif %}
 
+    {% set snippet = cluster_snippet(entry) %}
+    {% if snippet %}
+    <!-- "Why was this grouped here?" -- document-topic-clustering's concrete
+         answer to the UI design review's "manual-correction UX" warning:
+         cluster membership isn't self-evident from a filename alone the way
+         a .pdf extension is, so a short, real excerpt of the document's own
+         extracted text (never the full document -- see routes.py's
+         _cluster_snippet, capped and looked up from the local semantic
+         index, never re-extracted) is one keystroke/click away, same
+         disclosure pattern as every raw path on this page. -->
+    <details class="path-disclosure">
+      <summary>Why was this grouped here?</summary>
+      <p class="entry-path">{{ snippet }}</p>
+    </details>
+    {% endif %}
+
     <div class="entry-actions">
       <form method="post" action="{{ url_for('ui.approve_entry', entry_id=entry.id) }}" data-action="approve">
         <button type="submit" data-intent="primary">Approve</button>

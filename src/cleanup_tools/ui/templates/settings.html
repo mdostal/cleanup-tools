@@ -19,6 +19,7 @@
     <a href="#search-roots" data-pane="search-roots">Search Roots &amp; Locations</a>
     <a href="#master-paths" data-pane="master-paths">Master Paths</a>
     <a href="#ai-provider" data-pane="ai-provider">AI Provider</a>
+    <a href="#semantic-clustering" data-pane="semantic-clustering">Semantic Clustering</a>
     <a href="#advanced" data-pane="advanced">Advanced</a>
   </nav>
 
@@ -245,6 +246,34 @@
       <p class="meta heading-detail">
         A conversation refuses to start a new turn once it reaches this many -- the turn already in
         progress always finishes. Defaults to the same cheap/fast model "Propose with AI" uses.
+      </p>
+    </section>
+
+    <section id="semantic-clustering" class="settings-pane" aria-label="Semantic clustering">
+      <h2>Semantic clustering</h2>
+      <p class="meta">
+        <span class="badge badge-status-approved">{{ icons.status_icon("approved") }}Entirely local</span>
+        "Plan: Cluster Documents" groups documents by topic using on-device text extraction and
+        embedding -- no file content or filename ever leaves this machine.
+      </p>
+      <form method="post" action="{{ url_for('ui.set_semantic_options') }}" class="settings-add-form">
+        <label>
+          Document similarity threshold
+          <input
+            type="number"
+            name="semantic_cluster_threshold"
+            min="0"
+            max="1"
+            step="0.01"
+            value="{{ current_semantic_cluster_threshold }}"
+            required
+          >
+        </label>
+        <button type="submit" data-intent="primary">Save</button>
+      </form>
+      <p class="meta heading-detail">
+        How similar two documents' content must be (0.0-1.0) to be proposed as the same cluster --
+        higher means fewer, tighter groups; lower means more, looser ones.
       </p>
     </section>
 

@@ -2119,7 +2119,7 @@ def test_dashboard_empty_state_plan_links_are_also_wired(client):
     # to the nav ones) -- those must be wired up too.
     resp = client.get("/")
     html = resp.data.decode()
-    assert html.count('class="plan-trigger-link"') == 6  # 3 in nav + 3 in empty state
+    assert html.count('class="plan-trigger-link"') == 7  # 4 in nav (incl. cluster-documents) + 3 in empty state
     for kind in PLAN_LINK_TEXT:
         # nav link + empty-state link + the kickoff bar's own checkbox for
         # this kind (see test_dashboard_kickoff_bar_has_checkboxes_for_all_three_plans).
@@ -2130,7 +2130,7 @@ def test_queue_empty_state_plan_links_are_also_wired(client):
     resp = client.get("/queue")
     html = resp.data.decode()
     assert b"Nothing pending" in resp.data
-    assert html.count('class="plan-trigger-link"') == 6  # nav + empty-state
+    assert html.count('class="plan-trigger-link"') == 7  # nav (incl. cluster-documents) + empty-state
 
 
 def test_queue_nonempty_still_has_nav_plan_links_wired(adapter, client, tmp_path):
@@ -2141,7 +2141,7 @@ def test_queue_nonempty_still_has_nav_plan_links_wired(adapter, client, tmp_path
     html = resp.data.decode()
     # Only the nav links render once entries exist -- no "Nothing pending"
     # empty-state fallback to duplicate them.
-    assert html.count('class="plan-trigger-link"') == 3
+    assert html.count('class="plan-trigger-link"') == 4  # incl. cluster-documents
     for kind, text in PLAN_LINK_TEXT.items():
         link_attrs = _plan_trigger_link_block(html, text)
         assert "data-status-url-template=" in link_attrs
@@ -3442,3 +3442,121 @@ def test_set_chat_options_rejects_blank_model_and_does_not_persist(adapter, clie
 
     reloaded = config_module.load_config(adapter)
     assert reloaded.chat_model == "claude-haiku-4-5"  # default, unchanged
+
+
+# ---------------------------------------------------------------------------
+# 19. Document-topic clustering: the "Plan: Cluster Documents" trigger, the
+#     Settings > Semantic Clustering pane/route, and the "why was this
+#     grouped here" queue disclosure. The embedder is always monkeypatched
+#     (never a real NLEmbedding/PyObjC call in this file) -- semantic-
+#     extraction-and-embedding's own test file already covers real-framework
+#     testing; pipeline.py's own test file already covers the real pipeline
+#     logic against a monkeypatched embedder. These tests only prove the
+#     ROUTE wiring (trigger -> real job -> real queue; settings persistence).
+# ---------------------------------------------------------------------------
+
+
+class _FakeSemanticEmbedder:
+    def embed(self, text):
+        return [1.0, 0.0, 0.0] if "invoice" in text.lower() else [0.0, 1.0, 0.0]
+
+
+def _stub_semantic_embedder(monkeypatch):
+    import cleanup_tools.semantic.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module.embeddings_module, "get_embedder", lambda adapter: _FakeSemanticEmbedder())
+
+
+def test_cluster_documents_nav_link_present(client):
+    html = client.get("/queue").data.decode()
+    assert ">Plan: Cluster Documents<" in html
+
+
+def test_plan_cluster_documents_stages_real_entries(adapter, client, tmp_path, monkeypatch):
+    _stub_semantic_embedder(monkeypatch)
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "invoice-a.txt").write_text("Invoice for Acme Corp.")
+    (root / "invoice-b.txt").write_text("Invoice statement from Acme.")
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root)]),
+    )
+
+    resp = client.get("/plan/cluster-documents")
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+
+    payload = _poll_job_until_terminal(client, job_id)
+    assert payload["status"] == "done"
+    assert payload["result"]["count"] == 2
+
+    entries = queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
+    assert len(entries) == 2
+    assert all(e.source == "local:cluster" for e in entries)
+
+
+def test_queue_shows_why_was_this_grouped_here_disclosure_for_cluster_entries(
+    adapter, client, tmp_path, monkeypatch
+):
+    _stub_semantic_embedder(monkeypatch)
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "invoice-a.txt").write_text("Invoice for Acme Corp, total due 100.")
+    (root / "invoice-b.txt").write_text("Invoice statement from Acme, total due 200.")
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root)]),
+    )
+
+    job_id = client.get("/plan/cluster-documents").get_json()["job_id"]
+    _poll_job_until_terminal(client, job_id)
+
+    html = client.get("/queue").data.decode()
+    assert "Why was this grouped here?" in html
+    assert "Invoice" in html  # the real snippet text, not just the label
+
+
+def test_queue_never_shows_snippet_disclosure_for_non_cluster_entries(adapter, client, tmp_path):
+    entry = _make_entry(tmp_path, "a.txt", group_key="sort:misc")
+    _seed_queue(adapter, [entry])
+
+    html = client.get("/queue").data.decode()
+    assert "Why was this grouped here?" not in html
+
+
+def test_settings_semantic_clustering_pane_shows_current_threshold(adapter, client):
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, semantic_cluster_threshold=0.6),
+    )
+
+    html = client.get("/settings").data.decode()
+
+    assert 'name="semantic_cluster_threshold"' in html
+    assert 'value="0.6"' in html
+
+
+def test_set_semantic_options_persists_threshold(adapter, client):
+    resp = client.post("/settings/semantic-options", data={"semantic_cluster_threshold": "0.5"})
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("#semantic-clustering")
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.semantic_cluster_threshold == 0.5
+
+
+def test_set_semantic_options_rejects_non_numeric_threshold_and_does_not_persist(adapter, client):
+    resp = client.post("/settings/semantic-options", data={"semantic_cluster_threshold": "not-a-number"})
+    assert resp.status_code == 400
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.semantic_cluster_threshold == 0.75
+
+
+def test_set_semantic_options_rejects_out_of_range_threshold(adapter, client):
+    resp = client.post("/settings/semantic-options", data={"semantic_cluster_threshold": "1.5"})
+    assert resp.status_code == 400
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.semantic_cluster_threshold == 0.75

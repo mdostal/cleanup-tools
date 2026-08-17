@@ -73,6 +73,14 @@ class Config:
     # propose_bucket already uses by default.
     chat_turn_cap: int = 20
     chat_model: str = "claude-haiku-4-5"
+    # document-topic-clustering epic: the cosine-similarity threshold
+    # semantic/cluster.py's threshold+union-find grouping uses -- a real
+    # preference (tuning "how similar is similar enough"), persisted like
+    # every other field here. Surfaced on Settings' Semantic Clustering
+    # pane. See semantic/cluster.py's DEFAULT_THRESHOLD for the same
+    # default value used when this config field isn't threaded through
+    # (e.g. a direct/test call to pipeline.run()).
+    semantic_cluster_threshold: float = 0.75
 
 
 # Order matters: rules are checked in sequence and the first match wins, so
@@ -319,6 +327,11 @@ def load_config(adapter: OSAdapter, path: Path | None = None) -> Config:
     ui_mode = parsed.get("ui_mode") or "standard"
     chat_turn_cap = parsed.get("chat_turn_cap") or 20
     chat_model = parsed.get("chat_model") or "claude-haiku-4-5"
+    # `or` (not `is None`) would be a real bug here: a legitimately-persisted
+    # 0.0 threshold is falsy and would get silently replaced by the default.
+    semantic_cluster_threshold = parsed.get("semantic_cluster_threshold")
+    if semantic_cluster_threshold is None:
+        semantic_cluster_threshold = 0.75
 
     return Config(
         bucket_rules=bucket_rules,
@@ -328,6 +341,7 @@ def load_config(adapter: OSAdapter, path: Path | None = None) -> Config:
         ui_mode=ui_mode,
         chat_turn_cap=chat_turn_cap,
         chat_model=chat_model,
+        semantic_cluster_threshold=semantic_cluster_threshold,
     )
 
 
@@ -359,6 +373,7 @@ def config_to_dict(config: Config) -> dict:
         "icon_choice": config.icon_choice,
         "ui_mode": config.ui_mode,
         "chat_turn_cap": config.chat_turn_cap,
+        "semantic_cluster_threshold": config.semantic_cluster_threshold,
         "chat_model": config.chat_model,
     }
 

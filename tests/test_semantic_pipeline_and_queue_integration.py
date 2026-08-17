@@ -245,9 +245,44 @@ def test_pipeline_second_run_skips_already_indexed_files(adapter, tmp_path, fake
     assert len(fake_embedder.embedded_texts) == 2  # no new embed calls
 
 
+def test_pipeline_files_indexed_reflects_only_newly_indexed_files_not_files_scanned(
+    adapter, tmp_path, fake_embedder
+):
+    """Regression guard: files_indexed must count actual new indexing work,
+    not merely mirror files_scanned under a different name.
+    """
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "invoice-a.txt").write_text("Invoice for Acme Corp.")
+    _configure_root(adapter, root)
+
+    first = pipeline.run(adapter, threshold=0.9)
+    assert first["files_scanned"] == 1
+    assert first["files_indexed"] == 1
+
+    (root / "invoice-b.txt").write_text("Invoice statement from Acme.")
+    second = pipeline.run(adapter, threshold=0.9)
+
+    assert second["files_scanned"] == 2  # both files scanned again
+    assert second["files_indexed"] == 1  # only the new one was actually indexed
+
+
 # ---------------------------------------------------------------------------
 # Singletons never staged.
 # ---------------------------------------------------------------------------
+
+
+def test_pipeline_progress_callback_called_once_per_scanned_file(adapter, tmp_path, fake_embedder):
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "invoice-a.txt").write_text("Invoice for Acme Corp.")
+    (root / "invoice-b.txt").write_text("Invoice statement from Acme.")
+    _configure_root(adapter, root)
+
+    calls = []
+    pipeline.run(adapter, threshold=0.9, progress_callback=lambda current, total: calls.append((current, total)))
+
+    assert calls == [(1, 1), (2, 2)]
 
 
 def test_pipeline_singleton_is_indexed_but_never_staged(adapter, tmp_path, fake_embedder):

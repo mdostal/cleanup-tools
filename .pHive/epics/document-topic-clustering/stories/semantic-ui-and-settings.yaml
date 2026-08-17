@@ -1,7 +1,7 @@
 id: semantic-ui-and-settings
 epic: document-topic-clustering
 title: "\"Plan: Cluster Documents\" trigger + queue disclosure snippet + semantic_cluster_threshold setting"
-status: pending
+status: done
 complexity: medium
 methodology: classic
 depends_on: [semantic-pipeline-and-queue-integration]
