@@ -21,6 +21,16 @@ photo can contain multiple detected faces, each its own row (``face_index``
 0..N-1) -- see the design discussion §4. ``kind`` (``"document"`` |
 ``"face"``) keeps the two embedding spaces from ever being clustered
 together, even if their vector dimensions happened to coincide.
+
+Each row also stores the extracted ``text`` (documents only -- always
+``None`` for ``kind="face"``, which has no meaningful text) so
+``semantic/pipeline.py``'s clustering step (``semantic-pipeline-and-queue-
+integration``) can feed cluster member texts into ``cluster.label_and_slug``
+without a second, redundant extraction pass, and so a later UI story can show
+a real excerpt without re-reading the source file. A discovered-as-necessary
+extension during pipeline integration, not part of this module's original
+story -- storing the SAME already-extracted text this module's caller already
+has in hand costs nothing extra to compute.
 """
 
 from __future__ import annotations
@@ -48,6 +58,7 @@ class IndexedEmbedding:
     embedding: list[float]
     face_index: int = 0
     bbox: tuple[float, float, float, float] | None = None
+    text: str | None = None
 
 
 def default_index_path(adapter: OSAdapter) -> Path:
@@ -66,6 +77,7 @@ def _connect(path: Path) -> sqlite3.Connection:
             face_index INTEGER NOT NULL DEFAULT 0,
             path TEXT NOT NULL,
             bbox TEXT,
+            text TEXT,
             embedding BLOB NOT NULL,
             PRIMARY KEY (kind, content_hash, face_index)
         )
@@ -107,6 +119,7 @@ def add_embedding(
     kind: str = KIND_DOCUMENT,
     face_index: int = 0,
     bbox: tuple[float, float, float, float] | None = None,
+    text: str | None = None,
     path: Path | None = None,
 ) -> None:
     """Store (or overwrite) one embedding row."""
@@ -115,10 +128,11 @@ def add_embedding(
     try:
         conn.execute(
             """
-            INSERT INTO embeddings (kind, content_hash, face_index, path, bbox, embedding)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO embeddings (kind, content_hash, face_index, path, bbox, text, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (kind, content_hash, face_index)
-            DO UPDATE SET path = excluded.path, bbox = excluded.bbox, embedding = excluded.embedding
+            DO UPDATE SET path = excluded.path, bbox = excluded.bbox, text = excluded.text,
+                embedding = excluded.embedding
             """,
             (
                 kind,
@@ -126,6 +140,7 @@ def add_embedding(
                 face_index,
                 file_path,
                 json.dumps(bbox) if bbox is not None else None,
+                text,
                 _encode_embedding(embedding),
             ),
         )
@@ -146,14 +161,14 @@ def get_embeddings(
     conn = _connect(index_path)
     try:
         rows = conn.execute(
-            "SELECT content_hash, face_index, path, bbox, embedding FROM embeddings WHERE kind = ?",
+            "SELECT content_hash, face_index, path, bbox, text, embedding FROM embeddings WHERE kind = ?",
             (kind,),
         ).fetchall()
     finally:
         conn.close()
 
     result = []
-    for content_hash, face_index, file_path, bbox_json, embedding_blob in rows:
+    for content_hash, face_index, file_path, bbox_json, text, embedding_blob in rows:
         bbox = tuple(json.loads(bbox_json)) if bbox_json is not None else None
         result.append(
             IndexedEmbedding(
@@ -163,6 +178,7 @@ def get_embeddings(
                 embedding=_decode_embedding(embedding_blob),
                 face_index=face_index,
                 bbox=bbox,
+                text=text,
             )
         )
     return result

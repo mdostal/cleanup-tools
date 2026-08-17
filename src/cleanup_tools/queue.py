@@ -89,7 +89,11 @@ def parse_group_key(group_key: str | None) -> dict:
     Formats handled:
       - None / "" -> no pipeline, "other" location, no bucket.
       - New (post-epic), 3 segments: ``sort:<location>:<bucket>``,
-        ``reclaim:<location>:<category>``.
+        ``reclaim:<location>:<category>``, ``cluster:<location>:<slug>``
+        (document-topic-clustering / photo-face-clustering epics -- a
+        semantic cluster's "bucket" is a cluster label/slug rather than a
+        file-extension rule, but the scheme is otherwise identical; see
+        ``semantic/pipeline.py``).
       - New (post-epic), 2 segments: ``corral-screenshots:<location>``.
       - Old (pre-epic), 2 segments: ``sort:<bucket>``, ``reclaim:<category>``
         -- no location segment existed yet, so location falls back to "other".
@@ -100,7 +104,7 @@ def parse_group_key(group_key: str | None) -> dict:
         return {"pipeline": None, "location": "other", "bucket": None}
     parts = group_key.split(":")
     pipeline = parts[0]
-    if pipeline in ("sort", "reclaim"):
+    if pipeline in ("sort", "reclaim", "cluster"):
         if len(parts) == 3:
             return {"pipeline": pipeline, "location": parts[1], "bucket": parts[2]}
         if len(parts) == 2:

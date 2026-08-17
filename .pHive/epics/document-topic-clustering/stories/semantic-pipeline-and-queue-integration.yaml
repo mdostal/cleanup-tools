@@ -1,7 +1,7 @@
 id: semantic-pipeline-and-queue-integration
 epic: document-topic-clustering
 title: Pipeline orchestration (recursive scan + iCloud guard + dest-collision handling) + queue.py "cluster" pipeline
-status: pending
+status: done
 complexity: high
 methodology: classic
 depends_on: [semantic-index-and-clustering]

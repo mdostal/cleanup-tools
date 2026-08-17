@@ -89,6 +89,17 @@ def test_add_embedding_upsert_overwrites_existing_row(adapter):
     assert results[0].embedding == [0.9, 0.9, 0.9]
 
 
+def test_document_text_round_trips(adapter):
+    index.add_embedding(
+        adapter, "abc123", "/some/doc.pdf", [0.1, 0.2],
+        kind=index.KIND_DOCUMENT, text="Invoice for Acme Corp.",
+    )
+
+    results = index.get_embeddings(adapter, kind=index.KIND_DOCUMENT)
+
+    assert results[0].text == "Invoice for Acme Corp."
+
+
 def test_face_bbox_round_trips(adapter):
     index.add_embedding(
         adapter, "photo123", "/some/photo.jpg", [0.1, 0.2],
