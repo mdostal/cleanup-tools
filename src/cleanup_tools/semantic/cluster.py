@@ -88,6 +88,7 @@ def cluster(
     texts: list[str] | None = None,
     *,
     threshold: float = DEFAULT_THRESHOLD,
+    prefix: str = "cluster",
 ) -> list[Cluster]:
     """Group ``embeddings`` (by index) into clusters at ``threshold`` cosine
     similarity, via brute-force pairwise comparison + union-find.
@@ -95,8 +96,12 @@ def cluster(
     ``texts``, if given (same length/order as ``embeddings``), feeds the
     label/slug heuristic for each resulting cluster -- omit it (e.g. for
     faces, which have no meaningful "text") and every cluster gets the
-    generic ``cluster-<n>``/``person-<n>``-style fallback (see
-    :func:`label_and_slug`).
+    generic ``f"{prefix}-<n>"`` fallback (see :func:`label_and_slug`).
+    ``prefix`` defaults to ``"cluster"`` (document-topic-clustering's
+    convention); ``photo-face-clustering`` passes ``"person"`` so an
+    unlabeled face cluster falls back to ``"person-1"``, ``"person-2"``, ...
+    rather than the generic document-oriented name -- the SAME clustering
+    math either way, just a different fallback label namespace per domain.
 
     Deterministic: the SAME input, run twice, produces identical output --
     no set/dict-iteration-order dependency anywhere in this function.
@@ -124,7 +129,7 @@ def cluster(
         if len(member_indices) < 2:
             continue  # singleton -- never proposed, see module docstring.
         member_texts = [texts[i] for i in member_indices] if texts is not None else None
-        label, slug = label_and_slug(member_texts, fallback_id=len(clusters) + 1)
+        label, slug = label_and_slug(member_texts, fallback_id=len(clusters) + 1, prefix=prefix)
         clusters.append(Cluster(member_indices=member_indices, label=label, slug=slug))
 
     return clusters

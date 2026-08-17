@@ -1,7 +1,7 @@
 id: face-index-and-clustering
 epic: photo-face-clustering
 title: Per-face index schema (kind + composite key) extension + reused threshold/union-find clustering
-status: pending
+status: done
 complexity: medium
 methodology: classic
 depends_on: [face-detection-and-embedding]
@@ -77,3 +77,14 @@ metric:
 
 manual_verdict:
   scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T02:05:00Z"
+  agent: developer
+  notes: |
+    Most of this story's schema/clustering groundwork was already built generically in
+    document-topic-clustering's own semantic-index-and-clustering story (the kind/face_index
+    composite key, the threshold+union-find math) -- this story's real, and only, code change
+    was adding a `prefix` parameter to cluster.cluster() so an unlabeled face cluster falls
+    back to "person-<n>" instead of document-topic-clustering's "cluster-<n>", with the
+    default staying "cluster" for full backward compatibility (verified via a dedicated
+    regression test). 9 new face-domain tests, 727 passed/1 skipped full suite.
