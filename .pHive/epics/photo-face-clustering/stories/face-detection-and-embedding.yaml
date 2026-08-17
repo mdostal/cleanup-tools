@@ -1,0 +1,107 @@
+id: face-detection-and-embedding
+epic: photo-face-clustering
+title: InsightFace detection + embedding via vendored ONNX weights (no auto-download)
+status: pending
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  The platform-independent (unlike phase 1) foundation layer: given a real photo, produce
+  real per-face bounding boxes and 512-d ArcFace identity embeddings, via InsightFace's
+  SCRFD detector + `buffalo_l` embedding model, run through `onnxruntime` (CoreML execution
+  provider auto-engaging on Apple Silicon, plain CPU elsewhere -- including Arch, a genuine
+  cross-platform capability from day one, unlike phase 1's Mac-only text embedder).
+
+  The FIRST concrete step is a go/no-go spike with two parts: (1) confirm `onnxruntime` +
+  the InsightFace model files actually run correctly in this dev environment; (2) confirm
+  the model weights can be loaded WITHOUT going through `insightface`'s own high-level
+  `FaceAnalysis` wrapper (which auto-downloads from a remote model zoo by default) --
+  constructing an `onnxruntime.InferenceSession` directly from vendored local `.onnx` files
+  instead. This mirrors the exact "grep for phone-home behavior before trusting a
+  third-party loader" discipline `ai/anthropic_provider.py` already established for the
+  Anthropic SDK, applied here to a different package with the same class of gotcha (design
+  discussion §2.1).
+
+acceptance_criteria:
+  - "Given a real photo with one visible face, when detection runs, then it returns exactly one bounding box and one 512-d embedding."
+  - "Given a real photo with multiple visible faces, when detection runs, then it returns one bounding box + embedding PER detected face, not a single averaged result."
+  - "Given a real photo with zero detectable faces (a landscape, a document scan), when detection runs, then it returns an empty list -- never raises."
+  - "Given the model-loading code path, when audited, then it never calls anything that would reach the network at runtime -- verified by a test that blocks real socket connections (mirroring test_ai_provider.py's block_real_network fixture) and confirms detection/embedding still succeeds using only vendored local files."
+  - "Given the SAME photo run twice, when embedded, then the resulting vector is identical (deterministic inference, no randomness)."
+
+steps:
+  - id: research
+    description: |
+      Spike: install onnxruntime + acquire InsightFace's buffalo_l model files, confirm they
+      load and run correctly on this machine WITHOUT insightface's auto-download wrapper --
+      construct the InferenceSession directly from local files. Confirm the CoreML execution
+      provider actually engages on this Apple Silicon machine (vs. silently falling back to
+      CPU). This is the epic's real go/no-go gate, mirroring semantic-extraction-and-embedding's
+      PyObjC spike from phase 1 -- escalate to the user before further implementation if this
+      spike fails.
+    agent: researcher
+  - id: implement
+    description: Add src/cleanup_tools/semantic/faces.py -- detect_faces(path) -> list[FaceDetection] where FaceDetection carries (bbox, embedding). Model files loaded from a vendored local path, never insightface's own model-zoo downloader.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Tests against real photos on this machine (single-face, multi-face, zero-face) --
+      exercises the REAL onnxruntime inference, not a mocked result (mirrors phase 1's
+      "no test depends on a mocked platform-framework call returning fabricated results"
+      discipline). The no-network-call test is the load-bearing one for this story's
+      offline-reliability guarantee.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm detect_faces() genuinely never raises on a real but unusual photo (corrupt file, extreme aspect ratio, zero faces) and that the model-loading path has no hidden dependency on insightface's own convenience wrapper anywhere, not just in the obvious entry point.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/ai/anthropic_provider.py
+      purpose: "The existing precedent for auditing a third-party SDK/loader for phone-home behavior before trusting it, and pinning it down with an explicit regression test -- applied here to InsightFace's model-zoo loader instead of the Anthropic SDK."
+    - path: .pHive/epics/document-topic-clustering/stories/semantic-extraction-and-embedding.yaml
+      purpose: "The direct sibling story from phase 1 -- same 'spike first, escalate if it fails' discipline, same 'never raises, returns an empty/fallback result' contract."
+
+files_to_modify:
+  - file: src/cleanup_tools/semantic/faces.py
+    change: New -- detect_faces(path) -> list[FaceDetection].
+  - file: pyproject.toml
+    change: Add onnxruntime + insightface-adjacent packages to the `semantic` extras group (see face-packaging-and-verification for the full packaging story; this story only needs the group to exist for local dev installs).
+
+design_decisions:
+  - decision: Model weights are vendored static files, loaded via onnxruntime.InferenceSession directly, never through insightface's own FaceAnalysis convenience wrapper.
+    rationale: "insightface's default loading path auto-downloads from a remote model zoo on first use -- the exact class of gotcha the research brief flags for HF_HUB_OFFLINE, just a different package. Design discussion §2.1."
+  - decision: This capability is cross-platform (Mac + Arch) from day one, unlike phase 1's Mac-only text embedder.
+    rationale: "There is no local-native, zero-cost alternative to InsightFace on ANY platform (Apple's Vision framework doesn't expose a public identity-embedding API) -- so there's no cheaper Mac-only path to prefer over a cross-platform one here. Design discussion §2."
+
+risks:
+  - severity: high
+    description: onnxruntime + InsightFace model files might not run correctly, or the CoreML execution provider might not engage, in this specific environment.
+    mitigation: The research step's spike runs before any implementation code, specifically to surface this early.
+  - severity: high
+    description: insightface's package internals might reach the network in a code path not obvious from its public API (e.g. a version-check, a telemetry call) even when the model-zoo downloader itself is bypassed.
+    mitigation: The block_real_network-style test is the concrete guard against this, not just an assumption that avoiding FaceAnalysis is sufficient.
+
+references:
+  - path: .pHive/epics/photo-face-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §2.1: this epic's implementation must NOT rely on insightface's own convenience
+      auto-download: model weights are vendored as static files... the ONNX Runtime session
+      is constructed directly from those local files, never through insightface's
+      high-level auto-downloading wrapper.
+
+metric:
+  applies: false
+  justification: Foundation library story with no independently observable user-facing surface yet -- its value is realized by face-pipeline-and-single-identity-staging's real staged proposals.
+
+manual_verdict:
+  scenario_ref: null

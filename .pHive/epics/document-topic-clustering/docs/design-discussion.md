@@ -26,7 +26,7 @@ file, propose `action="move"` to `<location>/_sorted/<bucket>/<filename>`, tag
 bucket comes from extension rules; a semantic cluster's "bucket" is instead a cluster label
 discovered from content similarity. Structurally these are identical. So this epic does
 **not** invent a new proposal shape or a new review flow — it proposes
-`action="move"` to `<location>/_clusters/<cluster-label>/<filename>`, and extends
+`action="move"` to `<location>/_clusters/by-topic/<cluster-label>/<filename>`, and extends
 `queue.parse_group_key`/`queue.group_entries_hierarchical` (already relocated to `queue.py`
 this session) to recognize a new `"cluster"` pipeline prefix alongside `"sort"`/`"reclaim"`/
 `"corral-screenshots"`, with the identical 3-segment `cluster:<location>:<cluster-slug>`
@@ -40,9 +40,9 @@ page**. The dashboard tree and queue view already render anything shaped like a
 the pipeline, and (b) a way to see *why* files were grouped, since — unlike a `.pdf`
 extension — cluster membership isn't self-evident from a filename alone.
 
-**Filename collisions under a flat `_clusters/<slug>/` dest (grill T1).** Because the scan
+**Filename collisions under a flat `_clusters/by-topic/<slug>/` dest (grill T1).** Because the scan
 is recursive (see §2.2), two files named e.g. `notes.pdf` from different subfolders can
-land in the SAME flat `_clusters/<slug>/` destination — a real collision `sort._plan`'s
+land in the SAME flat `_clusters/by-topic/<slug>/` destination — a real collision `sort._plan`'s
 shallow, single-namespace scan never has to handle. `pipeline.py` disambiguates
 deterministically: if a candidate `dest` already exists on disk, or is already claimed by
 another entry proposed in this same run, the filename gets a short suffix derived from its

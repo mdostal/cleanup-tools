@@ -1,0 +1,105 @@
+id: face-pipeline-and-single-identity-staging
+epic: photo-face-clustering
+title: Reuse phase-1 walk + single-identity-only staging rule + by-person/ dest convention
+status: pending
+complexity: high
+methodology: classic
+depends_on: [face-index-and-clustering]
+
+description: |
+  Wires detection/embedding (face-detection-and-embedding) and index/clustering
+  (face-index-and-clustering) together, reusing `document-topic-clustering`'s ALREADY-BUILT
+  recursive-scan + protected-path + iCloud-guard walk from `semantic/pipeline.py`
+  (parameterized by extractor: text vs. face) rather than a second parallel
+  implementation (this epic's own grill finding C1).
+
+  The central new rule, resolving this epic's core design tension (design discussion §5):
+  a move proposal is staged for a photo ONLY when every detected face in it maps to the
+  SAME person-cluster. Group/multi-person photos are detected, embedded, and indexed
+  (forward-compatible groundwork for a future multi-membership epic) but NEVER staged --
+  action="move" can only place a file in one destination, and this epic does not invent a
+  new "tag, don't move" QueueEntry action type to work around that. Destination is
+  domain-separated: `<location>/_clusters/by-person/<slug>/`, distinct from phase 1's
+  `_clusters/by-topic/<slug>/` (grill T1), so a human browsing the result sees two clearly
+  separated kinds of grouping.
+
+acceptance_criteria:
+  - "Given a folder of photos, when the pipeline scans it, then it reuses semantic/pipeline.py's existing recursive-scan/protected-path/iCloud-guard walk -- not a second, separately-implemented walk."
+  - "Given a photo where every detected face maps to the same person-cluster, when the pipeline runs, then a real QueueEntry (action=move, dest under _clusters/by-person/<slug>/, group_key=f'cluster:{location}:{slug}', source=local:cluster) is staged."
+  - "Given a photo with 2+ detected faces mapping to DIFFERENT person-clusters, when the pipeline runs, then NO move is staged for that photo -- it is indexed (both faces' embeddings are stored) but never proposed."
+  - "Given a photo with zero detected faces, when the pipeline runs, then it is skipped entirely for this pipeline (not proposed, not an error)."
+  - "Given cluster-sourced photo entries and document entries in the same queue, when queue.parse_group_key/group_entries_hierarchical process them, then both use the shared 'cluster' pipeline prefix but land under visually distinct by-person/ vs by-topic/ destinations."
+
+steps:
+  - id: research
+    description: Re-confirm semantic/pipeline.py's exact walk interface (from phase 1's implementation, once it exists) to extend it with a face-extractor parameter rather than duplicating the walk logic.
+    agent: researcher
+  - id: implement
+    description: |
+      Extend src/cleanup_tools/semantic/pipeline.py to support a face-extraction mode
+      (reusing the existing walk), implement the single-identity staging rule and the
+      by-person/ dest convention.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Real fixture folders with single-face photos, multi-face/multi-identity photos, and
+      zero-face photos, plus a monkeypatched face detector (avoiding real onnxruntime calls
+      in this story's own tests -- face-detection-and-embedding's story already covers
+      real-model testing). Dedicated tests for the single-identity staging rule and the
+      by-person/by-topic dest separation, independently.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Specifically verify no code path can stage a multi-identity photo as a move under any circumstance -- this is the story's core safety property, mirroring this session's established "review step specifically checks for the one regression that must never ship" discipline.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: .pHive/epics/document-topic-clustering/stories/semantic-pipeline-and-queue-integration.yaml
+      purpose: "The phase-1 sibling story whose walk/guard logic this story reuses directly, not reimplements."
+
+files_to_modify:
+  - file: src/cleanup_tools/semantic/pipeline.py
+    change: Extend with face-extraction mode, single-identity staging rule, by-person/ dest convention.
+
+design_decisions:
+  - decision: A move is staged only when every face in a photo maps to the same cluster; multi-person photos are indexed but never staged.
+    rationale: "Keeps action=move semantics 100% consistent with every other pipeline in this codebase rather than inventing a new QueueEntry action type. A zero-copy 'tag, don't move' alternative (Finder tags/xattr, per the research brief §2.4) is explicitly deferred to a later epic. Design discussion §5."
+  - decision: by-person/ and by-topic/ are separate subdirectories under _clusters/.
+    rationale: "Grill T1 -- avoids mixing two conceptually different kinds of grouping in one flat namespace, and makes slug collision between the two epics structurally impossible."
+
+risks:
+  - severity: high
+    description: A bug in the single-identity check could stage a multi-person photo as a move, misrepresenting a group photo as belonging to one person.
+    mitigation: Dedicated adversarial test + explicit review-step callout, mirroring chat-propose-and-approve's own guard-regression discipline from an earlier epic this session.
+
+references:
+  - path: .pHive/epics/photo-face-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §5: this epic proposes a move ONLY for a photo where every detected face in it maps
+      to the SAME person-cluster... group/multi-person photos are detected, embedded, and
+      indexed... but never staged in this phase.
+
+metric:
+  applies: true
+  name: semantic.multi_identity_photo_staged_as_move_count
+  direction: down
+  unit: count
+  baseline: "N/A (feature doesn't exist yet)"
+  target: "0, always -- this is a correctness/safety invariant, not a trend to improve over time"
+  window: every test run, permanently
+  source:
+    kind: events
+    ref: this story's dedicated single-identity staging rule tests
+  verify_at: test
+  owner: tester
+
+manual_verdict:
+  scenario_ref: null

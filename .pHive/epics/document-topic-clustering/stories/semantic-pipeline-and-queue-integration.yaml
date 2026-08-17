@@ -16,7 +16,7 @@ description: |
   discussion after this epic's grill pass:
   1. The scan is RECURSIVE (grill-H1) -- documents live nested in folders, unlike sort's
      shallow Downloads-clutter scan.
-  2. A recursive scan under a flat _clusters/<slug>/ dest creates real filename collisions
+  2. A recursive scan under a flat _clusters/by-topic/<slug>/ dest creates real filename collisions
      that sort._plan's shallow, single-namespace scan never had to handle -- disambiguated
      deterministically before staging (grill-T1).
   3. Before any file's content is read, its iCloud-materialization status is checked
@@ -81,7 +81,7 @@ files_to_modify:
 design_decisions:
   - decision: Recursive scan, not shallow.
     rationale: "Documents worth topic-clustering live nested in folders, unlike sort's flat Downloads-clutter target. Grill-H1."
-  - decision: Filename collisions under the flat _clusters/<slug>/ dest are disambiguated with a suffix derived from the file's original parent directory, never silently overwritten.
+  - decision: Filename collisions under the flat _clusters/by-topic/<slug>/ dest are disambiguated with a suffix derived from the file's original parent directory, never silently overwritten.
     rationale: "Grill-T1 -- a direct, necessary consequence of choosing recursive scanning."
   - decision: iCloud-placeholder guard is fixed in THIS epic's own new code path only, not retroactively applied to survey.py/dedupe.py.
     rationale: "This is the first content-reading pipeline in the codebase; writing it with a KNOWN failure mode already named in the research brief would be a straightforward regression, but auditing/fixing prior pipelines is genuinely separate scope. Design discussion §2.6."
@@ -98,7 +98,7 @@ references:
   - path: .pHive/epics/document-topic-clustering/docs/design-discussion.md
     relevant_excerpt: |
       §2.1: clustering is just a location-aware bucket, one more time -- action=move,
-      dest=<location>/_clusters/<slug>/<filename>, group_key=f"cluster:{location}:{slug}",
+      dest=<location>/_clusters/by-topic/<slug>/<filename>, group_key=f"cluster:{location}:{slug}",
       staged via the SAME queue.stage_entries() every other pipeline uses.
 
 metric:

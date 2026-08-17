@@ -1,0 +1,85 @@
+id: face-packaging-and-verification
+epic: photo-face-clustering
+title: PyInstaller packaging for onnxruntime + vendored ~300-500MB model weights + offline-reliability regression test + frozen-build verification
+status: pending
+complexity: high
+methodology: classic
+depends_on: [face-ui-and-settings]
+
+description: |
+  Closes out this epic's central stated risk (a much larger bundling payload than phase 1,
+  genuinely unverified going in) with a real pass/fail. Adds `onnxruntime` +
+  InsightFace-adjacent packages to the `semantic` extras group, bundles the vendored ONNX
+  model weights as PyInstaller `datas` (design discussion §2.1 -- never downloaded at
+  runtime), adds a concrete regression test asserting the model-loading path never reaches
+  the network (blocking real socket connections, mirroring test_ai_provider.py's
+  block_real_network fixture), and does a genuine frozen-build manual verification pass.
+
+acceptance_criteria:
+  - "Given pyproject.toml, when inspected, then the semantic extras group includes onnxruntime and whatever InsightFace-adjacent packages the vendored-weights approach actually needs (determined empirically in face-detection-and-embedding, not re-derived here)."
+  - "Given packaging/pyinstaller/cleanup_ui.spec, when a frozen build is produced, then it includes the vendored ONNX model weight files as datas (not downloaded at first run) and whatever hiddenimports onnxruntime/the PyObjC-adjacent bits need."
+  - "Given the model-loading code, when the offline-reliability regression test runs (real socket connections blocked), then face detection/embedding still succeeds using only bundled local files -- proves the no-network-call guarantee holds under the SAME frozen packaging a real user would run, not just in dev."
+  - "Given the frozen desktop app, when launched, then clicking \"Plan: Cluster Photos by Person\" against a real folder of photos produces real staged proposals -- confirmed from the actual packaged binary, with a documented pass/fail verdict either way."
+  - "Given test_pyinstaller_spec_datas.py's existing drift-check discipline, when run, then it still passes for every template/static file this epic added."
+
+steps:
+  - id: research
+    description: Re-confirm the exact vendored-model-file layout face-detection-and-embedding settled on, and cleanup_ui.spec's existing hiddenimports/datas patterns, as the template for this story's additions.
+    agent: researcher
+  - id: implement
+    description: Add onnxruntime + InsightFace-adjacent packages to pyproject.toml's semantic extras group; add the vendored model weight files as datas and any needed hiddenimports to cleanup_ui.spec.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Run test_pyinstaller_spec_datas.py; run the full existing test suite; run the offline-reliability regression test under the frozen build specifically (not just dev), if that distinction turns out to matter empirically.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Confirm the manual frozen-build verification pass actually happened and is documented
+      with a real pass/fail verdict in this story's manual_verdict -- given this epic's
+      design discussion explicitly flagged the ~300-500MB bundling question as genuinely
+      unverified, an assumed-passing verdict here would be a real regression from this
+      session's established "verify, don't assume" discipline.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: .pHive/epics/document-topic-clustering/stories/semantic-packaging-and-verification.yaml
+      purpose: "The phase-1 sibling story this one directly extends -- same discipline, a genuinely larger and riskier bundling payload."
+    - path: tests/test_ai_provider.py
+      purpose: "block_real_network's exact fixture pattern -- the template for this story's offline-reliability regression test."
+
+files_to_modify:
+  - file: pyproject.toml
+    change: Add onnxruntime + InsightFace-adjacent packages to the semantic extras group.
+  - file: packaging/pyinstaller/cleanup_ui.spec
+    change: Add vendored model-weight files as datas; add hiddenimports as determined empirically.
+
+design_decisions:
+  - decision: Model weights ship as bundled datas, never downloaded at runtime.
+    rationale: "Direct continuation of face-detection-and-embedding's no-auto-download decision -- packaging must not silently reintroduce a runtime download path that story explicitly closed off."
+
+risks:
+  - severity: high
+    description: A ~300-500MB PyInstaller datas payload might hit real build-size/build-time/distribution limits this project hasn't encountered before.
+    mitigation: This story's whole purpose is to surface that finding for real, with a documented verdict either way -- not to assume it works because phase 1's much smaller PyObjC bundling worked.
+
+references:
+  - path: .pHive/epics/photo-face-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §7: Bundle size / packaging: ~300-500MB of vendored ONNX weights is a real, first-of-
+      its-kind PyInstaller payload for this project.
+
+metric:
+  applies: false
+  justification: Packaging/infrastructure story -- its pass/fail IS its own verdict (manual_verdict below), not a number that trends over time.
+
+manual_verdict:
+  scenario_ref: null
