@@ -53,10 +53,42 @@ different package. This epic's implementation must NOT rely on `insightface`'s o
 convenience auto-download: model weights are vendored as static files (bundled with the
 app, same discipline `ai/anthropic_provider.py` and `document-topic-clustering` already
 established for third-party network-touching code), and the ONNX Runtime session is
-constructed directly from those local files via `onnxruntime.InferenceSession`, never
-through `insightface`'s high-level auto-downloading wrapper. This is a concrete engineering
-task in this epic (see semantic-packaging-and-verification-faces), not an assumption that
+constructed directly from those local files, never through `insightface`'s high-level
+auto-downloading wrapper. This is a concrete engineering task in this epic (see
+`face-detection-and-embedding`/`face-packaging-and-verification`), not an assumption that
 "it's local so it's fine."
+
+**Resolved during `face-detection-and-embedding`'s implementation spike (real findings, not
+assumptions):**
+
+- **The lower-level, non-auto-downloading entry point is `insightface.model_zoo.get_model(name,
+  ...)`**, confirmed via direct source inspection of the installed package: when `name` ends in
+  `.onnx` it is treated as a literal local file path, and a network fetch is only ever attempted
+  when the caller explicitly passes `download=True` (never done here). This uses `insightface`'s
+  own (correct, tested) SCRFD/ArcFace pre/post-processing code — not a from-scratch
+  reimplementation — while still fully avoiding the auto-downloading wrapper, satisfying both
+  "don't reinvent tested detection math" and "never a silent network call."
+- **Only 2 of the `buffalo_l` release's 5 model files are actually needed** for this epic's scope
+  (identity clustering only, no age/gender/2D-3D-landmark features): `det_10g.onnx` (SCRFD
+  detector, 16MB) and `w600k_r50.onnx` (ArcFace recognizer, 174MB) — dropping `genderage.onnx`,
+  `2d106det.onnx`, and `1k3d68.onnx` (the single largest file at 137MB) cuts real local disk usage
+  from the full pack's ~330MB down to **~190MB**, meaningfully under the original ~300-500MB
+  estimate.
+- **Model acquisition is a new script**, `scripts/fetch-semantic-face-models.py`: a one-time,
+  explicit, developer/build-time step (never something the running app does) that downloads the
+  real `buffalo_l.zip` release, extracts only the 2 needed files, and verifies each against a
+  pinned SHA256 checksum before vendoring it to `~/.cache/cleanup-tools/models/buffalo_l/` — the
+  same directory `semantic.faces.default_models_dir()` reads from at runtime and
+  `face-packaging-and-verification`'s PyInstaller `datas` bundles from. A checksum mismatch fails
+  loudly rather than vendoring an unverified file.
+- **A real environment gotcha, fixed in both the fetch script and its test fixture**: this
+  machine's Python.org-installed interpreter's `urllib` has no working default CA bundle (a
+  known class of python.org-installer issue; `curl`/the system's own store are unaffected) —
+  fixed by explicitly constructing the SSL context from `certifi`'s bundle (already a real,
+  installed dependency) rather than assuming the interpreter's default context is populated.
+- **CoreML execution provider engages correctly** when explicitly requested in the `providers`
+  list (`["CoreMLExecutionProvider", "CPUExecutionProvider"]`) — confirmed via onnxruntime's own
+  log output showing 133 of 153 graph nodes running on CoreML for the real models used here.
 
 ## 3. Clustering: reuse `cluster.py` as-is, explicit tradeoff stated
 

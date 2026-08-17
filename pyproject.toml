@@ -39,6 +39,25 @@ semantic = [
     "pyobjc-framework-Vision",
     "pyobjc-framework-Quartz",
 ]
+# Cross-platform local face detection + identity embedding (photo-face-clustering
+# epic, phase 2): InsightFace's SCRFD detector + ArcFace recognizer, run via
+# onnxruntime. Deliberately a SEPARATE extras group from `semantic` above --
+# unlike phase 1's text embedding, Apple's public frameworks expose no
+# face-identity-embedding API, so this has no Mac-only zero-cost alternative
+# and is genuinely cross-platform (works identically on Arch); bundling it
+# into the `semantic` group (whose pyobjc-framework-* wheels are macOS-only)
+# would break `pip install cleanup_tools[semantic]` on any other platform.
+# `opencv-python-headless` (not plain `opencv-python`) since this app is a
+# local Flask server with no GUI display calls -- avoids pulling in Qt/GUI
+# bindings neither this app nor insightface's own detection/recognition code
+# paths actually use. Model weights are NEVER installed by pip -- see
+# scripts/fetch-semantic-face-models.py and semantic/faces.py's module
+# docstring. See .pHive/epics/photo-face-clustering/docs/design-discussion.md §2.
+semantic-faces = [
+    "onnxruntime",
+    "insightface",
+    "opencv-python-headless",
+]
 
 [project.scripts]
 cleanup = "cleanup_tools.cli:main"

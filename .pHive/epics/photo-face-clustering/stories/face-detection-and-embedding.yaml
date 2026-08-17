@@ -1,7 +1,7 @@
 id: face-detection-and-embedding
 epic: photo-face-clustering
 title: InsightFace detection + embedding via vendored ONNX weights (no auto-download)
-status: pending
+status: done
 complexity: high
 methodology: classic
 depends_on: []
@@ -105,3 +105,17 @@ metric:
 
 manual_verdict:
   scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T01:47:00Z"
+  agent: developer
+  notes: |
+    Real go/no-go spike, not simulated: installed onnxruntime (lightweight, CoreML EP
+    available out of the box) + insightface (pulls opencv-python-headless/onnx/tqdm/
+    typing_extensions -- real but bounded weight), downloaded the real buffalo_l.zip release,
+    ran real SCRFD detection + ArcFace embedding against a real photo. Result: 1 face
+    correctly detected, real deterministic 512-d embedding, CoreML engaged for 133/153 graph
+    nodes. Two real findings changed the plan during implementation (both now reflected in
+    design-discussion.md §2.1): only 2 of 5 buffalo_l files are actually needed (~190MB, not
+    ~300-500MB), and insightface.model_zoo.get_model() (not FaceAnalysis) is the real
+    non-auto-downloading entry point, confirmed via source inspection. Offline-reliability
+    proven with a real blocked-socket test, not just code reading.
