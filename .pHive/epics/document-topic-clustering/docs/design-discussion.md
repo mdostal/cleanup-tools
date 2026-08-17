@@ -215,12 +215,16 @@ regression to ship knowingly, not a reasonable scope boundary.
 
 ### 2.7 Packaging
 
-New PyObjC hiddenimports in `packaging/pyinstaller/cleanup_ui.spec` (mirrors the existing
-`anthropic`/`httpx` hiddenimports block, since PyObjC frameworks are also not always
-statically resolvable by PyInstaller's import scanner). PyObjC-under-PyInstaller is a
-well-trodden combination (PyObjC's own docs and numerous community-reported working setups)
-but has NOT been verified in THIS project's specific frozen-build pipeline yet — that
-verification is this epic's last story, not an assumption.
+New PyObjC hiddenimports in `packaging/pyinstaller/cleanup_ui.spec` were ANTICIPATED
+(mirroring the existing `anthropic`/`httpx` hiddenimports block, since PyObjC frameworks
+are also not always statically resolvable by PyInstaller's import scanner), but the real
+verification (`semantic-packaging-and-verification`'s manual_verdict) found none were
+actually needed: a real `ONEFILE=0` build succeeded with zero errors and zero spec
+changes, and a full frozen-binary run (isolated `HOME`, real search_root, real
+`/plan/cluster-documents` trigger against real fixture files) produced correctly-clustered
+real proposals using the real `NLEmbedding` PyObjC binding. PyObjC-under-PyInstaller is a
+well-trodden combination and this project's specific frozen-build pipeline confirms it
+works out of the box for this dependency set -- verified empirically, not assumed.
 
 ## 3. Risks
 

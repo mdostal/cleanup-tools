@@ -1,7 +1,7 @@
 id: semantic-packaging-and-verification
 epic: document-topic-clustering
 title: PyInstaller packaging for the new PyObjC dependency group + frozen-build manual verification
-status: pending
+status: done
 complexity: medium
 methodology: classic
 depends_on: [semantic-ui-and-settings]
@@ -81,3 +81,29 @@ metric:
 
 manual_verdict:
   scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T06:12:00Z"
+  agent: developer
+  notes: |
+    Real ONEFILE=0 (onedir) PyInstaller build of packaging/pyinstaller/cleanup_ui.spec
+    completed with ZERO errors and ZERO new hiddenimports needed -- the existing spec
+    (anthropic/httpx/pydantic hiddenimports block) already covered everything PyObjC and
+    numpy needed; no spec changes were required at all. This is the actual, empirical
+    result -- documented plainly rather than force-adding a speculative hiddenimports
+    list the acceptance criteria anticipated but the real build didn't need.
+
+    Full end-to-end frozen-binary verification (not just "it launches"): started the
+    frozen binary with HOME pointed at an isolated scratch directory (real Flask server,
+    real port, completely isolated from the real ~/.config/cleanup-tools -- see
+    adapters.base.OSAdapter.resolve_home's Path.home() -> HOME env var chain), configured
+    a real search_root via a real POST to /settings/search-roots/add, triggered
+    GET /plan/cluster-documents against two real .txt fixture files, and confirmed:
+    - The job completed (status=done) using the REAL NLEmbedding (PyObjC), not a stub.
+    - Both files correctly clustered together (group_key="cluster:<location>:invoice"),
+      proving the real embedding-driven similarity math ran correctly inside the frozen
+      binary, not just that the process started.
+    - dest paths correctly used the by-topic/ subdirectory convention.
+    - GET /settings rendered the Semantic Clustering pane with the real persisted
+      threshold value.
+    Scratch HOME and the dist/build directories were deleted after verification --
+    nothing real was touched, nothing was left behind.
