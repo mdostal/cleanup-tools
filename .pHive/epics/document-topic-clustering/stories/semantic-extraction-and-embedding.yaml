@@ -1,7 +1,7 @@
 id: semantic-extraction-and-embedding
 epic: document-topic-clustering
 title: Local text extraction (PDFKit/Vision) + local embedding (NLContextualEmbedding) via PyObjC
-status: pending
+status: done
 complexity: high
 methodology: classic
 depends_on: []

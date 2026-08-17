@@ -111,6 +111,20 @@ Why, over the cross-platform ONNX+Tesseract alternative the research brief also 
   cross-platform document clustering becomes a real requirement, it's a separate,
   explicitly-scoped follow-up epic (bundled ONNX path), not a retrofit onto this one.
 
+**Real finding from story 1's spike (post-planning, during execution)**: `NLContextualEmbedding`
+(the modern BERT-like embedder this doc originally named) is importable, but its
+constructor path (`initWithLanguage:`, `embeddingModelsForLanguage:`) is NOT reachable
+through this PyObjC binding (12.2.2) — neither selector exists on the bridged class,
+likely because that specific initializer surface is Swift-only and was never exposed to
+the classic Objective-C runtime PyObjC bridges against. Empirically confirmed working
+instead: the older, always-ObjC-bridged `NLEmbedding.initSentenceEmbeddingWithLocale_`,
+which returns real 512-dimensional sentence vectors via `vectorForString_` — deterministic
+(same input → identical vector), fast (~5ms/embed measured), and produces sensible
+similarity behavior (self-similarity ~1.0, unrelated-sentence similarity ~0.11 in a real
+test). `AppleTextEmbedder` uses `NLEmbedding`, not `NLContextualEmbedding` — the design
+goal (a real on-device sentence embedder, zero network calls, zero bundle cost) is fully
+met either way; this is an implementation-level substitution, not a scope change.
+
 **Verified before writing this doc**: `pyobjc-framework-NaturalLanguage`,
 `pyobjc-framework-Vision`, and `pyobjc-framework-Quartz` are real, actively maintained
 packages on PyPI (latest 12.2.2, matching current PyObjC releases) — confirmed via
