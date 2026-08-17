@@ -303,13 +303,25 @@ def _entry_ids_by_src_suffix(queue_html: str) -> dict[str, str]:
     Mirrors the split-by-card technique ``tests/test_ui_routes.py`` uses
     (``html.split(f'data-entry-id="{id}"')[1].split("entry-card")[0]``),
     just walked in the other direction: given the HTML, find every
-    ``data-entry-id`` and the ``src: <path>`` line that follows it within
-    the same card. Non-greedy ``.*?`` with ``re.DOTALL`` stops at the
-    FIRST "src: " after each id, which is always that same card's own src
-    line (each card's src always appears before the next card even starts
+    ``data-entry-id`` and the first ``<span class="full-path">`` that
+    follows it within the same card -- that's always the entry's own
+    source path, whether it's rendered via ``delete``'s plain
+    ``src: <span class="full-path">`` line or ``move``'s
+    ``<details class="path-disclosure">...<span class="full-path">``
+    wrapper (see queue.html), since "will move from" always renders before
+    "to" in both cases. Non-greedy ``.*?`` with ``re.DOTALL`` stops at the
+    FIRST match after each id, which is always that same card's own src
+    span (each card's src always appears before the next card even starts
     in queue.html's template), never a later card's.
+
+    This previously matched a literal ``src: <path>`` text run, which
+    ``queue.html`` stopped emitting for move/reject entries once the
+    path-disclosure ``<details>`` pattern landed (2026-08-15, guided-sort-
+    and-cluster's UI pass) -- this script wasn't updated at the time since
+    nothing re-ran the frozen-binary smoke test until now. Caught for real
+    while cutting the v0.2.0 release build, not assumed.
     """
-    pattern = re.compile(r'data-entry-id="([0-9a-f]+)".*?src: (?P<src>[^<\n]+)', re.DOTALL)
+    pattern = re.compile(r'data-entry-id="([0-9a-f]+)".*?class="full-path">(?P<src>[^<]+)<', re.DOTALL)
     result = {}
     for match in pattern.finditer(queue_html):
         entry_id = match.group(1)
@@ -460,6 +472,16 @@ def run_main_route_sweep(binary: Path, port: int) -> None:
             _check(job_payload["status"] == "done", f"/plan/sort background job did not finish cleanly: {job_payload}")
             _check(job_payload["result"]["count"] == 6, f"/plan/sort job result expected count=6, got {job_payload['result']}")
 
+            # Real group_key values by seeded filename -- group_key became
+            # location-aware ("sort:<location>:<bucket>", not a bare
+            # "sort:<bucket>") once multi-root sort landed, so a
+            # hardcoded "sort:docs"-style literal below would silently stop
+            # matching anything. Read the job's own staged entries instead
+            # of assuming the format.
+            sort_group_keys_by_name = {
+                Path(e["src"]).name: e["group_key"] for e in job_payload["result"]["entries"]
+            }
+
             # GET /plan/reclaim -- kicks off a background job (see
             # cleanup_tools.ui.jobs) and returns {"job_id": ...} immediately
             # rather than blocking/redirecting; poll /status/<job_id> until
@@ -523,14 +545,20 @@ def run_main_route_sweep(binary: Path, port: int) -> None:
             _check(resp.status == 302, f"reject expected 302, got {resp.status}")
 
             # POST /queue/bulk-approve (JSON body, group_key) -- sort:docs.
-            resp = _post(base, "/queue/bulk-approve", json_data={"group_key": "sort:docs"})
+            docs_group_key = sort_group_keys_by_name["bulk_doc_a.txt"]
+            _check(
+                sort_group_keys_by_name["bulk_doc_b.txt"] == docs_group_key,
+                "bulk_doc_a.txt/bulk_doc_b.txt expected the same group_key (same bucket, same location)",
+            )
+            resp = _post(base, "/queue/bulk-approve", json_data={"group_key": docs_group_key})
             _check(resp.status == 200, f"bulk-approve(json) expected 200, got {resp.status}")
             body = json.loads(resp.text())
             _check(body.get("count") == 2, f"bulk-approve(json) expected count=2, got {body}")
             _check(body.get("status") == "approved", f"bulk-approve(json) unexpected status: {body}")
 
             # POST /queue/bulk-reject (form body, group_key) -- sort:other.
-            resp = _post(base, "/queue/bulk-reject", form={"group_key": "sort:other"})
+            other_group_key = sort_group_keys_by_name["bulk_other_a.dat"]
+            resp = _post(base, "/queue/bulk-reject", form={"group_key": other_group_key})
             _check(resp.status == 302, f"bulk-reject(form) expected 302, got {resp.status}")
 
             # Only the reclaim entry should still be pending.
