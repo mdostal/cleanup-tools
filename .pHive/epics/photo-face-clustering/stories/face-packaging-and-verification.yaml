@@ -1,7 +1,7 @@
 id: face-packaging-and-verification
 epic: photo-face-clustering
 title: PyInstaller packaging for onnxruntime + vendored ~300-500MB model weights + offline-reliability regression test + frozen-build verification
-status: pending
+status: done
 complexity: high
 methodology: classic
 depends_on: [face-ui-and-settings]
@@ -83,3 +83,66 @@ metric:
 
 manual_verdict:
   scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T07:25:00Z"
+  agent: developer
+  notes: |
+    onnxruntime/insightface/opencv/scipy/skimage needed ZERO pyproject.toml or spec
+    hiddenimports changes -- pyinstaller-hooks-contrib's own bundled hooks (hook-onnxruntime,
+    hook-cv2, hook-skimage, hook-scipy.*) already cover this stack out of the box. This is a
+    real, positive finding, not an assumption: confirmed via a real ONEFILE=0 build that
+    succeeded outright the first time, before any manual-verification pass began.
+
+    The one real gap: the vendored det_10g.onnx/w600k_r50.onnx files (~186MB together)
+    are NOT discoverable by PyInstaller's static analysis, since faces.py only ever
+    references them via a dynamic runtime path string (default_models_dir()) -- confirmed
+    by `find dist -iname "*.onnx"` returning nothing on the first build. This surfaced a real
+    design gap beyond "just add datas=": default_models_dir() previously ALWAYS pointed at
+    ~/.cache/cleanup-tools/models/buffalo_l/, so bundling the files via datas= alone would
+    have shipped a frozen app whose own code still couldn't find them -- an end user would
+    still have had to manually run scripts/fetch-semantic-face-models.py, defeating the
+    point of bundling. Fixed by adding faces._frozen_models_dir() (checks sys._MEIPASS,
+    PyInstaller's own runtime attribute for the bundle's resource root) and having
+    default_models_dir() prefer it when both files are present there, falling back to the
+    dev-mode cache dir otherwise. Because this project's spec already commits to onedir (not
+    onefile) as the real build target -- see cleanup_ui.spec's own docstring on process-
+    lifecycle grounds -- sys._MEIPASS resolves to a STABLE directory next to the executable,
+    not a transient extraction, so this needs zero first-run copy step; insightface's
+    get_model() just needs a valid local path either way. cleanup_ui.spec's datas= now
+    sources the two files from the SAME dev-mode cache dir the fetch script populates, on the
+    BUILD machine, at build time -- a normal build-time precondition (Analysis fails loudly
+    with FileNotFoundError if the fetch script hasn't been run there first), never a runtime
+    concern for the shipped app.
+
+    Real ONEFILE=0 rebuild after the fix: `find dist -iname "*.onnx"` now returns both files
+    under dist/cleanup-ui-onedir/_internal/cleanup_tools/semantic/models/buffalo_l/ (total
+    onedir size 535MB, up from 352MB pre-fix -- consistent with the ~186MB of vendored
+    weights). Full test suite: 756 passed, 1 skipped (unrelated pre-existing skip).
+
+    Real isolated-HOME frozen-binary manual verification (mirroring document-topic-
+    clustering's story 5 exactly): launched dist/cleanup-ui-onedir/cleanup-ui-onedir directly
+    with HOME pointed at a scratch dir (no access to the real ~/.config/cleanup-tools/),
+    added a real search root, then hit /plan/cluster-photos against two real photos of the
+    same face (OpenCV's lena.jpg + a sips-recompressed copy with a genuinely different
+    content hash, needed since clustering requires >=2 DISTINCT content-hash rows -- a
+    byte-identical copy was tried first and correctly produced zero staged entries, which is
+    itself a confirmation that content-hash-based incremental indexing works as designed,
+    not a bug). Real result: 2 real QueueEntrys staged under
+    _clusters/by-person/person-1/{lena.jpg,lena-recompressed.jpg}, source="local:cluster",
+    both with working /thumbnail/<id> routes returning real image/jpeg content (confirmed via
+    curl, not assumed) when loading /queue. Proves the ENTIRE pipeline -- real InsightFace
+    detection, real ArcFace embedding, real clustering, real queue staging, real thumbnail
+    rendering -- works from the frozen binary using ONLY its own bundled model weights, no
+    dev-machine cache dependency and no network call. Server killed cleanly afterward (SIGTERM
+    to the reported onedir pid, confirmed via ps + lsof -iTCP -- no orphaned process, matching
+    the spec's own documented onedir-vs-onefile signal-handling rationale). Scratch HOME and
+    build/dist cleaned up after.
+
+    9 new tests (3 for default_models_dir()'s frozen-bundle-first resolution logic --
+    prefers a complete bundle, falls back to dev cache when the bundle is incomplete or
+    sys._MEIPASS is absent -- via the existing 6). test_pyinstaller_spec_datas.py's
+    drift-check is unaffected by the new model-weight datas entries by construction: it
+    statically stops parsing at the FIRST top-level `datas = [...]` assignment (the UI
+    templates/static list), never reaching the face-model datas.append() calls that follow
+    as separate top-level statements -- confirmed passing, still scoped to templates/static
+    only as designed.

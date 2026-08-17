@@ -76,6 +76,37 @@ def test_default_models_dir_is_under_cache_not_config(adapter):
     assert "buffalo_l" in result.parts
 
 
+def test_default_models_dir_prefers_frozen_bundle_when_present(monkeypatch, tmp_path, adapter):
+    bundle_root = tmp_path / "meipass"
+    bundled_models = bundle_root / "cleanup_tools" / "semantic" / "models" / faces.MODEL_PACK
+    bundled_models.mkdir(parents=True)
+    (bundled_models / faces.DETECTION_MODEL_FILENAME).write_bytes(b"fake")
+    (bundled_models / faces.RECOGNITION_MODEL_FILENAME).write_bytes(b"fake")
+    monkeypatch.setattr(faces.sys, "_MEIPASS", str(bundle_root), raising=False)
+
+    assert faces.default_models_dir(adapter) == bundled_models
+
+
+def test_default_models_dir_falls_back_to_cache_when_frozen_bundle_incomplete(monkeypatch, tmp_path, adapter):
+    bundle_root = tmp_path / "meipass"
+    bundled_models = bundle_root / "cleanup_tools" / "semantic" / "models" / faces.MODEL_PACK
+    bundled_models.mkdir(parents=True)
+    # Only the detection model present -- an incomplete bundle should not be
+    # preferred over a real, complete dev-mode cache.
+    (bundled_models / faces.DETECTION_MODEL_FILENAME).write_bytes(b"fake")
+    monkeypatch.setattr(faces.sys, "_MEIPASS", str(bundle_root), raising=False)
+
+    result = faces.default_models_dir(adapter)
+    assert result != bundled_models
+    assert ".cache" in result.parts
+
+
+def test_default_models_dir_ignores_meipass_when_not_frozen(adapter):
+    assert not hasattr(faces.sys, "_MEIPASS")
+    result = faces.default_models_dir(adapter)
+    assert ".cache" in result.parts
+
+
 def test_get_face_detector_raises_file_not_found_when_models_missing(tmp_path):
     class EmptyHomeAdapter(MacOSAdapter):
         def resolve_home(self):

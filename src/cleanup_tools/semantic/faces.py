@@ -22,6 +22,7 @@ this module's test file blocks real socket connections to prove it.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,12 +51,43 @@ class FaceDetection:
     embedding: list[float]
 
 
-def default_models_dir(adapter: OSAdapter) -> Path:
-    """Where vendored face-model ``.onnx`` files live -- fetched by
-    ``scripts/fetch-semantic-face-models.py``, never downloaded by this
-    running app. The same directory a PyInstaller build's ``datas`` bundles
-    from (see ``face-packaging-and-verification``).
+def _frozen_models_dir() -> Path | None:
+    """The vendored ``.onnx`` files bundled directly into a frozen
+    PyInstaller build, if this process IS one -- ``None`` when running from
+    source. ``sys._MEIPASS`` is PyInstaller's own runtime attribute
+    pointing at the bundle's resource root; for this project's onedir build
+    target (see ``packaging/pyinstaller/cleanup_ui.spec``'s own docstring
+    for why onedir was chosen over onefile) that's a stable directory next
+    to the executable, not a transient extraction -- so reading straight
+    out of it needs no first-run copy step.
     """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass is None:
+        return None
+    return Path(meipass) / "cleanup_tools" / "semantic" / "models" / MODEL_PACK
+
+
+def default_models_dir(adapter: OSAdapter) -> Path:
+    """Where vendored face-model ``.onnx`` files live.
+
+    Checked in order:
+    1. Bundled into a frozen PyInstaller build (see ``_frozen_models_dir``)
+       -- a shipped desktop app carries its own model weights, so an end
+       user never has to run a separate fetch step.
+    2. ``scripts/fetch-semantic-face-models.py``'s dev-mode target,
+       ``~/.cache/cleanup-tools/models/buffalo_l/`` -- used when running
+       from source, where no frozen bundle exists.
+
+    Either way, never downloaded by this running app at runtime -- see this
+    module's docstring.
+    """
+    frozen = _frozen_models_dir()
+    if (
+        frozen is not None
+        and (frozen / DETECTION_MODEL_FILENAME).exists()
+        and (frozen / RECOGNITION_MODEL_FILENAME).exists()
+    ):
+        return frozen
     return adapter.resolve_home() / ".cache" / "cleanup-tools" / "models" / MODEL_PACK
 
 

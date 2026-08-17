@@ -96,6 +96,25 @@ entry for a file that's been deleted). That test runs in every regular
 docstring's file count/list above is a convenience cross-reference for
 humans reading this file, not the actual enforcement mechanism.
 
+datas -- vendored face-model weights
+-------------------------------------
+``semantic/faces.py``'s ``default_models_dir()`` reads its two ``.onnx``
+files from a frozen build's own ``sys._MEIPASS``-relative bundle first (see
+that function's docstring), falling back to
+``~/.cache/cleanup-tools/models/buffalo_l/`` when running from source. For
+that first path to ever be reachable, this spec has to actually bundle the
+files -- PyInstaller's static analysis has no way to discover them on its
+own, since they're referenced only via a dynamic runtime path string, never
+imported. Sourced from the SAME dev-mode cache directory
+``scripts/fetch-semantic-face-models.py`` populates, which means that
+script must have already been run ONCE on the machine doing the `pyinstaller`
+build -- a normal build-time precondition (same category as needing Rust/
+Node toolchains installed before other projects' builds), not a runtime
+concern. If either file is missing at build time, ``Analysis`` fails loudly
+(FileNotFoundError-shaped, from the explicit existence check below) rather
+than silently shipping a binary that can detect faces from source but not
+once frozen.
+
 hiddenimports -- anthropic's dependency tree
 ---------------------------------------------
 ``anthropic`` pulls in ``httpx`` -> ``httpcore``/``anyio``/``certifi``/
@@ -156,6 +175,20 @@ datas = [
         "cleanup_tools/ui/static/icon-choices",
     ),
 ]
+
+FACE_MODELS_DIR = os.path.join(
+    os.path.expanduser("~"), ".cache", "cleanup-tools", "models", "buffalo_l"
+)
+FACE_MODEL_FILENAMES = ["det_10g.onnx", "w600k_r50.onnx"]
+for _filename in FACE_MODEL_FILENAMES:
+    _src = os.path.join(FACE_MODELS_DIR, _filename)
+    if not os.path.exists(_src):
+        raise FileNotFoundError(
+            f"Vendored face model weight missing at {_src} -- run "
+            "scripts/fetch-semantic-face-models.py on this machine before "
+            "building."
+        )
+    datas.append((_src, "cleanup_tools/semantic/models/buffalo_l"))
 
 hiddenimports = [
     # anthropic SDK internals PyInstaller's static import scanner doesn't
