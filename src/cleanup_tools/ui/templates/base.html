@@ -1071,6 +1071,14 @@
     data-dashboard-url="{{ url_for('ui.dashboard') }}"
     title="Group documents by topic, entirely local -- no network calls"
   >Plan: Cluster Documents</a>
+  <a
+    href="{{ url_for('ui.plan_cluster_photos') }}"
+    class="plan-trigger-link"
+    data-plan-kind="cluster-photos"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+    title="Group photos by person, entirely local -- no network calls; only single-identity photos are proposed"
+  >Plan: Cluster Photos by Person</a>
   <form method="post" action="{{ url_for('ui.propose_ai') }}">
     <button type="submit" title="Ask the configured AI provider to bucket ambiguous ('other') files">Propose with AI</button>
   </form>

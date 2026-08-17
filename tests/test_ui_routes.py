@@ -2119,7 +2119,7 @@ def test_dashboard_empty_state_plan_links_are_also_wired(client):
     # to the nav ones) -- those must be wired up too.
     resp = client.get("/")
     html = resp.data.decode()
-    assert html.count('class="plan-trigger-link"') == 7  # 4 in nav (incl. cluster-documents) + 3 in empty state
+    assert html.count('class="plan-trigger-link"') == 8  # 5 in nav (incl. cluster-documents/cluster-photos) + 3 in empty state
     for kind in PLAN_LINK_TEXT:
         # nav link + empty-state link + the kickoff bar's own checkbox for
         # this kind (see test_dashboard_kickoff_bar_has_checkboxes_for_all_three_plans).
@@ -2130,7 +2130,7 @@ def test_queue_empty_state_plan_links_are_also_wired(client):
     resp = client.get("/queue")
     html = resp.data.decode()
     assert b"Nothing pending" in resp.data
-    assert html.count('class="plan-trigger-link"') == 7  # nav (incl. cluster-documents) + empty-state
+    assert html.count('class="plan-trigger-link"') == 8  # nav (incl. cluster-documents/cluster-photos) + empty-state
 
 
 def test_queue_nonempty_still_has_nav_plan_links_wired(adapter, client, tmp_path):
@@ -2141,7 +2141,7 @@ def test_queue_nonempty_still_has_nav_plan_links_wired(adapter, client, tmp_path
     html = resp.data.decode()
     # Only the nav links render once entries exist -- no "Nothing pending"
     # empty-state fallback to duplicate them.
-    assert html.count('class="plan-trigger-link"') == 4  # incl. cluster-documents
+    assert html.count('class="plan-trigger-link"') == 5  # incl. cluster-documents/cluster-photos
     for kind, text in PLAN_LINK_TEXT.items():
         link_attrs = _plan_trigger_link_block(html, text)
         assert "data-status-url-template=" in link_attrs
@@ -3560,3 +3560,107 @@ def test_set_semantic_options_rejects_out_of_range_threshold(adapter, client):
 
     reloaded = config_module.load_config(adapter)
     assert reloaded.semantic_cluster_threshold == 0.75
+
+
+# ---------------------------------------------------------------------------
+# 20. Photo-face clustering: the "Plan: Cluster Photos by Person" trigger,
+#     Settings' face-threshold field/route. The face detector is always
+#     monkeypatched (never a real onnxruntime/InsightFace call in this
+#     file) -- face-detection-and-embedding's own test file already covers
+#     real-model testing; pipeline.py's own test file already covers the
+#     real face-pipeline logic. These tests only prove ROUTE wiring.
+# ---------------------------------------------------------------------------
+
+
+class _FakeRouteFaceDetector:
+    def detect(self, image_path):
+        from cleanup_tools.semantic.faces import FaceDetection
+
+        return [FaceDetection(bbox=(0.0, 0.0, 10.0, 10.0), embedding=[1.0, 0.0, 0.0])]
+
+
+def _stub_face_detector(monkeypatch):
+    import cleanup_tools.semantic.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module.faces_module, "get_face_detector", lambda adapter: _FakeRouteFaceDetector())
+
+
+def test_cluster_photos_nav_link_present(client):
+    html = client.get("/queue").data.decode()
+    assert ">Plan: Cluster Photos by Person<" in html
+
+
+def test_plan_cluster_photos_stages_real_entries(adapter, client, tmp_path, monkeypatch):
+    _stub_face_detector(monkeypatch)
+    root = tmp_path / "photos"
+    root.mkdir()
+    (root / "a.jpg").write_bytes(b"fake-photo-a")
+    (root / "b.jpg").write_bytes(b"fake-photo-b")
+    config_module.save_config(
+        adapter,
+        config_module.Config(bucket_rules=config_module.DEFAULT_BUCKET_RULES, search_roots=[str(root)]),
+    )
+
+    resp = client.get("/plan/cluster-photos")
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+
+    payload = _poll_job_until_terminal(client, job_id)
+    assert payload["status"] == "done"
+    assert payload["result"]["count"] == 2
+
+    entries = queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
+    assert len(entries) == 2
+    assert all(e.source == "local:cluster" for e in entries)
+    assert all("_clusters/by-person/" in e.dest for e in entries)
+
+
+def test_settings_semantic_clustering_pane_shows_current_face_threshold(adapter, client):
+    config_module.save_config(
+        adapter,
+        config_module.Config(
+            bucket_rules=config_module.DEFAULT_BUCKET_RULES, semantic_face_cluster_threshold=0.4
+        ),
+    )
+
+    html = client.get("/settings").data.decode()
+
+    assert 'name="semantic_face_cluster_threshold"' in html
+    assert 'value="0.4"' in html
+
+
+def test_set_semantic_face_options_persists_threshold(adapter, client):
+    resp = client.post("/settings/semantic-face-options", data={"semantic_face_cluster_threshold": "0.5"})
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("#semantic-clustering")
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.semantic_face_cluster_threshold == 0.5
+
+
+def test_set_semantic_face_options_rejects_non_numeric_threshold_and_does_not_persist(adapter, client):
+    resp = client.post("/settings/semantic-face-options", data={"semantic_face_cluster_threshold": "nope"})
+    assert resp.status_code == 400
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.semantic_face_cluster_threshold == 0.6
+
+
+def test_set_semantic_face_options_rejects_out_of_range_threshold(adapter, client):
+    resp = client.post("/settings/semantic-face-options", data={"semantic_face_cluster_threshold": "2.0"})
+    assert resp.status_code == 400
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.semantic_face_cluster_threshold == 0.6
+
+
+def test_document_and_face_threshold_settings_never_conflated_by_route(adapter, client):
+    """Regression guard mirroring config.py's own independent-fields test,
+    at the route level: saving one threshold must never touch the other.
+    """
+    client.post("/settings/semantic-options", data={"semantic_cluster_threshold": "0.9"})
+    client.post("/settings/semantic-face-options", data={"semantic_face_cluster_threshold": "0.2"})
+
+    reloaded = config_module.load_config(adapter)
+    assert reloaded.semantic_cluster_threshold == 0.9
+    assert reloaded.semantic_face_cluster_threshold == 0.2

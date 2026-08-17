@@ -342,6 +342,7 @@ def test_config_to_dict_matches_the_shape_save_config_actually_persists(tmp_path
         "chat_turn_cap": 20,
         "chat_model": "claude-haiku-4-5",
         "semantic_cluster_threshold": 0.75,
+        "semantic_face_cluster_threshold": 0.6,
     }
 
     class TmpHomeAdapter(MacOSAdapter):
@@ -372,6 +373,7 @@ def test_config_to_dict_never_includes_credential_material():
         "chat_turn_cap",
         "chat_model",
         "semantic_cluster_threshold",
+        "semantic_face_cluster_threshold",
     }
 
 
@@ -545,6 +547,74 @@ def test_semantic_cluster_threshold_defaults_when_absent_from_config_file(tmp_pa
 
 def test_semantic_cluster_threshold_defaults_with_no_config_file_at_all():
     assert DEFAULT_CONFIG.semantic_cluster_threshold == 0.75
+
+
+def test_semantic_face_cluster_threshold_round_trips_through_save_and_load(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], semantic_face_cluster_threshold=0.5), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_face_cluster_threshold == 0.5
+
+
+def test_semantic_face_cluster_threshold_zero_is_not_silently_replaced_by_default(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], semantic_face_cluster_threshold=0.0), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_face_cluster_threshold == 0.0
+
+
+def test_semantic_face_cluster_threshold_defaults_when_absent_from_config_file(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("search_roots: []\n")
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_face_cluster_threshold == 0.6
+
+
+def test_semantic_face_cluster_threshold_defaults_with_no_config_file_at_all():
+    assert DEFAULT_CONFIG.semantic_face_cluster_threshold == 0.6
+
+
+def test_semantic_cluster_threshold_and_face_threshold_are_independent_fields(tmp_path):
+    """Regression guard against the exact correctness trap this design
+    decision exists to avoid: setting one must never affect the other.
+    """
+
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(
+        adapter,
+        Config(bucket_rules=[], semantic_cluster_threshold=0.9, semantic_face_cluster_threshold=0.3),
+        path=config_path,
+    )
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_cluster_threshold == 0.9
+    assert loaded.semantic_face_cluster_threshold == 0.3
 
 
 # ---------------------------------------------------------------------------

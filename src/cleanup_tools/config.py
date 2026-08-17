@@ -81,6 +81,16 @@ class Config:
     # default value used when this config field isn't threaded through
     # (e.g. a direct/test call to pipeline.run()).
     semantic_cluster_threshold: float = 0.75
+    # photo-face-clustering epic: the cosine-similarity threshold
+    # semantic/cluster.py's threshold+union-find grouping uses for FACE
+    # embeddings -- a SEPARATE field from semantic_cluster_threshold above,
+    # deliberately, since face-embedding and text-embedding cosine
+    # similarity are different metric spaces with different meaningful
+    # ranges (reusing one field across both would be a real correctness
+    # trap disguised as a naming nicety). 0.6 is a reasonable starting
+    # default for ArcFace-style embeddings; exposing it as a real setting
+    # is the point, not a claim that 0.6 is universally correct.
+    semantic_face_cluster_threshold: float = 0.6
 
 
 # Order matters: rules are checked in sequence and the first match wins, so
@@ -332,6 +342,9 @@ def load_config(adapter: OSAdapter, path: Path | None = None) -> Config:
     semantic_cluster_threshold = parsed.get("semantic_cluster_threshold")
     if semantic_cluster_threshold is None:
         semantic_cluster_threshold = 0.75
+    semantic_face_cluster_threshold = parsed.get("semantic_face_cluster_threshold")
+    if semantic_face_cluster_threshold is None:
+        semantic_face_cluster_threshold = 0.6
 
     return Config(
         bucket_rules=bucket_rules,
@@ -342,6 +355,7 @@ def load_config(adapter: OSAdapter, path: Path | None = None) -> Config:
         chat_turn_cap=chat_turn_cap,
         chat_model=chat_model,
         semantic_cluster_threshold=semantic_cluster_threshold,
+        semantic_face_cluster_threshold=semantic_face_cluster_threshold,
     )
 
 
@@ -374,6 +388,7 @@ def config_to_dict(config: Config) -> dict:
         "ui_mode": config.ui_mode,
         "chat_turn_cap": config.chat_turn_cap,
         "semantic_cluster_threshold": config.semantic_cluster_threshold,
+        "semantic_face_cluster_threshold": config.semantic_face_cluster_threshold,
         "chat_model": config.chat_model,
     }
 

@@ -275,6 +275,33 @@
         How similar two documents' content must be (0.0-1.0) to be proposed as the same cluster --
         higher means fewer, tighter groups; lower means more, looser ones.
       </p>
+
+      <h3>Photos</h3>
+      <p class="meta">
+        "Plan: Cluster Photos by Person" groups photos by the person in them using on-device face
+        detection and identity embedding -- no photo content ever leaves this machine. Only photos
+        where every detected face is confidently the same person are proposed; photos with more
+        than one person are never touched by this feature.
+      </p>
+      <form method="post" action="{{ url_for('ui.set_semantic_face_options') }}" class="settings-add-form">
+        <label>
+          Face similarity threshold
+          <input
+            type="number"
+            name="semantic_face_cluster_threshold"
+            min="0"
+            max="1"
+            step="0.01"
+            value="{{ current_semantic_face_cluster_threshold }}"
+            required
+          >
+        </label>
+        <button type="submit" data-intent="primary">Save</button>
+      </form>
+      <p class="meta heading-detail">
+        A SEPARATE threshold from the document one above -- face and document similarity are
+        different metric spaces, so the two are never shared.
+      </p>
     </section>
 
     <section id="advanced" class="settings-pane" aria-label="Advanced">

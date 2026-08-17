@@ -1,7 +1,7 @@
 id: face-ui-and-settings
 epic: photo-face-clustering
 title: "\"Plan: Cluster Photos by Person\" trigger (reuses existing thumbnails) + semantic_face_cluster_threshold setting"
-status: pending
+status: done
 complexity: medium
 methodology: classic
 depends_on: [face-pipeline-and-single-identity-staging]
@@ -86,3 +86,14 @@ metric:
 
 manual_verdict:
   scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T07:10:00Z"
+  agent: developer
+  notes: |
+    Mirrors document-topic-clustering's own story 4 pattern closely. Manually verified via
+    Playwright: both nav links present ("Plan: Cluster Documents" and "Plan: Cluster Photos
+    by Person"), Settings > Semantic Clustering pane shows both independent threshold fields
+    with correct defaults (0.75 document / 0.6 face), no console errors. No side effects on
+    the real ~/.config/cleanup-tools/config.yaml confirmed after the manual check.
+    18 new tests (config round-trip + independence guard, route-level trigger/settings
+    tests with a monkeypatched detector). 753 passed, 1 skipped, full suite.

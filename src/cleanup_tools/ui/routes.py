@@ -564,6 +564,51 @@ def plan_cluster_documents():
     return jsonify({"job_id": job_id})
 
 
+def _cluster_photos_job(adapter, queue_path, dirs, threshold, progress_callback) -> list[queue_module.QueueEntry]:
+    """The ``target_fn`` run on ``/plan/cluster-photos``'s background job
+    thread -- mirrors ``_cluster_documents_job`` exactly, adapting
+    ``semantic.pipeline.run_faces()``'s summary-dict result back to the
+    generic ``list[QueueEntry]`` shape every "Plan: X" status poll expects.
+    """
+    try:
+        result = semantic_pipeline.run_faces(
+            adapter, queue_path=queue_path, dirs=dirs, threshold=threshold, progress_callback=progress_callback
+        )
+    except TimeoutError as exc:
+        raise TimeoutError(QUEUE_BUSY_MESSAGE) from exc
+
+    staged_ids = set(result["staged_entry_ids"])
+    if not staged_ids:
+        return []
+    resolved_queue_path = queue_path or queue_module.default_queue_path(adapter)
+    entries = queue_module.load_queue(adapter, resolved_queue_path)
+    return [e for e in entries if e.id in staged_ids]
+
+
+@bp.route("/plan/cluster-photos")
+def plan_cluster_photos():
+    """Kick off local photo-by-person clustering on a background job thread
+    and return its ``job_id`` immediately -- mirrors ``plan_cluster_documents``
+    exactly. Reuses the EXISTING image-thumbnail rendering (``is_image_entry``)
+    unmodified -- face-cluster entries are ordinary image ``QueueEntry``s, so
+    no new thumbnail code is needed here at all.
+
+    Entirely local, zero network calls -- see
+    ``.pHive/epics/photo-face-clustering/docs/design-discussion.md``. The
+    similarity threshold comes from ``config.semantic_face_cluster_threshold``
+    (Settings > Semantic Clustering) -- a SEPARATE field from
+    ``semantic_cluster_threshold``, never conflated.
+    """
+    adapter = _adapter()
+    queue_path = _queue_path()
+    dirs = request.args.getlist("dirs") or None
+    config = config_module.load_config(adapter)
+    job_id = jobs.start_job(
+        _cluster_photos_job, adapter, queue_path, dirs, config.semantic_face_cluster_threshold
+    )
+    return jsonify({"job_id": job_id})
+
+
 def _reclaim_job(adapter, queue_path, dirs, progress_callback) -> list[queue_module.QueueEntry]:
     """The ``target_fn`` run on ``/plan/reclaim``'s background job thread.
 
@@ -1412,6 +1457,7 @@ def settings():
         current_chat_turn_cap=config.chat_turn_cap,
         current_chat_model=config.chat_model,
         current_semantic_cluster_threshold=config.semantic_cluster_threshold,
+        current_semantic_face_cluster_threshold=config.semantic_face_cluster_threshold,
         # Advanced pane: read-only, formatted JSON of the SAME dict
         # config.py's own save_config() persists (config_to_dict is the
         # single source of truth both go through) -- so this can never
@@ -1529,6 +1575,28 @@ def set_semantic_options():
 
     adapter = _adapter()
     config = dataclasses.replace(config_module.load_config(adapter), semantic_cluster_threshold=threshold)
+    config_module.save_config(adapter, config)
+    return redirect(url_for("ui.settings") + "#semantic-clustering")
+
+
+@bp.route("/settings/semantic-face-options", methods=["POST"])
+def set_semantic_face_options():
+    """Persist ``semantic_face_cluster_threshold`` to ``config.yaml`` --
+    the SEPARATE face-embedding similarity threshold (see
+    config.Config's own docstring on why this isn't the same field as
+    ``semantic_cluster_threshold``). Same validation discipline as
+    ``set_semantic_options``.
+    """
+    raw_threshold = request.form.get("semantic_face_cluster_threshold", "")
+    try:
+        threshold = float(raw_threshold)
+    except ValueError:
+        return f"semantic_face_cluster_threshold must be a number, got {raw_threshold!r}", 400
+    if not (0.0 <= threshold <= 1.0):
+        return f"semantic_face_cluster_threshold must be between 0.0 and 1.0, got {threshold}", 400
+
+    adapter = _adapter()
+    config = dataclasses.replace(config_module.load_config(adapter), semantic_face_cluster_threshold=threshold)
     config_module.save_config(adapter, config)
     return redirect(url_for("ui.settings") + "#semantic-clustering")
 
