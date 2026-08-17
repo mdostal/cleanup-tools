@@ -30,6 +30,7 @@ from cleanup_tools.queue import (
     QueueEntry,
     build_plan_snapshot,
     check_staleness,
+    edit_entry,
     load_queue,
     save_queue,
     set_status,
@@ -380,6 +381,82 @@ def test_undo_can_be_chained_back_through_multiple_transitions(adapter, tmp_path
 
     with pytest.raises(ValueError):
         undo(adapter, entry.id, path=path)
+
+
+# ---------------------------------------------------------------------------
+# 4b. edit_entry.
+# ---------------------------------------------------------------------------
+
+
+def test_edit_entry_updates_dest_and_group_key_and_appends_history(adapter, tmp_path):
+    path = tmp_path / "queue.yaml"
+    entry = QueueEntry(
+        action="move",
+        src="/tmp/a.png",
+        dest="/tmp/_sorted/photos/a.png",
+        status="pending",
+        group_key="sort:/tmp:photos",
+    )
+    entry.status_history = [{"status": "pending", "timestamp": "t0"}]
+    save_queue(adapter, [entry], path=path)
+
+    updated = edit_entry(
+        adapter, entry.id, "/tmp/_sorted/screenshots/a.png", "sort:/tmp:screenshots", path=path
+    )
+
+    assert updated.dest == "/tmp/_sorted/screenshots/a.png"
+    assert updated.group_key == "sort:/tmp:screenshots"
+    assert updated.status == "pending"  # edit never changes status
+    assert len(updated.status_history) == 2
+    edit_record = updated.status_history[-1]
+    assert edit_record["status"] == "pending"
+    assert "timestamp" in edit_record
+    assert edit_record["edit"] == {
+        "dest": {"old": "/tmp/_sorted/photos/a.png", "new": "/tmp/_sorted/screenshots/a.png"},
+        "group_key": {"old": "sort:/tmp:photos", "new": "sort:/tmp:screenshots"},
+    }
+
+    reloaded = load_queue(adapter, path=path)[0]
+    assert reloaded.dest == "/tmp/_sorted/screenshots/a.png"
+    assert reloaded.group_key == "sort:/tmp:screenshots"
+    assert len(reloaded.status_history) == 2
+
+
+@pytest.mark.parametrize("status", ["approved", "rejected"])
+def test_edit_entry_rejects_non_pending_entry(adapter, tmp_path, status):
+    path = tmp_path / "queue.yaml"
+    entry = QueueEntry(action="move", src="/tmp/a.png", dest="/tmp/b.png", status=status)
+    entry.status_history = [{"status": "pending", "timestamp": "t0"}, {"status": status, "timestamp": "t1"}]
+    save_queue(adapter, [entry], path=path)
+
+    with pytest.raises(ValueError, match=re.escape(status)):
+        edit_entry(adapter, entry.id, "/tmp/new-dest.png", "sort:new", path=path)
+
+    # Nothing mutated by the rejected edit attempt.
+    reloaded = load_queue(adapter, path=path)[0]
+    assert reloaded.dest == "/tmp/b.png"
+    assert len(reloaded.status_history) == 2
+
+
+def test_edit_entry_unknown_entry_id_raises_value_error_naming_the_id(adapter, tmp_path):
+    path = tmp_path / "queue.yaml"
+    save_queue(adapter, [], path=path)
+
+    with pytest.raises(ValueError, match=re.escape("bogus-entry-id")):
+        edit_entry(adapter, "bogus-entry-id", "/tmp/dest.png", "sort:x", path=path)
+
+
+def test_edit_entry_does_not_affect_other_entries(adapter, tmp_path):
+    path = tmp_path / "queue.yaml"
+    entries = [QueueEntry(action="move", src=f"/tmp/e{i}.png", dest=f"/tmp/d{i}.png") for i in range(3)]
+    save_queue(adapter, entries, path=path)
+
+    edit_entry(adapter, entries[1].id, "/tmp/edited.png", "sort:edited", path=path)
+
+    final = {e.id: e.dest for e in load_queue(adapter, path=path)}
+    assert final[entries[0].id] == "/tmp/d0.png"
+    assert final[entries[1].id] == "/tmp/edited.png"
+    assert final[entries[2].id] == "/tmp/d2.png"
 
 
 # ---------------------------------------------------------------------------
@@ -780,6 +857,34 @@ def test_concurrent_set_status_on_distinct_entries_loses_no_updates(adapter, tmp
         assert e.status == "approved", f"lost update on entry {e.id}"
         assert len(e.status_history) == 2
         assert e.status_history[-1]["status"] == "approved"
+
+
+def test_concurrent_edit_entry_on_distinct_entries_loses_no_updates(adapter, tmp_path):
+    path = tmp_path / "queue.yaml"
+    entries = [
+        QueueEntry(action="move", src=f"/tmp/entry-{i}.png", dest=f"/tmp/orig-{i}.png")
+        for i in range(CONCURRENCY_THREAD_COUNT)
+    ]
+    save_queue(adapter, entries, path=path)
+
+    def edit_one(entry_id, i):
+        return edit_entry(adapter, entry_id, f"/tmp/edited-{i}.png", f"sort:edited-{i}", path=path)
+
+    with ThreadPoolExecutor(max_workers=CONCURRENCY_THREAD_COUNT) as pool:
+        list(pool.map(lambda args: edit_one(*args), [(e.id, i) for i, e in enumerate(entries)]))
+
+    raw = path.read_text()
+    parsed = yaml.safe_load(raw)
+    assert isinstance(parsed, list)
+
+    final = {e.id: e for e in load_queue(adapter, path=path)}
+    assert len(final) == CONCURRENCY_THREAD_COUNT
+    for i, e in enumerate(entries):
+        reloaded = final[e.id]
+        assert reloaded.dest == f"/tmp/edited-{i}.png", f"lost update on entry {e.id}"
+        assert reloaded.group_key == f"sort:edited-{i}"
+        assert len(reloaded.status_history) == 1
+        assert reloaded.status_history[-1]["edit"]["dest"]["new"] == f"/tmp/edited-{i}.png"
 
 
 def test_concurrent_stage_and_set_status_interleaved_stay_consistent(adapter, tmp_path):

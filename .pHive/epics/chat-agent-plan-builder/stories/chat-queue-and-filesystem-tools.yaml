@@ -1,0 +1,80 @@
+id: chat-queue-and-filesystem-tools
+epic: chat-agent-plan-builder
+title: Read-only queue/filesystem tools (list_queue_summary, scan_location, list_candidate_files)
+status: done
+complexity: medium
+methodology: classic
+depends_on: [chat-engine-and-minimal-ui]
+
+description: |
+  Adds the three read-only tools that let the agent meaningfully discuss real queue and
+  filesystem state without proposing anything yet: list_queue_summary (aggregate counts
+  per location/bucket, the same shape _group_entries_hierarchical already produces),
+  scan_location (a fresh dry-run plan's bucket counts for one location, optionally
+  scoped to a subset), and list_candidate_files (actual filenames in one bucket, capped
+  at 50). All three return aggregates or capped lists -- never a full per-entry dump --
+  so a turn's context cost stays flat regardless of queue size, matching the dashboard
+  tree's own "aggregates only" precedent from this session.
+
+acceptance_criteria:
+  - "Given a queue with entries across multiple locations/buckets, when the agent calls list_queue_summary, then it receives the same aggregate shape (location, bucket, count, size) _group_entries_hierarchical produces -- not per-entry data."
+  - "Given a configured location, when the agent calls scan_location, then it receives real, current bucket counts from a fresh dry-run plan (never cached/stale data) without ever writing anything."
+  - "Given a bucket with more than 50 files, when the agent calls list_candidate_files, then it receives at most 50 filenames plus an explicit indication that more exist -- never silently truncated without saying so."
+  - "Given a user asks a filesystem-grounded question (e.g. \"what's in my screenshots pile\"), when the agent responds, then its answer is built from real tool results, not fabricated from training-data assumptions."
+
+steps:
+  - id: research
+    description: Re-confirm _group_entries_hierarchical's exact return shape and sort._plan's/reclaim's internals this story's tools call into, so the tool outputs mirror real existing shapes rather than inventing new ones.
+    agent: researcher
+  - id: implement
+    description: Add list_queue_summary, scan_location, list_candidate_files to src/cleanup_tools/chat/tools.py; register them on the engine's tool set alongside list_locations.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Tests per tool against real fixture queues/filesystems (not mocked tool results) proving aggregate-only behavior, the 50-item cap with explicit truncation signaling, and that scan_location never touches disk (dry-run only, no --go).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm none of the three tools can be coerced (via unusual arguments) into returning more than the capped/aggregate shape -- this is the property the whole "flat context cost regardless of queue size" design claim depends on.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_group_entries_hierarchical -- the exact aggregate shape list_queue_summary must mirror, not reinvent."
+    - path: src/cleanup_tools/commands/sort.py
+      purpose: "_plan() -- the dry-run planning logic scan_location reuses (never sort.run() with --go)."
+
+files_to_modify:
+  - file: src/cleanup_tools/chat/tools.py
+    change: Add list_queue_summary, scan_location, list_candidate_files.
+
+design_decisions:
+  - decision: Every tool here returns aggregates or a capped list, never a full per-entry/per-file dump.
+    rationale: "Direct continuation of the dashboard tree's real-scale-performance principle (design discussion §2.2) -- a turn's context cost must stay flat regardless of how many files/entries actually exist."
+  - decision: list_candidate_files explicitly signals when results were truncated (not just silently returning 50 of however many).
+    rationale: An agent (or the user reading its answer) reasoning from silently-truncated data without knowing it was truncated is a worse failure mode than the truncation itself.
+
+risks:
+  - severity: medium
+    description: scan_location internally calls into sort.py/reclaim.py's real planning logic -- a bug here could accidentally trigger a real --go execution path if wired incorrectly.
+    mitigation: Explicit test asserting no filesystem mutation occurs from any tool call in this story; review step specifically checks for accidental --go wiring.
+
+references:
+  - path: .pHive/epics/chat-agent-plan-builder/docs/design-discussion.md
+    relevant_excerpt: |
+      list_queue_summary/scan_location return aggregates, never full listings, so a
+      turn's context cost is flat regardless of queue size.
+
+metric:
+  applies: false
+  justification: Backend tool-surface story; its value is realized by the conversations the next story's write-path story enables, not independently observable here.
+
+manual_verdict:
+  scenario_ref: null

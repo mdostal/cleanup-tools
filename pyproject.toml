@@ -8,7 +8,14 @@ version = "0.1.0"
 description = "Cross-platform disk/downloads cleanup CLI tooling."
 requires-python = ">=3.10"
 readme = "README.md"
-dependencies = ["PyYAML", "Flask", "Pillow", "anthropic"]
+# numpy is a base dependency (not gated behind the `semantic` extras group below)
+# even though it's only exercised by semantic/cluster.py's math: that module's
+# cosine-similarity/union-find logic is platform-independent (unlike
+# embeddings.py/extract.py, which are macOS-only in phase 1 -- see
+# semantic/embeddings.py's module docstring), so gating a lightweight,
+# universally-available pure-binary-wheel dependency behind a platform-specific
+# extras group would be an odd asymmetry for no real benefit.
+dependencies = ["PyYAML", "Flask", "Pillow", "anthropic", "numpy"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
@@ -18,6 +25,39 @@ dev = ["pytest"]
 # packages installed at all, and the app's own runtime `dependencies` above
 # must stay exactly what PyInstaller bundles, nothing more.
 build = ["pyinstaller", "pyinstaller-hooks-contrib"]
+# macOS-only local semantic-clustering (document-topic-clustering epic, phase 1
+# of semantic-desktop-organization): PyObjC bindings to already-installed OS
+# frameworks (NaturalLanguage's NLContextualEmbedding for text embedding,
+# Vision's VNRecognizeTextRequest for OCR, Quartz/PDFKit for PDF text
+# extraction) -- zero bundled model weights. Arch installs never need this
+# group; semantic.embeddings.get_embedder()/semantic.extract.extract_text()
+# raise NotImplementedError there instead, matching
+# OSAdapter.set_screenshot_save_location's existing precedent. See
+# .pHive/epics/document-topic-clustering/docs/design-discussion.md §2.3.
+semantic = [
+    "pyobjc-framework-NaturalLanguage",
+    "pyobjc-framework-Vision",
+    "pyobjc-framework-Quartz",
+]
+# Cross-platform local face detection + identity embedding (photo-face-clustering
+# epic, phase 2): InsightFace's SCRFD detector + ArcFace recognizer, run via
+# onnxruntime. Deliberately a SEPARATE extras group from `semantic` above --
+# unlike phase 1's text embedding, Apple's public frameworks expose no
+# face-identity-embedding API, so this has no Mac-only zero-cost alternative
+# and is genuinely cross-platform (works identically on Arch); bundling it
+# into the `semantic` group (whose pyobjc-framework-* wheels are macOS-only)
+# would break `pip install cleanup_tools[semantic]` on any other platform.
+# `opencv-python-headless` (not plain `opencv-python`) since this app is a
+# local Flask server with no GUI display calls -- avoids pulling in Qt/GUI
+# bindings neither this app nor insightface's own detection/recognition code
+# paths actually use. Model weights are NEVER installed by pip -- see
+# scripts/fetch-semantic-face-models.py and semantic/faces.py's module
+# docstring. See .pHive/epics/photo-face-clustering/docs/design-discussion.md §2.
+semantic-faces = [
+    "onnxruntime",
+    "insightface",
+    "opencv-python-headless",
+]
 
 [project.scripts]
 cleanup = "cleanup_tools.cli:main"

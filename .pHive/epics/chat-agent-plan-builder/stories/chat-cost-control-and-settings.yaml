@@ -1,0 +1,117 @@
+id: chat-cost-control-and-settings
+epic: chat-agent-plan-builder
+title: Turn/file caps, usage indicator, AI Provider settings fields, epic-3 absorption
+status: done
+complexity: medium
+methodology: classic
+depends_on: [chat-propose-and-approve]
+
+description: |
+  Makes the feature safe to actually ship, not just functionally complete: a hard
+  per-conversation cap on assistant turns (default 20) and total files proposed (default
+  500), both checked BEFORE a new turn/proposal starts -- never call-then-discard, same
+  discipline as ai/wiring.py's existing cap enforcement. The in-flight turn when a cap is
+  reached always finishes; the UI then disables input with an explicit message, never a
+  silent cutoff. A visible running usage indicator ("Turn 4 of 20"). Two new Config
+  fields (chat_turn_cap, chat_model) surfaced on the existing Settings > AI Provider pane
+  -- no new sidebar section. Also fixes ai/wiring.py's existing old-format group_key
+  (sort:{bucket}, 2-segment) to the current 3-segment sort:<location>:<bucket> scheme,
+  flagged as a good-moment fix in the design discussion's risks since this slice already
+  touches the same staging convention.
+
+acceptance_criteria:
+  - "Given a conversation at its turn cap, when the user sends another message, then the request is refused before a new turn starts, with an explicit \"conversation limit reached, start a new one\" message -- never a silent or confusing cutoff."
+  - "Given a conversation approaching its file-proposal cap, when propose_moves would exceed it, then only the remaining budget is staged (not zero, not over) and the response clearly states how many were skipped and why."
+  - "Given any point in an active conversation, when the chat UI renders, then it shows the current turn count against the configured cap."
+  - "Given the Settings > AI Provider pane, when it loads, then it shows editable chat_turn_cap and chat_model fields alongside the existing configured-status display, persisted via config.yaml exactly like ui_mode/icon_choice."
+  - "Given ai/wiring.py's propose_for_other_bucket, when it stages an entry, then group_key follows the current sort:<location>:<bucket> scheme, matching every other staging path in the app -- not the old 2-segment format."
+
+steps:
+  - id: research
+    description: Re-confirm ai/wiring.py's exact current group_key construction and propose_for_other_bucket's signature/call sites before changing it, so the fix doesn't silently change any other behavior of that function.
+    agent: researcher
+  - id: implement
+    description: |
+      Add chat_turn_cap/chat_model to Config + load_config/save_config/config_to_dict
+      (mirroring ui_mode's pattern exactly). Enforce both caps in the engine (turn cap)
+      and propose_moves (file cap). Settings > AI Provider pane gets the two new fields
+      + a POST route to persist them. chat.js renders the usage indicator and the
+      capped-out disabled state. Fix ai/wiring.py's group_key to the 3-segment scheme
+      (needs _location_for_src, currently only in ui/routes.py -- decide whether to
+      import it or note the dependency direction explicitly).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Tests proving the turn cap is checked BEFORE a new turn starts (not after), the
+      file cap partially-stages up to the remaining budget with an explicit skipped
+      count, the in-flight turn always finishes even at the cap boundary, and the
+      ai/wiring.py group_key fix doesn't break test_ai_wiring.py's existing assertions
+      (update them to the new expected format instead).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm both caps are pre-call gates (mirroring ai/wiring.py's own documented "slice before calling, never call-then-discard" discipline) and that the cap-reached UI state is never ambiguous with a real error.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/config.py
+      purpose: "Config.ui_mode -- the exact precedent (config-persisted, load/save/config_to_dict updated together) chat_turn_cap/chat_model follow."
+    - path: src/cleanup_tools/ai/wiring.py
+      purpose: "propose_for_other_bucket's cap-before-calling discipline (the pattern this story's turn/file caps mirror) and its own group_key fix target."
+    - path: src/cleanup_tools/ui/templates/settings.html
+      purpose: "The AI Provider pane (#ai-provider section) this story extends with two new fields."
+
+files_to_modify:
+  - file: src/cleanup_tools/config.py
+    change: Add chat_turn_cap, chat_model fields + load/save/config_to_dict support.
+  - file: src/cleanup_tools/chat/engine.py
+    change: Enforce chat_turn_cap before starting a new turn.
+  - file: src/cleanup_tools/chat/tools.py
+    change: Enforce a per-conversation file-proposal cap in propose_moves.
+  - file: src/cleanup_tools/ui/routes.py
+    change: New settings fields on the AI Provider pane + persistence route.
+  - file: src/cleanup_tools/ai/wiring.py
+    change: Fix group_key to the 3-segment location-aware scheme.
+
+design_decisions:
+  - decision: Both caps are pre-call gates, never post-call truncation.
+    rationale: "Direct continuation of ai/wiring.py's own explicit, already-documented discipline (\"a pre-call gate, not a post-call filter\") -- this story applies the SAME principle to a new surface rather than inventing a different one."
+  - decision: chat_turn_cap/chat_model are Config fields (persisted, config.yaml), not localStorage.
+    rationale: "Matches ui_mode/icon_choice's precedent -- a real preference that should survive across sessions and match how every other meaningful setting in this app is stored."
+
+risks:
+  - severity: medium
+    description: Fixing ai/wiring.py's group_key format could be a breaking change for any already-staged pending entries from before this fix (old 2-segment format).
+    mitigation: "parse_group_key already defensively handles the old 2-segment format (built this session specifically for this reason) -- old entries keep working, only NEW proposals from propose_for_other_bucket get the corrected format. No migration needed."
+
+references:
+  - path: .pHive/epics/chat-agent-plan-builder/docs/design-discussion.md
+    relevant_excerpt: |
+      §2.6: Per-conversation hard cap on assistant turns... checked BEFORE a new turn
+      starts... §Risks: a good moment to fix ai/wiring.py's existing old-format
+      group_key too, since a story here touches the same staging code path anyway.
+
+metric:
+  applies: true
+  name: chat.conversations_exceeding_configured_cap
+  direction: down
+  unit: count
+  baseline: "N/A (feature doesn't exist yet)"
+  target: "0, always -- caps are a hard ceiling, not a soft target"
+  window: every test run, permanently
+  source:
+    kind: events
+    ref: this story's dedicated pre-call-gate tests
+  verify_at: test
+  owner: tester
+
+manual_verdict:
+  scenario_ref: null

@@ -1,0 +1,86 @@
+id: advanced-config-view
+epic: settings-and-transparency
+title: Advanced pane -- read-only config JSON view
+status: pending
+complexity: low
+methodology: classic
+depends_on: [settings-shell-and-core-crud]
+parallel_allowed: true
+parallel_rationale: bounded-slice
+
+description: |
+  One Advanced pane within the settings shell, showing a read-only JSON dump of the
+  effective config.yaml (via load_config's already-tested output). Editable-in-place is
+  explicitly deferred -- validating and safely writing arbitrary pasted JSON back to
+  config.yaml without corrupting it is real, separable work (design discussion open
+  question 1).
+
+acceptance_criteria:
+  - "Given the settings shell, when the Advanced section is opened, then it shows the current effective config as formatted, read-only JSON."
+  - "Given a change made via any other settings pane (bucket rules, search roots, master paths, icon), when the Advanced JSON view is reloaded, then it reflects that change (single source of truth, no drift)."
+
+steps:
+  - id: research
+    description: Confirm load_config's exact output shape to serialize for display.
+    agent: researcher
+  - id: implement
+    description: New read-only Advanced pane rendering load_config's output as formatted JSON.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Route test confirming the JSON view matches load_config's actual output after a change made via another settings pane.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm no accidental exposure of anything that shouldn't be shown (e.g. this must never include credentials -- those live in a separate file, not config.yaml, but verify).
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/config.py
+      purpose: load_config's output is exactly what this pane renders -- no new data path needed.
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/routes.py
+    change: New read-only /settings/advanced route.
+  - file: src/cleanup_tools/ui/templates/
+    change: New Advanced pane within the settings shell.
+
+design_decisions:
+  - decision: Read-only for this story; editable-in-place explicitly deferred.
+    rationale: Safe validated writes of arbitrary JSON back to config.yaml is real, separable risk -- design discussion's explicit recommendation.
+
+risks:
+  - severity: low
+    description: Must never surface AI-provider credentials (which correctly live outside config.yaml, in a separate 0600 credentials file) even by accident.
+    mitigation: Explicit review step checking the rendered JSON contains no credential material.
+
+references:
+  - path: .pHive/epics/settings-and-transparency/docs/design-discussion.md
+    relevant_excerpt: |
+      Advanced -- one section, one level deep: raw config-as-JSON view (read-only
+      initially; edit-in-place is a fast-follow, not required for this epic).
+
+manual_verdict:
+  scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-15T17:34:00Z"
+  agent: claude-sonnet-5 (execute skill)
+  notes: |
+    Verified via the automated suite (529 passed): config_to_dict is the
+    single source of truth both save_config's YAML write and the Advanced
+    pane's JSON render go through (test_config_to_dict_matches_the_shape_
+    save_config_actually_persists), the Advanced pane reflects a change
+    made via another pane on reload without a second data path, and it
+    never leaks AI credentials even when ANTHROPIC_API_KEY is set. Also
+    fixed a nav-layout issue caught by the product owner during this
+    story's browser review: the gear icon was sitting between "Review
+    Queue" and the Plan: action links instead of being visually separated
+    -- moved it to the far right of the nav bar (flexbox auto-margin,
+    next to the theme switcher), verified via a Playwright screenshot.

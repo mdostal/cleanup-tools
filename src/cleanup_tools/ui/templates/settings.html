@@ -1,34 +1,319 @@
 {% extends "base.html" %}
+{% import "_status_icon.html" as icons %}
 {% block title %}Settings - Cleanup Approvals{% endblock %}
 {% block content %}
 <h1>Settings</h1>
 
-<section aria-label="App icon">
-  <h2>App icon</h2>
-  <p class="meta">
-    Pick the icon this app uses. Updates the Dock/taskbar icon immediately when running as the
-    desktop app, and (on macOS) the installed app's own Finder icon too -- macOS may ask for
-    your password if the app isn't in a location you can write to. In a plain browser tab
-    (no desktop shell), the choice is still saved and takes effect next time the desktop app
-    launches.
-  </p>
-  <div
-    class="group-grid"
-    id="icon-choice-grid"
-    data-endpoint="{{ url_for('ui.set_icon_choice') }}"
-  >
-    {% for slug, label in icon_choices.items() %}
-    <button
-      type="button"
-      class="icon-choice-card{% if slug == current_icon_choice %} selected{% endif %}"
-      data-icon-choice="{{ slug }}"
-    >
-      <img src="{{ url_for('static', filename='icon-choices/' ~ slug ~ '.png') }}" alt="{{ label }} icon preview">
-      <h3>{{ label }}</h3>
-      {% if slug == current_icon_choice %}<span class="icon-choice-current">Current</span>{% endif %}
-    </button>
-    {% endfor %}
+<!-- Raycast/Obsidian-style sidebar of sections, replacing the old single
+     scrolling page. All panes render server-side in this one response
+     (nothing needs a second request to switch sections); static/
+     settings-shell.js just toggles which .settings-pane is visible,
+     defaulting to the first one (or whichever #hash is in the URL) --
+     see that file for why this stays plain show/hide, not a
+     server round-trip per section. -->
+<div class="settings-shell">
+  <nav id="settings-sidebar" class="settings-sidebar" aria-label="Settings sections">
+    <a href="#general" data-pane="general">General</a>
+    <a href="#app-icon" data-pane="app-icon">App Icon</a>
+    <a href="#bucket-rules" data-pane="bucket-rules">Bucket Rules</a>
+    <a href="#search-roots" data-pane="search-roots">Search Roots &amp; Locations</a>
+    <a href="#master-paths" data-pane="master-paths">Master Paths</a>
+    <a href="#ai-provider" data-pane="ai-provider">AI Provider</a>
+    <a href="#semantic-clustering" data-pane="semantic-clustering">Semantic Clustering</a>
+    <a href="#advanced" data-pane="advanced">Advanced</a>
+  </nav>
+
+  <div class="settings-panes">
+    <section id="general" class="settings-pane" aria-label="General">
+      <h2>General</h2>
+      <h3>Interaction mode</h3>
+      <p class="meta">
+        Controls information density and how plain-language the copy is -- separate from the
+        color theme below. Switch any time; nothing about your queue or config changes.
+      </p>
+      <form method="post" action="{{ url_for('ui.set_ui_mode') }}" class="ui-mode-picker">
+        {% for slug, mode in ui_modes.items() %}
+        <label class="ui-mode-option{% if slug == current_ui_mode %} selected{% endif %}">
+          <input type="radio" name="ui_mode" value="{{ slug }}" {% if slug == current_ui_mode %}checked{% endif %}>
+          <span class="ui-mode-option-label">{{ mode.label }}</span>
+          <span class="meta">{{ mode.description }}</span>
+        </label>
+        {% endfor %}
+        <button type="submit" data-intent="primary">Save mode</button>
+      </form>
+    </section>
+
+    <section id="app-icon" class="settings-pane" aria-label="App icon">
+      <h2>App icon</h2>
+      <p class="meta">
+        Pick the icon this app uses. Updates the Dock/taskbar icon immediately when running as the
+        desktop app, and (on macOS) the installed app's own Finder icon too -- macOS may ask for
+        your password if the app isn't in a location you can write to. In a plain browser tab
+        (no desktop shell), the choice is still saved and takes effect next time the desktop app
+        launches.
+      </p>
+      <div
+        class="group-grid"
+        id="icon-choice-grid"
+        data-endpoint="{{ url_for('ui.set_icon_choice') }}"
+      >
+        {% for slug, label in icon_choices.items() %}
+        <button
+          type="button"
+          class="icon-choice-card{% if slug == current_icon_choice %} selected{% endif %}"
+          data-icon-choice="{{ slug }}"
+        >
+          <img src="{{ url_for('static', filename='icon-choices/' ~ slug ~ '.png') }}" alt="{{ label }} icon preview">
+          <h3>{{ label }}</h3>
+          {% if slug == current_icon_choice %}<span class="icon-choice-current">Current</span>{% endif %}
+        </button>
+        {% endfor %}
+      </div>
+      <p id="icon-choice-status" class="meta" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="bucket-rules" class="settings-pane" aria-label="Bucket rules">
+      <h2>Bucket rules</h2>
+      <p class="meta">
+        First match wins -- rules are checked top to bottom. Your rules always run before the
+        built-in defaults below, which are fixed and can't be edited or reordered.
+      </p>
+
+      {% if user_bucket_rules %}
+      <table class="settings-table">
+        <thead>
+          <tr><th>Extensions</th><th>Bucket</th><th>Filename pattern</th><th>Order</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for rule in user_bucket_rules %}
+          <tr>
+            <form method="post" action="{{ url_for('ui.edit_bucket_rule', index=loop.index0) }}">
+              <td><input type="text" name="extensions" value="{{ rule.extensions | join(', ') }}" size="18"></td>
+              <td><input type="text" name="bucket" value="{{ rule.bucket }}" size="12"></td>
+              <td><input type="text" name="filename_pattern" value="{{ rule.filename_pattern or '' }}" size="14"></td>
+              <td>
+                <button type="submit" formaction="{{ url_for('ui.move_bucket_rule', index=loop.index0) }}" name="direction" value="up" {% if loop.first %}disabled{% endif %}>&uarr;</button>
+                <button type="submit" formaction="{{ url_for('ui.move_bucket_rule', index=loop.index0) }}" name="direction" value="down" {% if loop.last %}disabled{% endif %}>&darr;</button>
+              </td>
+              <td>
+                <button type="submit" data-intent="primary">Save</button>
+                <button type="submit" formaction="{{ url_for('ui.remove_bucket_rule', index=loop.index0) }}" data-intent="secondary">Remove</button>
+              </td>
+            </form>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="meta">No custom rules yet -- add one below.</p>
+      {% endif %}
+
+      <form method="post" action="{{ url_for('ui.add_bucket_rule') }}" class="settings-add-form">
+        <input type="text" name="extensions" placeholder="Extensions (e.g. log, txt)" required>
+        <input type="text" name="bucket" placeholder="Bucket name" required>
+        <input type="text" name="filename_pattern" placeholder="Filename pattern (optional)">
+        <button type="submit" data-intent="primary">Add rule</button>
+      </form>
+
+      <h3>Defaults <span class="meta">(fixed, always applied last)</span></h3>
+      <table class="settings-table settings-table-readonly">
+        <thead>
+          <tr><th>Extensions</th><th>Bucket</th><th>Filename pattern</th></tr>
+        </thead>
+        <tbody>
+          {% for rule in default_bucket_rules %}
+          <tr>
+            <td>{{ rule.extensions | join(', ') }}</td>
+            <td>{{ rule.bucket }}</td>
+            <td>{{ rule.filename_pattern or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section id="search-roots" class="settings-pane" aria-label="Search roots and locations">
+      <h2>Search roots &amp; locations</h2>
+      <p class="meta">
+        Every location <code>sort</code>/<code>reclaim</code>/<code>corral-screenshots</code> scan
+        by default (unless a run is scoped to a subset from the dashboard). Leave this empty to
+        keep using each pipeline's own built-in default location(s).
+      </p>
+      {% if search_roots %}
+      <ul class="settings-list">
+        {% for root in search_roots %}
+        <li>
+          <details class="path-disclosure"><summary>{{ root | short_path }}</summary><span class="full-path">{{ root }}</span></details>
+          <form method="post" action="{{ url_for('ui.remove_search_root') }}" style="display:inline;">
+            <input type="hidden" name="path" value="{{ root }}">
+            <button type="submit" data-intent="secondary">Remove</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="meta">No search roots configured yet.</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('ui.add_search_root') }}" class="settings-add-form">
+        <input type="text" name="path" placeholder="/absolute/path/to/a/location" required>
+        <button type="submit" data-intent="primary">Add location</button>
+      </form>
+    </section>
+
+    <section id="master-paths" class="settings-pane" aria-label="Master paths">
+      <h2>Master paths</h2>
+      <p class="meta">
+        Paths tracked as an authoritative, not-yet-backed-up copy -- <code>reclaim</code> refuses
+        to ever delete anything under one of these while <strong>Backed up</strong> is unchecked.
+      </p>
+      {% if master_paths %}
+      <ul class="settings-list">
+        {% for mp in master_paths %}
+        <li>
+          <details class="path-disclosure"><summary>{{ mp.path | short_path }}</summary><span class="full-path">{{ mp.path }}</span></details>
+          <span class="badge {% if mp.backed_up %}badge-status-approved{% else %}badge-status-pending{% endif %}">
+            {% if mp.backed_up %}{{ icons.status_icon("approved") }}Backed up{% else %}{{ icons.status_icon("pending") }}NOT backed up -- delete-refusal active{% endif %}
+          </span>
+          <form
+            method="post"
+            action="{{ url_for('ui.toggle_master_path_backed_up') }}"
+            style="display:inline;"
+            {% if mp.backed_up %}
+            data-confirm="Mark {{ mp.path }} as NOT backed up? This turns reclaim's delete-refusal back ON for this path."
+            {% else %}
+            data-confirm="Mark {{ mp.path }} as backed up? This REMOVES reclaim's delete-refusal for this path -- reclaim will be allowed to delete things under it."
+            {% endif %}
+          >
+            <input type="hidden" name="path" value="{{ mp.path }}">
+            <button type="submit" data-intent="secondary">{{ "Mark NOT backed up" if mp.backed_up else "Mark backed up" }}</button>
+          </form>
+          <form method="post" action="{{ url_for('ui.remove_master_path') }}" style="display:inline;">
+            <input type="hidden" name="path" value="{{ mp.path }}">
+            <button type="submit" data-intent="secondary">Remove</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="meta">No master paths configured yet.</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('ui.add_master_path') }}" class="settings-add-form">
+        <input type="text" name="path" placeholder="/absolute/path/to/protect" required>
+        <label class="kickoff-option"><input type="checkbox" name="backed_up"> Already backed up</label>
+        <button type="submit" data-intent="primary">Add master path</button>
+      </form>
+    </section>
+
+    <section id="ai-provider" class="settings-pane" aria-label="AI provider">
+      <h2>AI provider</h2>
+      {% if ai_status.configured %}
+      <p class="meta">
+        <span class="badge badge-status-approved">{{ icons.status_icon("approved") }}Configured</span>
+        via {{ ai_status.source }}. The key itself is never shown here.
+      </p>
+      {% else %}
+      <p class="meta">
+        <span class="badge badge-status-pending">{{ icons.status_icon("pending") }}Not configured</span>
+        Set the <code>ANTHROPIC_API_KEY</code> environment variable, or create
+        <code>~/.config/cleanup-tools/credentials</code> (mode 0600) containing the key, to enable
+        "Propose with AI".
+      </p>
+      {% endif %}
+
+      <h3>Chat</h3>
+      <p class="meta">
+        The in-app <a href="{{ url_for('ui.chat_view') }}">Chat</a> agent uses the same credentials
+        above. These two settings only affect it.
+      </p>
+      <form method="post" action="{{ url_for('ui.set_chat_options') }}" class="settings-add-form">
+        <label>
+          Turn cap per conversation
+          <input
+            type="number"
+            name="chat_turn_cap"
+            min="1"
+            step="1"
+            value="{{ current_chat_turn_cap }}"
+            required
+          >
+        </label>
+        <label>
+          Model
+          <input type="text" name="chat_model" value="{{ current_chat_model }}" required>
+        </label>
+        <button type="submit" data-intent="primary">Save</button>
+      </form>
+      <p class="meta heading-detail">
+        A conversation refuses to start a new turn once it reaches this many -- the turn already in
+        progress always finishes. Defaults to the same cheap/fast model "Propose with AI" uses.
+      </p>
+    </section>
+
+    <section id="semantic-clustering" class="settings-pane" aria-label="Semantic clustering">
+      <h2>Semantic clustering</h2>
+      <p class="meta">
+        <span class="badge badge-status-approved">{{ icons.status_icon("approved") }}Entirely local</span>
+        "Plan: Cluster Documents" groups documents by topic using on-device text extraction and
+        embedding -- no file content or filename ever leaves this machine.
+      </p>
+      <form method="post" action="{{ url_for('ui.set_semantic_options') }}" class="settings-add-form">
+        <label>
+          Document similarity threshold
+          <input
+            type="number"
+            name="semantic_cluster_threshold"
+            min="0"
+            max="1"
+            step="0.01"
+            value="{{ current_semantic_cluster_threshold }}"
+            required
+          >
+        </label>
+        <button type="submit" data-intent="primary">Save</button>
+      </form>
+      <p class="meta heading-detail">
+        How similar two documents' content must be (0.0-1.0) to be proposed as the same cluster --
+        higher means fewer, tighter groups; lower means more, looser ones.
+      </p>
+
+      <h3>Photos</h3>
+      <p class="meta">
+        "Plan: Cluster Photos by Person" groups photos by the person in them using on-device face
+        detection and identity embedding -- no photo content ever leaves this machine. Only photos
+        where every detected face is confidently the same person are proposed; photos with more
+        than one person are never touched by this feature.
+      </p>
+      <form method="post" action="{{ url_for('ui.set_semantic_face_options') }}" class="settings-add-form">
+        <label>
+          Face similarity threshold
+          <input
+            type="number"
+            name="semantic_face_cluster_threshold"
+            min="0"
+            max="1"
+            step="0.01"
+            value="{{ current_semantic_face_cluster_threshold }}"
+            required
+          >
+        </label>
+        <button type="submit" data-intent="primary">Save</button>
+      </form>
+      <p class="meta heading-detail">
+        A SEPARATE threshold from the document one above -- face and document similarity are
+        different metric spaces, so the two are never shared.
+      </p>
+    </section>
+
+    <section id="advanced" class="settings-pane" aria-label="Advanced">
+      <h2>Advanced</h2>
+      <p class="meta">
+        The effective configuration as it's actually persisted to <code>config.yaml</code> --
+        read-only. A change made in any other section above shows up here after a reload; it's
+        the same underlying config, never a separate copy. Editing this JSON directly isn't
+        supported yet.
+      </p>
+      <pre class="settings-json"><code>{{ config_json }}</code></pre>
+    </section>
   </div>
-  <p id="icon-choice-status" class="meta" role="status" aria-live="polite"></p>
-</section>
+</div>
 {% endblock %}

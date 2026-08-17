@@ -1,0 +1,130 @@
+id: history-view
+epic: settings-and-transparency
+title: History view -- paginated status_history feed with executed-gated undo
+status: pending
+complexity: high
+methodology: classic
+depends_on: [settings-shell-and-core-crud]
+parallel_allowed: true
+parallel_rationale: bounded-slice
+
+description: |
+  A new History pane: a paginated, reverse-chronological feed aggregating
+  QueueEntry.status_history across every entry (already-recorded data, no new
+  storage). This is the epic's most safety-critical story: per-row Undo MUST be gated
+  on entry.executed_at, not offered uniformly. queue.undo() only reverts queue status
+  -- it never touches the filesystem. An entry with executed_at still None gets a real,
+  working Undo button (calls the existing, already-tested queue.undo()). An entry
+  whose --from-queue execution already ran (executed_at set -- the move/delete actually
+  happened on disk) must NOT show a plain Undo button; it must visibly say the action
+  already executed and that reverting the record does not restore the file. This gap
+  was self-caught during design review (not by the grill pass) and must not regress.
+
+acceptance_criteria:
+  - "Given entries with varied status_history, when the History view loads, then it shows a reverse-chronological feed (what happened, when, to what, via which rule/pipeline) built entirely from existing status_history data."
+  - "Given an entry with executed_at == None, when its History row renders, then it shows a working Undo button that calls queue.undo()."
+  - "Given an entry with executed_at set (already executed on disk), when its History row renders, then it does NOT show a plain Undo button -- it shows explicit copy stating the action already happened and reverting the record will not restore the file."
+  - "Given a realistic entry count (thousands), when the History view loads, then it is paginated (reusing the existing _paginate helper), never eagerly rendering the full history in one response."
+
+steps:
+  - id: research
+    description: Confirm QueueEntry.executed_at/execution_error's exact semantics and _paginate's existing signature to reuse without modification.
+    agent: researcher
+  - id: implement
+    description: |
+      New GET /history route aggregating status_history across all entries, paginated.
+      History template with the executed_at-gated Undo/no-Undo row rendering as the
+      central, most-tested piece of this story.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Explicit, separate tests for both the executed and not-yet-executed row-rendering
+      paths (this is the single highest-risk correctness property in the whole epic --
+      needs dedicated coverage, not incidental). Pagination test at a realistic entry
+      count.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Specifically verify no code path can render a working Undo button next to an executed entry -- this is the one regression that must never ship.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/queue.py
+      purpose: "QueueEntry.status_history/executed_at/execution_error fields (already exist) and undo() (247-272, already tested) -- this story adds a read/aggregation layer and UI, no new mutation logic beyond the route itself."
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "_paginate (565-620) -- reuse directly, don't reimplement pagination."
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/routes.py
+    change: New GET /history route, aggregating and paginating status_history across all entries.
+  - file: src/cleanup_tools/ui/templates/
+    change: New history.html template with executed_at-gated row rendering.
+
+design_decisions:
+  - decision: Undo strictly gated on entry.executed_at, never offered uniformly.
+    rationale: "Self-caught safety gap during design review: queue.undo() only reverts queue status, never an already-executed filesystem move -- a uniform Undo button would be actively misleading."
+  - decision: No new post-execution filesystem-undo (restoring a moved/deleted file) in this story.
+    rationale: Explicitly out of scope -- would be its own epic if ever wanted; this story's job is truthful communication about what Undo does and doesn't do, not adding new reversal capability.
+
+risks:
+  - severity: high
+    description: A History-view Undo button that implies a filesystem operation it doesn't perform is the single biggest trust risk in this entire epic.
+    mitigation: Dedicated test coverage for both executed and not-yet-executed rendering paths, plus an explicit review-step callout (not just general code review) on this exact property.
+  - severity: medium
+    description: Naive full-history aggregation at real scale (thousands of entries) repeats the pre-pagination performance mistake.
+    mitigation: Reuse the existing, proven _paginate helper rather than writing new pagination logic.
+
+references:
+  - path: .pHive/epics/settings-and-transparency/docs/design-discussion.md
+    relevant_excerpt: |
+      Undo semantics must be gated on entry.executed_at, not offered uniformly...
+      Executed entries must either hide the Undo action entirely or visibly relabel it.
+  - path: .pHive/research/prior-art-cleaning-and-settings-ux.md
+    relevant_excerpt: |
+      Hazel 6's 'undo travels with the artifact' model... a real, exportable action log
+      is a genuine differentiator since the closest commercial competitor has none.
+
+metric:
+  applies: true
+  name: history_view.executed_rows_with_incorrect_undo_button
+  direction: down
+  unit: count
+  baseline: N/A (feature doesn't exist yet)
+  target: "0, always -- this is a correctness invariant, not a trend to improve over time"
+  window: every test run, permanently
+  source:
+    kind: events
+    ref: tests/test_ui_routes.py's dedicated executed-vs-not-executed row tests
+  verify_at: test
+  owner: tester
+
+manual_verdict:
+  scenario_ref: .pHive/test-scenarios/history-view-manual.yaml
+  verdict: pass
+  timestamp: "2026-08-15T17:39:30Z"
+  agent: claude-sonnet-5 (execute skill, direct Playwright walkthrough -- no
+    formal scenario file was ever authored at scenario_ref, so this verdict
+    is recorded ad hoc)
+  notes: |
+    Verified via Playwright against the real approvals UI: /history
+    renders the reverse-chronological feed, nav link present and ordered
+    correctly (Dashboard, Review Queue, History, then Plan actions,
+    Settings gear far right). The single safety-critical property
+    (executed_at-gated Undo) was verified both by dedicated automated
+    tests (test_history_view_already_executed_entry_never_shows_undo_
+    button, test_history_view_not_yet_executed_entry_shows_working_undo_
+    button, plus 4 unit tests on _history_rows' can_undo derivation) and
+    live in the browser, where the one real entry (can_undo=False because
+    it has only a single "approved" history record, nothing to revert
+    to) correctly showed neither a working Undo button nor a misleading
+    "executed" note -- the third, previously-untested can_undo=False
+    branch (nothing-to-revert-to, as opposed to already-executed).
+    Pagination-at-scale (60 synthetic entries) verified automated only.

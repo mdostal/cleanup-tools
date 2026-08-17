@@ -48,6 +48,191 @@ class QueueEntry:
     execution_error: str | None = None
 
 
+def entry_size(entry: QueueEntry) -> int:
+    """Best-effort size for dashboard/aggregate totals, from the entry's plan_snapshot.
+
+    Directories and non-file paths don't carry a "size" key in
+    plan_snapshot (see ``build_plan_snapshot``), so those contribute 0
+    rather than raising or requiring a fresh (possibly slow) du call on
+    every dashboard load.
+    """
+    snapshot = entry.plan_snapshot
+    if not isinstance(snapshot, dict):
+        return 0
+    return snapshot.get("size") or 0
+
+
+def is_ai_source(source: str) -> bool:
+    """Whether a QueueEntry's ``source`` tag marks it as AI-proposed.
+
+    AI-sourced entries carry ``source=f"ai:<provider>"`` (see
+    ``ai.wiring._provider_source``, e.g. ``"ai:anthropic"``). Every other
+    source convention currently in use -- the ``QueueEntry`` default
+    ``"manual"``, and the UI's own ``"ui-plan-sort"``/``"ui-plan-reclaim"``
+    plan-staging tags -- is a human-triggered source and therefore NOT
+    AI-proposed. This is purely a rendering/reporting distinction: it never
+    changes approve/reject/undo/bulk behavior, which treats every entry
+    identically regardless of source.
+    """
+    return source.startswith("ai:")
+
+
+def parse_group_key(group_key: str | None) -> dict:
+    """Defensively split a ``group_key`` into ``{"pipeline", "location", "bucket"}``.
+
+    Not a general-purpose parser -- it branches on the known pipeline
+    prefix plus segment count, per the design discussion's simplified
+    (non-migration-proven) parsing rule: the real queue resets before this
+    schema ships, so this only needs to never raise on every format
+    actually ever written, not round-trip arbitrary historical data.
+
+    Formats handled:
+      - None / "" -> no pipeline, "other" location, no bucket.
+      - New (post-epic), 3 segments: ``sort:<location>:<bucket>``,
+        ``reclaim:<location>:<category>``, ``cluster:<location>:<slug>``
+        (document-topic-clustering / photo-face-clustering epics -- a
+        semantic cluster's "bucket" is a cluster label/slug rather than a
+        file-extension rule, but the scheme is otherwise identical; see
+        ``semantic/pipeline.py``).
+      - New (post-epic), 2 segments: ``corral-screenshots:<location>``.
+      - Old (pre-epic), 2 segments: ``sort:<bucket>``, ``reclaim:<category>``
+        -- no location segment existed yet, so location falls back to "other".
+      - Old (pre-epic), 1 segment: ``corral-screenshots`` -- same fallback.
+      - Anything else unrecognized -> no pipeline, "other" location, no bucket.
+    """
+    if not group_key:
+        return {"pipeline": None, "location": "other", "bucket": None}
+    parts = group_key.split(":")
+    pipeline = parts[0]
+    if pipeline in ("sort", "reclaim", "cluster"):
+        if len(parts) == 3:
+            return {"pipeline": pipeline, "location": parts[1], "bucket": parts[2]}
+        if len(parts) == 2:
+            return {"pipeline": pipeline, "location": "other", "bucket": parts[1]}
+        return {"pipeline": pipeline, "location": "other", "bucket": None}
+    if pipeline == "corral-screenshots":
+        if len(parts) == 2:
+            return {"pipeline": pipeline, "location": parts[1], "bucket": None}
+        return {"pipeline": pipeline, "location": "other", "bucket": None}
+    return {"pipeline": None, "location": "other", "bucket": None}
+
+
+def group_entries_hierarchical(entries: list[QueueEntry]) -> list[dict]:
+    """Aggregate ``entries`` into a location -> bucket tree, via ``parse_group_key``.
+
+    Relocated here (from ``ui/routes.py``, which still exposes it as
+    ``_group_entries_hierarchical`` for backward compatibility) so
+    ``chat/tools.py``'s ``list_queue_summary`` tool can reuse the exact
+    same aggregate shape the dashboard tree already produces, without
+    ``chat/`` importing from ``ui.routes`` -- see ``chat/tools.py``'s
+    module docstring and ``config.configured_locations``'s docstring for
+    the same reasoning applied elsewhere in this epic.
+
+    Single pass over ``entries``, aggregates only -- never materializes a
+    per-entry list anywhere in the returned structure (repeating the
+    pre-pagination performance mistake at real, thousands-of-entries scale
+    is the single most-cited risk for the dashboard tree story; see that
+    story's own risk list and the prior-art research). Each bucket node is
+    keyed by the entry's literal ``group_key`` (not just the parsed bucket
+    label), so a bucket row's "Approve all"/"Reject all"/"Undo all" action
+    -- an exact match against that literal group_key -- reaches every
+    entry in that row and nothing outside it, even across the rare case of
+    two different literal group_key strings (e.g. an old- and new-format
+    group_key) that happen to parse to the same display label.
+
+    Entries whose ``group_key`` doesn't resolve to a real configured
+    location (``parse_group_key``'s "other" fallback, including entries
+    with no ``group_key`` at all) land under an "other" location branch --
+    it appears in the returned list like any other location whenever at
+    least one such entry exists, never silently dropped.
+
+    Both levels are sorted by descending total_size, largest first.
+    """
+    locations: dict[str, dict] = {}
+
+    for entry in entries:
+        parsed = parse_group_key(entry.group_key)
+        location = parsed["location"]
+        size = entry_size(entry)
+
+        loc = locations.setdefault(
+            location,
+            {"location": location, "count": 0, "total_size": 0, "status_counts": {}, "buckets": {}},
+        )
+        loc["count"] += 1
+        loc["total_size"] += size
+        loc["status_counts"][entry.status] = loc["status_counts"].get(entry.status, 0) + 1
+
+        bucket = loc["buckets"].setdefault(
+            entry.group_key,
+            {
+                "group_key": entry.group_key,
+                "label": parsed["bucket"] or parsed["pipeline"] or "ungrouped",
+                "count": 0,
+                "total_size": 0,
+                "status_counts": {},
+                "ai_count": 0,
+            },
+        )
+        bucket["count"] += 1
+        bucket["total_size"] += size
+        bucket["status_counts"][entry.status] = bucket["status_counts"].get(entry.status, 0) + 1
+        if is_ai_source(entry.source):
+            bucket["ai_count"] += 1
+
+    result = []
+    for loc in locations.values():
+        loc["buckets"] = sorted(loc["buckets"].values(), key=lambda b: b["total_size"], reverse=True)
+        result.append(loc)
+    return sorted(result, key=lambda loc: loc["total_size"], reverse=True)
+
+
+# Hard-coded macOS system locations that must NEVER be staged as a move or
+# delete candidate, regardless of what a user configures search_roots to
+# (a typo'd or overly broad root -- e.g. "/" -- must not turn into a plan
+# to reorganize/delete system files). Modeled directly on DaisyDisk's
+# Collector pattern (see the prior-art research): these are refused
+# structurally, at the staging layer, in every staging path that constructs
+# a QueueEntry (ui/routes.py's _stage_sort_plan/_stage_reclaim_plan/
+# _stage_corral_screenshots_plan, chat/tools.py's propose_moves) -- never
+# merely flagged-but-still-queued the way reclaim.py's user-configurable
+# master_paths are (see MASTER_PATH_REFUSAL_REASON in reclaim.py, a related
+# but distinct mechanism: opt-in and per-project, not this always-on
+# system-path floor).
+#
+# Relocated here (from ui/routes.py, which still exposes it as
+# PROTECTED_PATH_ROOTS/_is_protected_path for backward compatibility) so
+# chat/tools.py's propose_moves can reuse this exact guard, unmodified,
+# without chat/ importing from ui.routes -- see queue.group_entries_hierarchical's
+# docstring for the same reasoning applied elsewhere in this epic. This is
+# the epic's core safety property: a chat-proposed write can never disagree
+# with what every other staging path already refuses.
+PROTECTED_PATH_ROOTS = [
+    Path("/System"),
+    Path("/Library"),
+    Path("/bin"),
+    Path("/sbin"),
+    Path("/usr"),
+    Path("/Applications"),
+]
+
+
+def is_protected_path(path: str | Path, adapter: OSAdapter) -> bool:
+    """True if ``path`` is a hard-blocked protected system location, or
+    falls under one -- including the user's home directory itself (never a
+    subdirectory *inside* home, which is exactly what this whole app
+    exists to organize).
+
+    Symlinks are resolved before comparison (``Path.resolve()``) so a
+    symlinked path can't dodge the check by pointing at a protected
+    location through an unresolved alias.
+    """
+    resolved = Path(path).resolve()
+    if resolved == adapter.resolve_home().resolve():
+        return True
+    return any(resolved == root or root in resolved.parents for root in PROTECTED_PATH_ROOTS)
+
+
 QUEUE_FILENAME = "approval_queue.yaml"
 
 
@@ -238,6 +423,61 @@ def set_status(
                 {"status": new_status, "timestamp": datetime.now(timezone.utc).isoformat()}
             )
         entry.status = new_status
+
+        save_queue(adapter, entries, path)
+
+    return entry
+
+
+def edit_entry(
+    adapter: OSAdapter,
+    entry_id: str,
+    new_dest: str,
+    new_group_key: str | None,
+    path: Path | None = None,
+) -> QueueEntry:
+    """Change a *pending* entry's proposed ``dest``/``group_key`` before approval.
+
+    Only ever touches a pending entry: editing an already-approved/
+    rejected entry's proposed destination is meaningless (it already has
+    -- or, for a rejected entry, never will have -- a real outcome), and
+    editing after execution would silently disagree with what actually
+    happened on disk. Raises ``ValueError`` (naming the entry id and its
+    actual status) if ``entry.status`` isn't ``"pending"``, mirroring
+    ``set_status``'s guard-rail style for invalid transitions.
+
+    Under the same queue file lock / load-mutate-save cycle as
+    ``set_status``/``undo``: loads the queue, finds the entry (raising
+    ``ValueError`` as in ``set_status`` if it isn't found), appends a
+    ``status_history`` record carrying the old and new ``dest``/
+    ``group_key`` (so the edit is auditable the same way a status
+    transition is -- see ``QueueEntry.status_history``), mutates the
+    entry, saves, and returns it.
+    """
+    if path is None:
+        path = default_queue_path(adapter)
+
+    with with_queue_lock(adapter, path):
+        entries = load_queue(adapter, path)
+        entry = _find_entry(entries, entry_id, path)
+
+        if entry.status != "pending":
+            raise ValueError(
+                f"Cannot edit entry {entry_id!r}: status is {entry.status!r}, not 'pending'"
+            )
+
+        entry.status_history.append(
+            {
+                "status": entry.status,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "edit": {
+                    "dest": {"old": entry.dest, "new": new_dest},
+                    "group_key": {"old": entry.group_key, "new": new_group_key},
+                },
+            }
+        )
+        entry.dest = new_dest
+        entry.group_key = new_group_key
 
         save_queue(adapter, entries, path)
 

@@ -1,0 +1,133 @@
+id: chat-engine-and-minimal-ui
+epic: chat-agent-plan-builder
+title: Tool-calling engine + jobs.py streaming extension + minimal chat UI
+status: done
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  The foundation slice: extend jobs.py with a generic partial-text field so a running
+  background job can publish growing text (not just numeric progress), build the
+  Anthropic tool-calling loop (multi-turn, streaming, executes whichever tools the model
+  calls and feeds results back until a final text response), and wire up the smallest
+  possible end-to-end UI -- a /chat page with ONE trivial read-only tool (list_locations)
+  -- to prove the whole pipeline works before any higher-risk pieces (the write path,
+  cost caps) are built on top of it.
+
+acceptance_criteria:
+  - "Given a running background job, when its target_fn calls a new partial_callback, then GET /status/<job_id> includes that text under a `partial` key while status is still \"running\", and existing callers that never read `partial` are unaffected."
+  - "Given a fresh conversation, when a user asks \"what locations are configured\", then the engine calls list_locations, feeds the real result back to the model, and the model's final answer reflects the actual configured search_roots."
+  - "Given a turn in progress, when the client polls /status/<job_id>, then it sees the assistant's response text grow incrementally, not appear all at once only when the turn finishes."
+  - "Given the /chat page, when it loads, then it matches this session's established visual language (nav link with .nav-link/aria-current like History, base.html's type scale, no new ad-hoc styling system)."
+
+steps:
+  - id: research
+    description: |
+      Confirm jobs.py's exact current JobState shape and start_job/get_job signatures
+      (already read this session -- re-verify nothing drifted). Confirm anthropic SDK's
+      streaming API shape (client.messages.stream(...)) and tool-use event structure for
+      the target model.
+    agent: researcher
+  - id: implement
+    description: |
+      jobs.py: add JobState.partial + partial_callback, threaded through start_job/_run
+      exactly like the existing progress_callback. New src/cleanup_tools/chat/state.py
+      (in-memory conversation store, mirrors jobs.py's module shape). New
+      src/cleanup_tools/chat/engine.py (the tool-calling loop) and
+      src/cleanup_tools/chat/tools.py (starts with list_locations only). The engine's
+      system prompt explicitly frames every tool result (filenames, paths, counts) as
+      data to classify, never as instructions to follow -- per design discussion §2.8's
+      prompt-injection posture; this is the one place that framing is established, every
+      later story's tools inherit it rather than each needing their own. New routes:
+      GET /chat, POST /chat/new, POST /chat/<id>/message (kicks off jobs.start_job).
+      New templates/chat.html + static/chat.js (polling, incremental render). Nav link
+      matching History's precedent.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      jobs.py extension: unit tests proving partial updates before completion and that
+      existing progress_callback-only callers are unaffected. Engine: tests against an
+      injected fake Anthropic client (mirroring AnthropicProvider's own test-injection
+      pattern) proving the tool-call round-trip and streaming accumulation work.
+      Route-level tests for /chat page render and the full message-post-then-poll flow.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review the jobs.py extension specifically for backward compatibility with every existing start_job caller (plan_sort/plan_reclaim/plan_corral_screenshots), and the engine's tool-loop termination logic (must always terminate, never spin on repeated tool calls).
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/ui/jobs.py
+      purpose: "JobState/start_job/get_job (full file, ~144 lines) -- the pattern this story extends, not replaces."
+    - path: src/cleanup_tools/ui/static/plan-trigger.js
+      purpose: "pollJob()'s existing 400ms-interval polling helper -- the client-side pattern chat.js follows."
+    - path: src/cleanup_tools/ai/anthropic_provider.py
+      purpose: "The existing single-call Anthropic integration -- credential/client construction pattern to reuse; NOT the multi-turn shape this story needs to build new."
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/jobs.py
+    change: Add JobState.partial + partial_callback threaded through start_job.
+  - file: src/cleanup_tools/chat/
+    change: New package -- state.py, engine.py, tools.py (list_locations only this story).
+  - file: src/cleanup_tools/ui/routes.py
+    change: New GET /chat, POST /chat/new, POST /chat/<id>/message routes.
+  - file: src/cleanup_tools/ui/templates/
+    change: New chat.html; nav link in base.html.
+  - file: src/cleanup_tools/ui/static/
+    change: New chat.js (polling + incremental render).
+
+code_examples:
+  - title: Existing background-job pattern this story extends
+    file: src/cleanup_tools/ui/jobs.py
+    snippet: |
+      def start_job(target_fn: Callable[..., Any], *args: Any) -> str:
+          ...
+          def _progress_callback(current: int, total: int) -> None:
+              with _lock:
+                  job = _jobs.get(job_id)
+                  if job is not None:
+                      job.current = current
+                      job.total = total
+          # this story adds an equivalent _partial_callback(text) -> job.partial = text
+
+design_decisions:
+  - decision: "Streaming is delivered via a generic jobs.py extension (partial field), not a chat-specific mechanism or Server-Sent Events."
+    rationale: "This project has zero JS bundler and one already-proven async pattern; generalizing it by one field is smaller and more consistent than introducing a second transport (design discussion §2.5)."
+  - decision: "Conversation state is in-memory only, mirroring jobs.py's own module-level dict + lock, never persisted."
+    rationale: "Conversations are ephemeral UI state, like background jobs -- the only durable output is whatever gets staged into queue.yaml (design discussion §3)."
+  - decision: "This slice ships with exactly one tool (list_locations) on purpose."
+    rationale: "Prove the engine/streaming/UI pipeline end-to-end before adding the higher-risk read-heavy and write tools in later slices -- a real vertical slice, not a stub."
+
+risks:
+  - severity: high
+    description: A bug in the tool-calling loop's termination condition could spin indefinitely (repeated tool calls, never reaching final text), pinning a background thread forever.
+    mitigation: A hard cap on tool-call round-trips WITHIN a single turn (independent of the epic-level turn cap added in a later story), enforced in engine.py itself; explicit test for this case.
+  - severity: medium
+    description: Extending JobState is a shared-module change touching every existing start_job caller.
+    mitigation: Explicit backward-compatibility test suite entry (existing plan_sort/plan_reclaim/plan_corral_screenshots jobs must be provably unaffected) called out in the review step.
+
+references:
+  - path: .pHive/epics/chat-agent-plan-builder/docs/design-discussion.md
+    relevant_excerpt: |
+      §2.5: jobs.py needs JobState.partial + partial_callback before the polling-reuse
+      claim is true... "turn" = one full user-message-to-assistant-response cycle.
+  - path: .pHive/epics/chat-agent-plan-builder/docs/research-brief.md
+    relevant_excerpt: |
+      Nothing in ai/ supports multi-turn state, streaming, or an open tool loop -- a chat
+      agent is a different shape, needs new code, not a parameter tweak.
+
+metric:
+  applies: false
+  justification: Foundational infrastructure story (jobs.py extension + engine plumbing) with no independently observable user-facing behavior beyond "the chat page loads and answers one trivial question" -- its value is measured by the stories that build on it, not standalone.
+
+manual_verdict:
+  scenario_ref: null

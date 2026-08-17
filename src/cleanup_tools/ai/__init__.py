@@ -57,6 +57,7 @@ __all__ = [
     "CredentialsError",
     "default_credentials_path",
     "get_provider",
+    "get_raw_client",
 ]
 
 CREDENTIALS_FILENAME = "credentials"
@@ -135,3 +136,26 @@ def get_provider(
     if model is not None:
         kwargs["model"] = model
     return AnthropicProvider(api_key=api_key, **kwargs)
+
+
+def get_raw_client(*, credentials_path: Path | None = None) -> "anthropic.Anthropic":
+    """Return a plain, configured ``anthropic.Anthropic`` client -- the SAME
+    credential resolution :func:`get_provider` uses, but NOT wrapped in
+    :class:`AnthropicProvider`.
+
+    ``AnthropicProvider`` is deliberately narrow (single forced-tool-choice
+    call, no streaming, no multi-turn state -- see its module docstring);
+    the chat-agent-plan-builder epic's engine needs the raw SDK client's
+    ``messages.stream(...)`` instead. This function exists so that epic
+    reuses the EXACT SAME credential resolution as every other AI-touching
+    code path in this project (env var, else the 0600 credentials file),
+    rather than re-implementing it -- "BYOK" stays a single, one-owner
+    concept, not two.
+
+    Raises :class:`CredentialsError` exactly like :func:`get_provider` when
+    no key can be found anywhere.
+    """
+    import anthropic
+
+    api_key = _resolve_api_key(credentials_path)
+    return anthropic.Anthropic(api_key=api_key, max_retries=0)

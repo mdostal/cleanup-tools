@@ -1,14 +1,19 @@
 """AI-provider interface for proposing cleanup buckets.
 
 This is intentionally narrow: "given a filename + metadata, propose a
-bucket" -- not a general chat interface. It is the ONE sanctioned exception
-to this project's "no network, no telemetry" hard rule (see
-``.pHive/CONTEXT.md`` Conventions), and only because it is an explicit,
-user-triggered call -- never ambient.
+bucket" -- not a general chat interface (see ``chat/`` for that: a
+separate, later-added surface built on the raw SDK client via
+``ai.get_raw_client()``, not on this narrow interface). This was originally
+the ONE sanctioned exception to this project's "no ambient/telemetry
+network calls" rule (see ``.pHive/CONTEXT.md`` Conventions); the update
+checker and the ``chat/`` package are now a second and third, all under
+the same rule: fine as long as the call is explicit/user-triggered, never
+ambient.
 
-This module is standalone. It is NOT wired into the approval queue, the UI,
-or any CLI command yet -- that is a separate, future story. Nothing here is
-imported by ``queue.py``, ``ui/``, or ``commands/``.
+This module is standalone with respect to ``queue.py``/``ui/``/
+``commands/`` -- nothing here imports those. It IS wired into the approval
+queue and the UI, via ``ai/wiring.py`` (``propose_for_other_bucket``,
+reachable from ``POST /propose-ai`` and ``cleanup propose-ai``).
 
 ``ProposalResult`` deliberately returns a typed result rather than raising:
 callers (eventually the queue/UI layer) need to branch on *why* a proposal

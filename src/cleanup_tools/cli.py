@@ -54,9 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sort_parser.add_argument(
         "dir",
-        nargs="?",
+        nargs="*",
         default=None,
-        help="Directory to sort (default: the platform Downloads dir).",
+        help=(
+            "Root directories to sort (default: configured search_roots, "
+            "else the platform Downloads dir)."
+        ),
     )
     sort_parser.add_argument(
         "--go",

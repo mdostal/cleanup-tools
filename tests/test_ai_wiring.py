@@ -190,7 +190,7 @@ def test_successful_proposal_becomes_correctly_shaped_queue_entry(adapter, downl
     assert entry.source == "ai:anthropic"
     assert entry.action == "move"
     assert entry.status == "pending"
-    assert entry.group_key == "sort:invoices"
+    assert entry.group_key == f"sort:{downloads.resolve()}:invoices"
     assert entry.src == str(files[0])
     assert entry.dest.endswith(str(Path("_sorted") / "invoices" / "invoice_final.dat"))
     assert result["failures"] == []
@@ -333,7 +333,7 @@ def test_propose_ai_route_creates_expected_queue_entries(adapter, client, downlo
     assert len(on_disk) == 2
     assert {e.source for e in on_disk} == {"ai:anthropic"}
     assert {e.status for e in on_disk} == {"pending"}
-    assert {e.group_key for e in on_disk} == {"sort:misc"}
+    assert {e.group_key for e in on_disk} == {f"sort:{downloads.resolve()}:misc"}
 
 
 def test_propose_ai_route_no_api_key_degrades_gracefully_not_500(client, monkeypatch):
@@ -431,7 +431,7 @@ def test_ai_entries_work_through_bulk_approve_by_group_key(adapter, client, down
     monkeypatch.setattr("cleanup_tools.ui.routes.get_provider", lambda *a, **kw: provider)
     client.post("/propose-ai")
 
-    resp = client.post("/queue/bulk-approve", data={"group_key": "sort:misc"})
+    resp = client.post("/queue/bulk-approve", data={"group_key": f"sort:{downloads.resolve()}:misc"})
     assert resp.status_code == 302
 
     entries = queue_module.load_queue(adapter, queue_module.default_queue_path(adapter))
@@ -453,7 +453,7 @@ def test_ai_approved_entry_executes_via_sort_from_queue(adapter, downloads, othe
     queue_module.set_status(adapter, entry.id, "approved", queue_module.default_queue_path(adapter))
 
     class Args:
-        dir = str(downloads)
+        dir = [str(downloads)]
         go = False
         from_queue = True
 

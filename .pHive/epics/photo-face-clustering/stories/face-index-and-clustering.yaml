@@ -1,0 +1,90 @@
+id: face-index-and-clustering
+epic: photo-face-clustering
+title: Per-face index schema (kind + composite key) extension + reused threshold/union-find clustering
+status: done
+complexity: medium
+methodology: classic
+depends_on: [face-detection-and-embedding]
+
+description: |
+  Extends `document-topic-clustering`'s `semantic/index.py` to support MANY embeddings per
+  file (one row per detected face, not one row per content hash) and a `kind` column
+  (`"document"` | `"face"`) so clustering never mixes the two embedding spaces (design
+  discussion §4). Reuses `semantic/cluster.py`'s threshold + union-find grouping UNCHANGED
+  for the `"face"` kind -- a deliberate consistency choice over introducing HDBSCAN, stated
+  explicitly as a tradeoff (design discussion §3), not an oversight.
+
+acceptance_criteria:
+  - "Given a photo with 3 detected faces, when indexed, then 3 distinct rows are stored (content_hash, face_index, bbox, embedding), not one row overwriting the others."
+  - "Given both document-kind and face-kind embeddings in the same index, when cluster() runs for kind='face', then it only ever considers face-kind embeddings -- never mixes in document embeddings even if vector dimensions happened to coincide."
+  - "Given a set of fake face embeddings with known identity-similarity relationships, when cluster() runs, then it returns exactly the expected person-groupings at the configured threshold -- same test shape as phase 1's document-clustering test, applied to the face kind."
+  - "Given the SAME face-clustering inputs run twice, when cluster() runs, then the output is identical -- deterministic."
+
+steps:
+  - id: research
+    description: Re-read semantic-index-and-clustering's (phase 1) actual implementation once it exists, to confirm the exact schema/interface this story extends rather than reimplements.
+    agent: researcher
+  - id: implement
+    description: |
+      Extend src/cleanup_tools/semantic/index.py's schema (kind column, per-face composite
+      key). Confirm semantic/cluster.py's existing interface works unchanged for the face
+      kind (no code change expected here unless the interface assumed one-embedding-per-file
+      somewhere -- if so, generalize it, flagged explicitly in this story's PR description).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Tests using fake/synthetic face embeddings (not real InsightFace output) proving the clustering math and kind-isolation are correct independent of embedding quality, mirroring phase 1's determinism/isolation test shape.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm no code path can accidentally compare a face-kind embedding against a document-kind one (even a defensive assertion, not just correct-by-construction code), and that the per-face composite key genuinely never collides for a real multi-face photo.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: .pHive/epics/document-topic-clustering/stories/semantic-index-and-clustering.yaml
+      purpose: "The phase-1 sibling story this one extends -- same index.py/cluster.py, generalized rather than duplicated."
+
+files_to_modify:
+  - file: src/cleanup_tools/semantic/index.py
+    change: Extend schema with kind column + per-face composite key.
+
+design_decisions:
+  - decision: Reuse cluster.py's threshold+union-find unchanged for faces, rather than adding HDBSCAN despite the research brief recommending it specifically for faces.
+    rationale: "Consistency -- one clustering algorithm across both epics, one thing to reason about/tune/fix; an explicit, documented tradeoff (design discussion §3), not an oversight. A future HDBSCAN upgrade behind the same interface benefits both epics at once."
+
+risks:
+  - severity: medium
+    description: Threshold-based clustering may perform worse on faces than documents specifically, since the research brief flags face-cluster density variance (a person in 500 photos vs. 3) as the exact case HDBSCAN handles better.
+    mitigation: Accepted tradeoff, explicitly stated; every proposal is still human-reviewed regardless of clustering quality.
+
+references:
+  - path: .pHive/epics/photo-face-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §4: A photo can contain multiple faces -- this epic's embeddings are one row per
+      detected face, not per file... index.py gains a kind column so clustering NEVER
+      mixes the two embedding spaces.
+
+metric:
+  applies: false
+  justification: Backend clustering-math story with no independently observable user-facing surface yet -- its value is realized by face-pipeline-and-single-identity-staging's real staged proposals.
+
+manual_verdict:
+  scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T02:05:00Z"
+  agent: developer
+  notes: |
+    Most of this story's schema/clustering groundwork was already built generically in
+    document-topic-clustering's own semantic-index-and-clustering story (the kind/face_index
+    composite key, the threshold+union-find math) -- this story's real, and only, code change
+    was adding a `prefix` parameter to cluster.cluster() so an unlabeled face cluster falls
+    back to "person-<n>" instead of document-topic-clustering's "cluster-<n>", with the
+    default staying "cluster" for full backward compatibility (verified via a dedicated
+    regression test). 9 new face-domain tests, 727 passed/1 skipped full suite.

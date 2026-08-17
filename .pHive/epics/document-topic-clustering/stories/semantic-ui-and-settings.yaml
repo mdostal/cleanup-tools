@@ -1,0 +1,97 @@
+id: semantic-ui-and-settings
+epic: document-topic-clustering
+title: "\"Plan: Cluster Documents\" trigger + queue disclosure snippet + semantic_cluster_threshold setting"
+status: done
+complexity: medium
+methodology: classic
+depends_on: [semantic-pipeline-and-queue-integration]
+
+description: |
+  The user-visible surface: a new "Plan: Cluster Documents" trigger (mirrors plan_sort's
+  exact background-job/poll shape) that runs the pipeline from the prior story, a small
+  "why was this grouped here" extracted-text-snippet disclosure on cluster-sourced queue
+  entries (this epic's concrete answer to the research brief's "manual-correction UX is
+  the single largest scope item" warning -- real transparency, not a full merge/split
+  editor), and a new semantic_cluster_threshold Settings field following the chat_turn_cap
+  precedent exactly. No new page -- the dashboard tree and Review Queue already render
+  anything group_key-shaped, per design discussion §2.1/§2.5.
+
+acceptance_criteria:
+  - "Given the nav bar, when the page loads, then a \"Plan: Cluster Documents\" link is present, matching Plan: Sort/Plan: Reclaim/Plan: Corral Screenshots' exact visual/interaction pattern."
+  - "Given a click on \"Plan: Cluster Documents\", when the background job runs, then it kicks off via jobs.start_job (same async pattern as every other Plan: trigger) and the user sees real progress, not a blocked request."
+  - "Given a cluster-sourced (source=local:cluster) entry in the Review Queue, when rendered, then a collapsed <details>/<summary> disclosure shows a short (~120 char) extracted-text snippet -- never the full document dumped into the page by default."
+  - "Given a non-cluster-sourced entry, when rendered, then no snippet disclosure appears -- this is additive, not a change to every entry's rendering."
+  - "Given the Settings page, when it loads, then a semantic_cluster_threshold field is shown with the current configured value, editable and persisted via a POST route exactly like chat_turn_cap."
+  - "Given an out-of-range threshold value (e.g. negative, or > 1.0 -- cosine similarity's valid range), when submitted, then the route rejects it with 400 and does not persist, mirroring set_chat_options' validation discipline."
+
+steps:
+  - id: research
+    description: Re-confirm plan_sort's exact route/job/poll shape and queue.html's short_path()-based disclosure pattern, so this story's new trigger and snippet reuse both conventions unmodified rather than inventing new ones.
+    agent: researcher
+  - id: implement
+    description: |
+      Add /plan/cluster-documents route + nav link (routes.py, base.html). Add the snippet
+      disclosure to queue.html for source=local:cluster entries. Add semantic_cluster_threshold
+      to Config (load/save/config_to_dict) + a Settings field + POST /settings/semantic-options
+      route, mirroring set_chat_options exactly.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Route-level tests for the new trigger (job kicks off, polls to done, real entries staged), the snippet disclosure's presence/absence, and the settings persistence route's validation (valid value persists, out-of-range rejected with no persistence).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm the snippet is genuinely capped (~120 chars) in every render path -- no code path that could dump a full extracted document into the page -- and that the new nav link/route follow this session's established visual-language conventions (data-intent buttons, aria-current, the shared type scale) rather than diverging.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "plan_sort/_stage_sort_plan -- the exact background-job/poll pattern this story's new trigger mirrors; set_chat_options -- the exact validation/persistence pattern this story's new settings route mirrors."
+    - path: src/cleanup_tools/ui/templates/queue.html
+      purpose: "The existing short_path()-based <details>/<summary> disclosure convention this story's snippet reuses."
+    - path: src/cleanup_tools/ui/templates/settings.html
+      purpose: "The AI Provider pane's chat_turn_cap field -- the direct, most recent precedent for adding a new numeric Config-backed Settings field."
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/routes.py
+    change: New /plan/cluster-documents route + _cluster_documents_job; new POST /settings/semantic-options route.
+  - file: src/cleanup_tools/ui/templates/base.html
+    change: New nav link for the cluster-documents trigger.
+  - file: src/cleanup_tools/ui/templates/queue.html
+    change: Snippet disclosure for source=local:cluster entries.
+  - file: src/cleanup_tools/ui/templates/settings.html
+    change: New semantic_cluster_threshold field.
+  - file: src/cleanup_tools/config.py
+    change: Add semantic_cluster_threshold field + load/save/config_to_dict support.
+
+design_decisions:
+  - decision: No new page -- extend the dashboard tree/Review Queue and the AI Provider-adjacent settings area instead.
+    rationale: "Cluster proposals are structurally identical QueueEntry objects to every other pipeline's proposals -- they already render correctly wherever group_key-shaped entries render. Design discussion §2.1/§2.5."
+  - decision: The snippet is the one new piece of UI, not a full merge/split editor.
+    rationale: "Editing/rejecting individual entries (queue.edit_entry, existing) already covers 'this file doesn't belong'; splitting an over-broad cluster is just rejecting the entries that don't belong while approving the rest. A dedicated cluster-editing UI is deferred, not assumed necessary."
+
+risks:
+  - severity: low
+    description: A reviewer might not realize WHY files were grouped without opening every disclosure individually.
+    mitigation: "Accepted for phase 1 -- the disclosure exists at all is the concrete answer to the research brief's UX warning; a richer at-a-glance summary is a reasonable future enhancement, not blocking this epic."
+
+references:
+  - path: .pHive/epics/document-topic-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §2.5: a short extracted-text snippet (first ~120 chars, truncated, never the full
+      document dumped into the page by default) behind the SAME <details>/<summary>
+      disclosure pattern short_path() already established this session.
+
+metric:
+  applies: false
+  justification: UI-surface story whose value is the same underlying pipeline capability semantic-pipeline-and-queue-integration already measures; this story adds discoverability/trust, not a new independently-trending number.
+
+manual_verdict:
+  scenario_ref: null

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_status_icon.html" as icons %}
 {% block title %}Dashboard - Cleanup Approvals{% endblock %}
 {% block content %}
 <h1>Overview</h1>
@@ -52,6 +53,24 @@
         checked>
       Corral Screenshots
     </label>
+    {% if configured_locations %}
+    <!-- Location subset picker: every checkbox is checked by default, so
+         leaving them all alone reproduces the exact previous "scan every
+         configured location" behavior. Unchecking some scopes every
+         selected plan kind above to only the checked locations, via
+         static/plan-trigger.js appending repeated ?dirs= query params to
+         each plan URL at submit time -- see that file's initKickoffBar. -->
+    <fieldset class="kickoff-locations">
+      <legend>Locations to run against</legend>
+      {% for loc in configured_locations %}
+      <label class="kickoff-option" title="{{ loc }}">
+        <input type="checkbox" class="kickoff-location-checkbox" value="{{ loc }}" checked>
+        {{ loc | short_path }}
+        <span class="sr-only"> ({{ loc }})</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    {% endif %}
     <button type="submit" id="kickoff-run-button">Run selected</button>
   </form>
   <!-- One row per launched job, populated/updated live by
@@ -92,27 +111,79 @@
 <script id="dashboard-chart-data" type="application/json">
 [
 {%- for g in groups %}
-{"label": {{ g.group_key | tojson }}, "value": {{ g.total_size | tojson }}}{{ "," if not loop.last }}
+{%- set parsed = parse_group_key(g.group_key) %}
+{"label": {{ ((parsed.bucket or parsed.pipeline or "ungrouped") ~ " — " ~ (parsed.location | short_path)) | tojson }}, "value": {{ g.total_size | tojson }}}{{ "," if not loop.last }}
 {%- endfor %}
 ]
 </script>
 {% endif %}
 
-<h2>Groups <span style="font-weight:normal; color:var(--ink-soft);">({{ total_entries }} total entries)</span></h2>
-<div class="group-grid">
-  {% for g in groups %}
-  <div class="group-card">
-    <h3>{{ g.group_key }}</h3>
-    <p class="meta">{{ g.count }} item{{ "s" if g.count != 1 else "" }} &middot; {{ "%.1f"|format(g.total_size / 1048576) }} MB</p>
-    <div>
-      {% for status, count in g.status_counts.items() %}
-      <span class="badge badge-status-{{ status }}">{{ status }}: {{ count }}</span>
-      {% endfor %}
-      {% if g.ai_count %}
-      <span class="badge badge-ai">AI-proposed: {{ g.ai_count }}</span>
+<h2>Locations <span class="heading-detail">({{ total_entries }} total entries)</span></h2>
+<!-- Collapsible location -> bucket tree (see _group_entries_hierarchical):
+     aggregates only, same as the flat card list this replaces -- never
+     renders a per-entry list here, matching why /queue paginates instead
+     of dumping every entry on one page. Native <details>/<summary> gives
+     expand/collapse with zero JS. Each bucket row's Approve/Reject/Undo
+     actions are the exact same bulk routes the flat /queue page's
+     per-group buttons already use (plain form POSTs, no fetch/JS), scoped
+     by that row's own literal group_key so a click here can never reach
+     entries under a different branch. -->
+<div class="location-tree">
+  {% for loc in location_tree %}
+  <details class="location-branch" {{ "open" if loop.first }}>
+    <summary title="{{ loc.location }}">
+      <span class="location-branch-title">{{ loc.location | short_path }}</span>
+      <span class="branch-count">{{ loc.count }}</span>
+      <span class="meta">item{{ "s" if loc.count != 1 else "" }} &middot; {{ "%.1f"|format(loc.total_size / 1048576) }} MB</span>
+    </summary>
+    <div class="bucket-list">
+      {% if loc.location != "other" %}
+      <p class="full-path-hint">Full path: <code>{{ loc.location }}</code></p>
       {% endif %}
+      {% for b in loc.buckets %}
+      <div class="bucket-row">
+        <div class="bucket-row-header">
+          <span class="bucket-label">{{ b.label }}</span>
+          <span class="branch-count branch-count-sm">{{ b.count }}</span>
+          <span class="meta">item{{ "s" if b.count != 1 else "" }} &middot; {{ "%.1f"|format(b.total_size / 1048576) }} MB</span>
+        </div>
+        <div class="bucket-row-badges">
+          {% for status, count in b.status_counts.items() %}
+          <span class="badge badge-status-{{ status }}">{{ icons.status_icon(status) }}{{ status }}: {{ count }}</span>
+          {% endfor %}
+          {% if b.ai_count %}
+          <span class="badge badge-ai">AI-proposed: {{ b.ai_count }}</span>
+          {% endif %}
+        </div>
+        {% if b.group_key %}
+        <div class="bucket-row-actions">
+          <form
+            method="post" action="{{ url_for('ui.bulk_approve') }}" style="display:inline;"
+            data-confirm="Approve all {{ b.count }} pending item{{ "s" if b.count != 1 else "" }} in {{ b.label }}?"
+          >
+            <input type="hidden" name="group_key" value="{{ b.group_key }}">
+            <button type="submit" data-intent="primary" title="Approve every pending entry in {{ b.label }}">Approve all</button>
+          </form>
+          <form
+            method="post" action="{{ url_for('ui.bulk_reject') }}" style="display:inline;"
+            data-confirm="Reject all {{ b.count }} pending item{{ "s" if b.count != 1 else "" }} in {{ b.label }}?"
+          >
+            <input type="hidden" name="group_key" value="{{ b.group_key }}">
+            <button type="submit" data-intent="secondary" title="Reject every pending entry in {{ b.label }}">Reject all</button>
+          </form>
+          <form
+            method="post" action="{{ url_for('ui.bulk_undo') }}" style="display:inline;"
+            data-confirm="Revert every entry in {{ b.label }} to its previous status?"
+          >
+            <input type="hidden" name="group_key" value="{{ b.group_key }}">
+            <button type="submit" data-intent="ghost" title="Revert every entry in {{ b.label }} to its previous status">Undo all</button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
     </div>
-  </div>
+  </details>
   {% else %}
   <p>No queue entries yet. Try <a
     href="{{ url_for('ui.plan_sort') }}"

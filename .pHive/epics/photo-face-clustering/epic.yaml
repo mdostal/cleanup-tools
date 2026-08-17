@@ -1,0 +1,78 @@
+name: photo-face-clustering
+title: Local photo-by-person clustering, staged into the existing approval queue (semantic-clustering phase 2)
+description: |
+  Phase 2 of the semantic-desktop-organization research vision, following
+  document-topic-clustering (phase 1). Groups photos by the person(s) in them, entirely
+  local, zero network calls, landing every proposal in the SAME approval queue every other
+  pipeline uses -- reuses phase 1's semantic/index.py, semantic/cluster.py, and the
+  "cluster" group_key pipeline prefix directly, adding a new semantic/faces.py detection+
+  embedding module.
+
+  A genuinely new finding from this epic's own design work (not in the original research
+  brief): Apple's Vision framework doesn't publicly expose a face-identity-embedding API
+  the way it does for text, so phase 1's "Apple-native, zero bundle cost" pattern does NOT
+  carry over -- this epic ships InsightFace+onnxruntime (~300-500MB vendored model weights)
+  on EVERY platform (Mac and Arch alike), a real, explicitly-flagged jump in dependency
+  weight and packaging risk versus phase 1.
+
+  A second genuinely new architectural resolution: a photo can contain multiple people, but
+  QueueEntry.action="move" can only place a file in one destination. This epic proposes a
+  move ONLY when every detected face in a photo maps to the same person-cluster --
+  multi-person/group photos are detected, embedded, and indexed but never staged in this
+  phase (see design-discussion.md §5 for the full reasoning and the deferred "tag, don't
+  move" alternative).
+
+  Explicitly OUT OF SCOPE for this epic (same phasing discipline as phase 1 -- deferred to
+  future, separately-scoped epics, not silently folded in):
+  - Pet identification -- no mature approach exists per the research, regardless of phase.
+  - Multi-person-photo tagging/multi-membership handling -- explicitly deferred (design
+    discussion §5); this phase only handles single-identity photos.
+  - Cross-modal identity linking ("this PDF and this photo are about the same person") --
+    not attempted by any surveyed tool per the research, explicitly out of scope.
+  - AI-assisted cluster naming -- same no-network-calls constraint as phase 1; person
+    clusters get a generic "person-<n>" slug, renamed by a human at review time.
+  - Network/shared-drive scope -- a separate go/no-go decision per the research brief's §3b.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [backend, local-ml, cross-platform, ui, flask, no-bundler-frontend, packaging]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    local-ml: "Reuses document-topic-clustering's index.py/cluster.py infrastructure directly -- a genuine cross-epic dependency, not a parallel reimplementation."
+    cross-platform: "Unlike phase 1 (Mac-only via PyObjC), this epic is genuinely cross-platform from day one -- no local-native alternative exists on any platform, so there's no cheaper Mac-only path to prefer."
+    packaging: "A ~300-500MB vendored-model bundling payload is a real, first-of-its-kind PyInstaller risk for this project -- explicitly unverified going in, closed out by this epic's own dedicated final story."
+  confidence: medium
+  gate_decisions:
+    grill: ran, round 1, 3 findings resolved before user review
+    collaborative_review: solo-orchestrator self-review (no separate spawned personas this run)
+    dependency_footprint: "InsightFace+onnxruntime, cross-platform, ~300-500MB vendored weights -- explicit, justified decision in design-discussion.md §2, confirmed with the user before this epic was planned (user chose 'plan it anyway' after the tradeoff was surfaced)."
+    multi_person_photo_scoping: "Single-identity-only staging in this phase; multi-membership explicitly deferred -- design-discussion.md §5."
+
+stories:
+  - id: face-detection-and-embedding
+    title: InsightFace detection + embedding via vendored ONNX weights (no auto-download)
+    complexity: high
+    depends_on: []
+  - id: face-index-and-clustering
+    title: Per-face index schema (kind + composite key) extension + reused threshold/union-find clustering
+    complexity: medium
+    depends_on: [face-detection-and-embedding]
+  - id: face-pipeline-and-single-identity-staging
+    title: Reuse phase-1 walk + single-identity-only staging rule + by-person/ dest convention
+    complexity: high
+    depends_on: [face-index-and-clustering]
+  - id: face-ui-and-settings
+    title: "\"Plan: Cluster Photos by Person\" trigger (reuses existing thumbnails) + semantic_face_cluster_threshold setting"
+    complexity: medium
+    depends_on: [face-pipeline-and-single-identity-staging]
+  - id: face-packaging-and-verification
+    title: PyInstaller packaging for onnxruntime + vendored ~300-500MB model weights + offline-reliability regression test + frozen-build verification
+    complexity: high
+    depends_on: [face-ui-and-settings]

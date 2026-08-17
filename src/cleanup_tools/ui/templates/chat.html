@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Chat - Cleanup Approvals{% endblock %}
+{% block content %}
+<h1>Chat</h1>
+<p class="meta">
+  Talk through where things should sort. The agent can look at your real configured
+  locations and queue -- it can only ever propose moves for you to review and approve,
+  never move or delete anything itself.
+</p>
+<p id="chat-turn-counter" class="meta" aria-live="polite"></p>
+
+<div id="chat-transcript" class="chat-transcript" role="log" aria-live="polite" aria-label="Conversation"></div>
+
+<form id="chat-form" class="chat-form">
+  <textarea id="chat-input" name="message" placeholder="Ask about your Downloads folder…" rows="2" required></textarea>
+  <button type="submit" id="chat-send" data-intent="primary">Send</button>
+</form>
+<p id="chat-status" class="meta" role="status" aria-live="polite"></p>
+
+<script src="{{ url_for('static', filename='chat.js') }}"></script>
+{% endblock %}

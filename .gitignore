@@ -59,3 +59,13 @@ src-tauri/resources/cleanup-ui-onedir/
 !.pHive/epics/port-remaining-scripts/**
 !.pHive/epics/desktop-app-shell/
 !.pHive/epics/desktop-app-shell/**
+!.pHive/epics/guided-sort-and-cluster/
+!.pHive/epics/guided-sort-and-cluster/**
+!.pHive/epics/settings-and-transparency/
+!.pHive/epics/settings-and-transparency/**
+!.pHive/epics/chat-agent-plan-builder/
+!.pHive/epics/chat-agent-plan-builder/**
+!.pHive/epics/document-topic-clustering/
+!.pHive/epics/document-topic-clustering/**
+!.pHive/epics/photo-face-clustering/
+!.pHive/epics/photo-face-clustering/**

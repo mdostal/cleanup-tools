@@ -1,0 +1,109 @@
+id: semantic-packaging-and-verification
+epic: document-topic-clustering
+title: PyInstaller packaging for the new PyObjC dependency group + frozen-build manual verification
+status: done
+complexity: medium
+methodology: classic
+depends_on: [semantic-ui-and-settings]
+
+description: |
+  Closes out the design discussion's stated risk (PyObjC-under-PyInstaller is unverified in
+  this project's specific frozen-build pipeline) with a real pass/fail, not an assumption.
+  Adds the new `semantic` optional-dependencies group to pyproject.toml and the necessary
+  hiddenimports to packaging/pyinstaller/cleanup_ui.spec, then does a genuine manual
+  verification pass: build the frozen app, launch it, run the full document-clustering
+  feature end-to-end from the packaged binary (not `python -m`).
+
+acceptance_criteria:
+  - "Given pyproject.toml, when inspected, then a semantic optional-dependencies group lists pyobjc-framework-NaturalLanguage/Vision/Quartz, and numpy is a base runtime dependency."
+  - "Given packaging/pyinstaller/cleanup_ui.spec, when a frozen build is produced, then it includes whatever hiddenimports the PyObjC modules need (determined empirically -- run the frozen build and add hiddenimports for any real ModuleNotFoundError, not a speculative list)."
+  - "Given the frozen desktop app, when launched, then clicking \"Plan: Cluster Documents\" against a real folder of documents produces real staged proposals -- the same behavior verified in dev, now confirmed from the actual packaged binary."
+  - "Given test_pyinstaller_spec_datas.py's existing drift-check discipline, when run, then it still passes -- no template/static file this epic added is missing from the spec's datas list."
+
+steps:
+  - id: research
+    description: Re-confirm the exact hiddenimports pattern this project already uses for a comparable case (the anthropic/httpx SDK-internals block in cleanup_ui.spec) as the template for whatever PyObjC needs.
+    agent: researcher
+  - id: implement
+    description: Add the semantic extras group to pyproject.toml; add PyObjC hiddenimports to cleanup_ui.spec (iterating against real build failures, not guessing upfront).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Run test_pyinstaller_spec_datas.py; run the full existing test suite to confirm no regression from the new base numpy dependency.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: |
+      Confirm the manual verification pass actually happened and is documented with a real
+      pass/fail verdict in this story's manual_verdict -- NOT assumed passing because the dev
+      environment works. If the frozen build genuinely can't bundle PyObjC successfully, this
+      is a real, documented finding to report back, not something to paper over.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: packaging/pyinstaller/cleanup_ui.spec
+      purpose: "The existing anthropic/httpx hiddenimports block -- the direct precedent for handling a dependency PyInstaller's static import scanner can't fully resolve on its own."
+    - path: tests/test_pyinstaller_spec_datas.py
+      purpose: "The existing drift-check this story's changes must keep passing."
+
+files_to_modify:
+  - file: pyproject.toml
+    change: Add `semantic` optional-dependencies group; add numpy as a base dependency.
+  - file: packaging/pyinstaller/cleanup_ui.spec
+    change: Add PyObjC hiddenimports (exact list determined empirically against real build failures).
+
+design_decisions:
+  - decision: numpy is a base dependency (not gated behind the `semantic` extras group), even though it's only exercised by semantic/'s clustering math.
+    rationale: "semantic/cluster.py's math is platform-independent (unlike embeddings.py/extract.py); gating a lightweight, universally-available pure-binary-wheel dependency behind a platform-specific extras group would be an odd asymmetry for no real benefit."
+
+risks:
+  - severity: high
+    description: PyObjC frameworks might genuinely fail to bundle correctly under PyInstaller (a real, not-yet-verified risk stated plainly in the design discussion).
+    mitigation: "This story's whole purpose is to surface that finding for real, with a documented verdict either way -- not to assume success."
+
+references:
+  - path: .pHive/epics/document-topic-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §2.7: PyObjC-under-PyInstaller is a well-trodden combination... but has NOT been
+      verified in THIS project's specific frozen-build pipeline yet -- that verification is
+      this epic's last story, not an assumption.
+
+metric:
+  applies: false
+  justification: Packaging/infrastructure story -- its pass/fail IS its own verdict (manual_verdict below), not a number that trends over time.
+
+manual_verdict:
+  scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T06:12:00Z"
+  agent: developer
+  notes: |
+    Real ONEFILE=0 (onedir) PyInstaller build of packaging/pyinstaller/cleanup_ui.spec
+    completed with ZERO errors and ZERO new hiddenimports needed -- the existing spec
+    (anthropic/httpx/pydantic hiddenimports block) already covered everything PyObjC and
+    numpy needed; no spec changes were required at all. This is the actual, empirical
+    result -- documented plainly rather than force-adding a speculative hiddenimports
+    list the acceptance criteria anticipated but the real build didn't need.
+
+    Full end-to-end frozen-binary verification (not just "it launches"): started the
+    frozen binary with HOME pointed at an isolated scratch directory (real Flask server,
+    real port, completely isolated from the real ~/.config/cleanup-tools -- see
+    adapters.base.OSAdapter.resolve_home's Path.home() -> HOME env var chain), configured
+    a real search_root via a real POST to /settings/search-roots/add, triggered
+    GET /plan/cluster-documents against two real .txt fixture files, and confirmed:
+    - The job completed (status=done) using the REAL NLEmbedding (PyObjC), not a stub.
+    - Both files correctly clustered together (group_key="cluster:<location>:invoice"),
+      proving the real embedding-driven similarity math ran correctly inside the frozen
+      binary, not just that the process started.
+    - dest paths correctly used the by-topic/ subdirectory convention.
+    - GET /settings rendered the Semantic Clustering pane with the real persisted
+      threshold value.
+    Scratch HOME and the dist/build directories were deleted after verification --
+    nothing real was touched, nothing was left behind.

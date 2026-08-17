@@ -1,0 +1,14 @@
+{# Status icon + text, shared across dashboard/queue/history/settings so
+   every status render goes through one place -- never color-only (see
+   base.html's ".status-icon" comment for why). aria-hidden since the
+   status word next to it always carries the same information; the icon
+   is reinforcement, not the only signal. #}
+{% macro status_icon(status) -%}
+  {%- if status == "approved" -%}
+  <svg class="status-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12l3 3 5-6"></path></svg>
+  {%- elif status == "rejected" -%}
+  <svg class="status-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg>
+  {%- else -%}
+  <svg class="status-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path></svg>
+  {%- endif -%}
+{%- endmacro %}

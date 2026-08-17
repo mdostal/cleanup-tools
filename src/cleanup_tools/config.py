@@ -50,6 +50,47 @@ class Config:
     # "must match" convention as that file's ``SIDECAR_PORT``). This field
     # is just a plain string: config.py doesn't know or enforce the set.
     icon_choice: str = "broom-folder"
+    # One of ``cleanup_tools.ui.routes.UI_MODES`` -- that module owns
+    # validating the allowed set, same convention as ``icon_choice`` above.
+    # Persisted (not localStorage, unlike the Ledger/Sonar/Tide color
+    # theme) because it changes copy/density, not just color -- a "real"
+    # preference on par with icon_choice, not a cosmetic one. Orthogonal
+    # to the color theme: ui_mode controls information density and
+    # plain-language-vs-raw copy; theme controls color/typeface. A user
+    # can be in Console mode with the Ledger theme, or Guided mode with
+    # Sonar -- the two axes don't force each other.
+    ui_mode: str = "standard"
+    # Chat cost control -- see chat/engine.py's own docstring on "turn" and
+    # the chat-agent-plan-builder design discussion's §2.6. Persisted (not
+    # localStorage) for the same reason as ui_mode/icon_choice: a real
+    # preference, on par with those, that should survive across sessions.
+    # chat_turn_cap is a hard, pre-call ceiling on assistant turns per
+    # conversation (see ui/routes.py's chat_message route, which checks
+    # this BEFORE starting a new turn's background job -- mirroring
+    # ai/wiring.py's own "slice before calling, never call-then-discard"
+    # cap discipline). chat_model is the model the chat engine calls;
+    # defaults to the same cheap/fast model ai/anthropic_provider.py's
+    # propose_bucket already uses by default.
+    chat_turn_cap: int = 20
+    chat_model: str = "claude-haiku-4-5"
+    # document-topic-clustering epic: the cosine-similarity threshold
+    # semantic/cluster.py's threshold+union-find grouping uses -- a real
+    # preference (tuning "how similar is similar enough"), persisted like
+    # every other field here. Surfaced on Settings' Semantic Clustering
+    # pane. See semantic/cluster.py's DEFAULT_THRESHOLD for the same
+    # default value used when this config field isn't threaded through
+    # (e.g. a direct/test call to pipeline.run()).
+    semantic_cluster_threshold: float = 0.75
+    # photo-face-clustering epic: the cosine-similarity threshold
+    # semantic/cluster.py's threshold+union-find grouping uses for FACE
+    # embeddings -- a SEPARATE field from semantic_cluster_threshold above,
+    # deliberately, since face-embedding and text-embedding cosine
+    # similarity are different metric spaces with different meaningful
+    # ranges (reusing one field across both would be a real correctness
+    # trap disguised as a naming nicety). 0.6 is a reasonable starting
+    # default for ArcFace-style embeddings; exposing it as a real setting
+    # is the point, not a claim that 0.6 is universally correct.
+    semantic_face_cluster_threshold: float = 0.6
 
 
 # Order matters: rules are checked in sequence and the first match wins, so
@@ -123,6 +164,64 @@ def resolve_bucket(filename: str, rules: list[BucketRule]) -> str:
                 continue
         return rule.bucket
 
+    return "other"
+
+
+def configured_locations(config: Config, adapter: OSAdapter) -> list[str]:
+    """Every location sort/reclaim/corral-screenshots would scan by default:
+    configured ``search_roots`` if any, else the downloads/desktop/documents
+    fallback trio.
+
+    Lives here (not ``ui/routes.py``, where this was originally written)
+    because it's pure ``Config``+``OSAdapter`` logic with no Flask/UI
+    dependency, and the chat-agent-plan-builder epic's ``chat/`` package
+    needs the identical resolution without creating a ``chat -> ui.routes``
+    import (which would cycle back, since ``ui/routes.py`` needs to import
+    the chat engine/tools to wire up its chat routes). ``ui/routes.py``'s
+    dashboard kickoff-bar location picker calls this exact function, so the
+    agent's answer and the UI's own picker can never disagree.
+    """
+    if config.search_roots:
+        return [str(Path(r).resolve()) for r in config.search_roots]
+    return [
+        str(adapter.resolve_standard_dir("downloads")),
+        str(adapter.resolve_standard_dir("desktop")),
+        str(adapter.resolve_standard_dir("documents")),
+    ]
+
+
+def location_for_src(src: str, config: Config, adapter: OSAdapter) -> str:
+    """The configured/selected location ``src`` falls under, or "other".
+
+    Any-and-all configured locations (``config.search_roots``), never a
+    fixed downloads/desktop/documents enum -- per guided-sort-and-cluster's
+    design discussion, which explicitly rejected a fixed enum after
+    product-owner correction ("it should be able to sort ANY and all
+    locations"). Falls back to the standard-dir trio (downloads/desktop/
+    documents) only when no ``search_roots`` are configured at all, so a
+    fresh install's implicit defaults still get a meaningful location
+    rather than everything landing in "other". The location segment is the
+    resolved root's absolute path itself, not a slug -- unambiguous.
+
+    Relocated here (from ``ui/routes.py``, alongside ``configured_locations``
+    for the same reason -- see that function's docstring) so
+    ``chat/tools.py``'s ``propose_moves`` can build a proposed entry's
+    ``dest``/``group_key`` identically to every other staging path, without
+    ``chat/`` importing from ``ui.routes``.
+    """
+    resolved_src = Path(src).resolve()
+    roots = (
+        [Path(r).resolve() for r in config.search_roots]
+        if config.search_roots
+        else [
+            adapter.resolve_standard_dir("downloads"),
+            adapter.resolve_standard_dir("desktop"),
+            adapter.resolve_standard_dir("documents"),
+        ]
+    )
+    for root in roots:
+        if resolved_src == root or root in resolved_src.parents:
+            return str(root)
     return "other"
 
 
@@ -235,12 +334,28 @@ def load_config(adapter: OSAdapter, path: Path | None = None) -> Config:
         ) from exc
 
     icon_choice = parsed.get("icon_choice") or "broom-folder"
+    ui_mode = parsed.get("ui_mode") or "standard"
+    chat_turn_cap = parsed.get("chat_turn_cap") or 20
+    chat_model = parsed.get("chat_model") or "claude-haiku-4-5"
+    # `or` (not `is None`) would be a real bug here: a legitimately-persisted
+    # 0.0 threshold is falsy and would get silently replaced by the default.
+    semantic_cluster_threshold = parsed.get("semantic_cluster_threshold")
+    if semantic_cluster_threshold is None:
+        semantic_cluster_threshold = 0.75
+    semantic_face_cluster_threshold = parsed.get("semantic_face_cluster_threshold")
+    if semantic_face_cluster_threshold is None:
+        semantic_face_cluster_threshold = 0.6
 
     return Config(
         bucket_rules=bucket_rules,
         search_roots=search_roots,
         master_paths=master_paths,
         icon_choice=icon_choice,
+        ui_mode=ui_mode,
+        chat_turn_cap=chat_turn_cap,
+        chat_model=chat_model,
+        semantic_cluster_threshold=semantic_cluster_threshold,
+        semantic_face_cluster_threshold=semantic_face_cluster_threshold,
     )
 
 
@@ -255,17 +370,33 @@ def _master_path_to_dict(master_path: MasterPath) -> dict:
     return {"path": master_path.path, "backed_up": master_path.backed_up}
 
 
+def config_to_dict(config: Config) -> dict:
+    """JSON/YAML-safe dict representation of ``config`` -- the exact shape
+    ``save_config`` persists to ``config.yaml``, factored out as its own
+    function so other consumers (e.g. Settings > Advanced's read-only
+    effective-config view) render the identical shape without hand-copying
+    it and risking drift between what's shown and what's actually saved.
+    Never includes AI-provider credentials -- those live entirely outside
+    ``Config``/``config.yaml``, in a separate 0600 credentials file (see
+    ``ai/__init__.py``).
+    """
+    return {
+        "bucket_rules": [_bucket_rule_to_dict(r) for r in config.bucket_rules],
+        "search_roots": list(config.search_roots),
+        "master_paths": [_master_path_to_dict(m) for m in config.master_paths],
+        "icon_choice": config.icon_choice,
+        "ui_mode": config.ui_mode,
+        "chat_turn_cap": config.chat_turn_cap,
+        "semantic_cluster_threshold": config.semantic_cluster_threshold,
+        "semantic_face_cluster_threshold": config.semantic_face_cluster_threshold,
+        "chat_model": config.chat_model,
+    }
+
+
 def save_config(adapter: OSAdapter, config: Config, path: Path | None = None) -> None:
     """Serialize ``config`` to YAML and write it via ``adapter.write_file``."""
     if path is None:
         path = default_config_path(adapter)
 
-    data = {
-        "bucket_rules": [_bucket_rule_to_dict(r) for r in config.bucket_rules],
-        "search_roots": list(config.search_roots),
-        "master_paths": [_master_path_to_dict(m) for m in config.master_paths],
-        "icon_choice": config.icon_choice,
-    }
-
     path.parent.mkdir(parents=True, exist_ok=True)
-    adapter.write_file(path, yaml.safe_dump(data, sort_keys=False))
+    adapter.write_file(path, yaml.safe_dump(config_to_dict(config), sort_keys=False))

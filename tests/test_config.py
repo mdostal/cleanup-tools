@@ -20,6 +20,8 @@ from cleanup_tools.config import (
     BucketRule,
     Config,
     MasterPath,
+    config_to_dict,
+    configured_locations,
     default_config_path,
     load_config,
     resolve_bucket,
@@ -316,6 +318,93 @@ def test_save_then_load_round_trips_search_roots_and_master_paths(adapter, tmp_p
     assert loaded.master_paths[1].backed_up is False
 
 
+def test_config_to_dict_matches_the_shape_save_config_actually_persists(tmp_path):
+    """config_to_dict is the single source of truth save_config's own YAML
+    write goes through -- this pins down that save_config's persisted YAML
+    parses back to exactly config_to_dict's output, so a consumer (e.g.
+    Settings > Advanced's read-only view) can never drift from what's
+    actually on disk.
+    """
+    config = Config(
+        bucket_rules=[BucketRule(extensions=frozenset({"log"}), bucket="logs")],
+        search_roots=["/some/root"],
+        master_paths=[MasterPath(path="/some/master", backed_up=True)],
+        icon_choice="recycle-folder",
+    )
+
+    as_dict = config_to_dict(config)
+    assert as_dict == {
+        "bucket_rules": [{"extensions": ["log"], "bucket": "logs"}],
+        "search_roots": ["/some/root"],
+        "master_paths": [{"path": "/some/master", "backed_up": True}],
+        "icon_choice": "recycle-folder",
+        "ui_mode": "standard",
+        "chat_turn_cap": 20,
+        "chat_model": "claude-haiku-4-5",
+        "semantic_cluster_threshold": 0.75,
+        "semantic_face_cluster_threshold": 0.6,
+    }
+
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    save_config(adapter, config, path=config_path)
+
+    persisted = yaml.safe_load(config_path.read_text())
+    assert persisted == as_dict
+
+
+def test_config_to_dict_never_includes_credential_material():
+    """AI-provider credentials live entirely outside Config/config.yaml (a
+    separate 0600 credentials file, see ai/__init__.py) -- this pins down
+    that config_to_dict's keys are exactly the four Config fields, nothing
+    that could accidentally carry a secret through the Advanced JSON view.
+    """
+    config = Config(bucket_rules=[], search_roots=[], master_paths=[])
+    assert set(config_to_dict(config).keys()) == {
+        "bucket_rules",
+        "search_roots",
+        "master_paths",
+        "icon_choice",
+        "ui_mode",
+        "chat_turn_cap",
+        "chat_model",
+        "semantic_cluster_threshold",
+        "semantic_face_cluster_threshold",
+    }
+
+
+def test_configured_locations_returns_search_roots_when_configured(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    root = tmp_path / "custom-root"
+    config = Config(bucket_rules=[], search_roots=[str(root)])
+
+    assert configured_locations(config, adapter) == [str(root.resolve())]
+
+
+def test_configured_locations_falls_back_to_standard_trio_when_no_search_roots(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config = Config(bucket_rules=[])
+
+    locations = configured_locations(config, adapter)
+    assert locations == [
+        str(adapter.resolve_standard_dir("downloads")),
+        str(adapter.resolve_standard_dir("desktop")),
+        str(adapter.resolve_standard_dir("documents")),
+    ]
+
+
 def test_save_config_uses_default_config_path_under_tmp_path_home(tmp_path):
     # Exercise default_config_path()/the no-path-argument branches of
     # save_config/load_config, but with the adapter's home redirected to
@@ -340,6 +429,192 @@ def test_save_config_uses_default_config_path_under_tmp_path_home(tmp_path):
     loaded = load_config(adapter)
     assert loaded.search_roots == ["/some/root"]
     assert loaded.master_paths == [MasterPath(path="/some/master", backed_up=True)]
+
+
+def test_ui_mode_round_trips_through_save_and_load(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], ui_mode="console"), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.ui_mode == "console"
+
+
+def test_ui_mode_defaults_to_standard_when_absent_from_config_file(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("search_roots: []\n")  # no ui_mode key at all
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.ui_mode == "standard"
+
+
+def test_ui_mode_defaults_to_standard_with_no_config_file_at_all():
+    assert DEFAULT_CONFIG.ui_mode == "standard"
+
+
+def test_chat_turn_cap_and_chat_model_round_trip_through_save_and_load(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(
+        adapter,
+        Config(bucket_rules=[], chat_turn_cap=5, chat_model="claude-sonnet-5"),
+        path=config_path,
+    )
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.chat_turn_cap == 5
+    assert loaded.chat_model == "claude-sonnet-5"
+
+
+def test_chat_turn_cap_and_chat_model_default_when_absent_from_config_file(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("search_roots: []\n")  # no chat_turn_cap/chat_model keys at all
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.chat_turn_cap == 20
+    assert loaded.chat_model == "claude-haiku-4-5"
+
+
+def test_chat_turn_cap_and_chat_model_default_with_no_config_file_at_all():
+    assert DEFAULT_CONFIG.chat_turn_cap == 20
+    assert DEFAULT_CONFIG.chat_model == "claude-haiku-4-5"
+
+
+def test_semantic_cluster_threshold_round_trips_through_save_and_load(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], semantic_cluster_threshold=0.6), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_cluster_threshold == 0.6
+
+
+def test_semantic_cluster_threshold_zero_is_not_silently_replaced_by_default(tmp_path):
+    """Regression guard: `parsed.get(...) or default` would treat a real,
+    legitimately-persisted 0.0 as falsy and silently replace it -- this
+    field is read with an explicit `is None` check instead.
+    """
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], semantic_cluster_threshold=0.0), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_cluster_threshold == 0.0
+
+
+def test_semantic_cluster_threshold_defaults_when_absent_from_config_file(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("search_roots: []\n")  # no semantic_cluster_threshold key at all
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_cluster_threshold == 0.75
+
+
+def test_semantic_cluster_threshold_defaults_with_no_config_file_at_all():
+    assert DEFAULT_CONFIG.semantic_cluster_threshold == 0.75
+
+
+def test_semantic_face_cluster_threshold_round_trips_through_save_and_load(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], semantic_face_cluster_threshold=0.5), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_face_cluster_threshold == 0.5
+
+
+def test_semantic_face_cluster_threshold_zero_is_not_silently_replaced_by_default(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(adapter, Config(bucket_rules=[], semantic_face_cluster_threshold=0.0), path=config_path)
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_face_cluster_threshold == 0.0
+
+
+def test_semantic_face_cluster_threshold_defaults_when_absent_from_config_file(tmp_path):
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("search_roots: []\n")
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_face_cluster_threshold == 0.6
+
+
+def test_semantic_face_cluster_threshold_defaults_with_no_config_file_at_all():
+    assert DEFAULT_CONFIG.semantic_face_cluster_threshold == 0.6
+
+
+def test_semantic_cluster_threshold_and_face_threshold_are_independent_fields(tmp_path):
+    """Regression guard against the exact correctness trap this design
+    decision exists to avoid: setting one must never affect the other.
+    """
+
+    class TmpHomeAdapter(MacOSAdapter):
+        def resolve_home(self):
+            return tmp_path
+
+    adapter = TmpHomeAdapter()
+    config_path = tmp_path / "config.yaml"
+
+    save_config(
+        adapter,
+        Config(bucket_rules=[], semantic_cluster_threshold=0.9, semantic_face_cluster_threshold=0.3),
+        path=config_path,
+    )
+
+    loaded = load_config(adapter, path=config_path)
+    assert loaded.semantic_cluster_threshold == 0.9
+    assert loaded.semantic_face_cluster_threshold == 0.3
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,90 @@
+id: semantic-index-and-clustering
+epic: document-topic-clustering
+title: Local content-hash-keyed vector index + threshold/union-find clustering + local label/slug heuristic
+status: done
+complexity: medium
+methodology: classic
+depends_on: [semantic-extraction-and-embedding]
+
+description: |
+  Platform-independent storage and grouping: a plain stdlib sqlite3 index (NOT sqlite-vec
+  -- see design discussion §3) keyed by content hash used purely as an incremental-reindex
+  CACHE KEY (grill-T2's resolution -- never a cap on what gets embedded), and a cosine-
+  similarity threshold + union-find clustering pass over stored embeddings (NOT HDBSCAN --
+  see design discussion §2.4's explicit "avoid a new heavy dep" reasoning), plus a local
+  word-frequency label/slug heuristic. Fully testable with fake embedding vectors -- zero
+  dependency on the real PyObjC calls semantic-extraction-and-embedding introduces.
+
+acceptance_criteria:
+  - "Given a file's content hash already present in the index, when the pipeline considers re-embedding it, then it's skipped (incremental, not a full re-scan every run)."
+  - "Given a set of embeddings with known cosine-similarity relationships (fake vectors, no real embedder needed), when cluster() runs, then it returns exactly the expected groupings at the configured threshold."
+  - "Given an embedding with no other vector above the similarity threshold, when cluster() runs, then it is NOT included in any proposed cluster (mirrors sort's 'other' bucket precedent -- unclustered files are simply left alone, never force-grouped)."
+  - "Given a cluster's member texts, when the label heuristic runs, then it returns a human-readable label AND a deterministic filesystem-safe slug derived from that label (grill-V1's resolution) -- never just one or the other."
+  - "Given the SAME cluster inputs run twice, when cluster()/label are called, then the output (groupings, labels, slugs) is identical -- deterministic, not dependent on dict/set iteration order."
+
+steps:
+  - id: research
+    description: Confirm sqlite3's BLOB column handling for numpy arrays (buffer protocol round-trip) and numpy's vectorized cosine-similarity idioms, so the implementation doesn't hand-roll something numpy already does correctly.
+    agent: researcher
+  - id: implement
+    description: |
+      Add src/cleanup_tools/semantic/index.py (SQLite index at
+      ~/.config/cleanup-tools/semantic_index.sqlite3, content-hash-keyed, incremental) and
+      semantic/cluster.py (threshold + union-find grouping, label/slug heuristic).
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Tests using fake/synthetic embedding vectors with known geometric relationships (not
+      real PyObjC-derived embeddings) -- proves the clustering MATH is correct independent
+      of embedding quality. Determinism test (same input twice, same output). Incremental-
+      reindex test (content hash already indexed -> skipped).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm the content-hash cache key is never used to truncate/cap the text actually fed to an embedder anywhere in this module (grill-T2's specific regression to guard against) and that clustering is genuinely O(N^2)-at-most for the documented "thousands, not millions" scale, not accidentally worse.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/queue.py
+      purpose: "build_plan_snapshot/_content_hash's capped-prefix-hash-as-staleness-signal contract -- the precedent this story's cache-key hashing follows (see grill-T2's careful disambiguation in the design discussion)."
+    - path: src/cleanup_tools/config.py
+      purpose: "load_config/save_config/config_to_dict pattern -- semantic_cluster_threshold (added in semantic-ui-and-settings) follows this exactly; this story just needs to accept a threshold parameter, not persist it."
+
+files_to_modify:
+  - file: src/cleanup_tools/semantic/index.py
+    change: New -- SQLite content-hash-keyed embedding cache.
+  - file: src/cleanup_tools/semantic/cluster.py
+    change: New -- threshold + union-find clustering, label/slug heuristic.
+
+design_decisions:
+  - decision: Threshold + union-find over cosine similarity, not HDBSCAN.
+    rationale: "Research brief's own explicit steer ('avoid pulling in scikit-learn as a new heavy dep if it can be avoided'); personal-library scale makes brute-force O(N^2) genuinely fine per the brief's own performance ballpark. See design discussion §2.4."
+  - decision: Plain stdlib sqlite3, not sqlite-vec.
+    rationale: A compiled sqlite extension is more dependency/build risk than benefit at this scale (thousands, not millions, of vectors) -- brute-force in-process cosine similarity over a BLOB table is simpler and sufficient.
+
+risks:
+  - severity: low
+    description: Threshold-based clustering is cruder than HDBSCAN (no density-adaptive behavior).
+    mitigation: "Accepted tradeoff, explicitly stated in the design discussion §3 -- a follow-up epic can swap the clustering algorithm behind this same interface without touching anything else if real usage shows it's needed."
+
+references:
+  - path: .pHive/epics/document-topic-clustering/docs/grill-record.md
+    relevant_excerpt: |
+      T2: content-hash is a cache key only, never a cap on embedded text. V1: label and slug
+      are related but distinct -- the slug is a deterministic filesystem-safe transform of
+      the label, both must be produced together.
+
+metric:
+  applies: false
+  justification: Backend clustering-math story with no independently observable user-facing surface yet -- its value is realized by semantic-pipeline-and-queue-integration's real staged proposals.
+
+manual_verdict:
+  scenario_ref: null

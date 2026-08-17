@@ -1,0 +1,99 @@
+id: face-ui-and-settings
+epic: photo-face-clustering
+title: "\"Plan: Cluster Photos by Person\" trigger (reuses existing thumbnails) + semantic_face_cluster_threshold setting"
+status: done
+complexity: medium
+methodology: classic
+depends_on: [face-pipeline-and-single-identity-staging]
+
+description: |
+  The user-visible surface: a second "Plan: Cluster Photos by Person" trigger, mirroring
+  "Plan: Cluster Documents" (phase 1) and plan_sort's exact background-job/poll shape.
+  Reuses the EXISTING image-thumbnail rendering (is_image_entry) completely unmodified --
+  face-cluster entries are ordinary image QueueEntrys, so a human reviewing "person
+  cluster, 6 photos" already sees real photo thumbnails via infrastructure this codebase
+  already has (design discussion §6). A new, SEPARATE semantic_face_cluster_threshold
+  Settings field -- deliberately not shared with phase 1's semantic_cluster_threshold,
+  since face-embedding and text-embedding cosine similarity are different metric spaces
+  with different meaningful ranges.
+
+acceptance_criteria:
+  - "Given the nav bar, when the page loads, then a \"Plan: Cluster Photos by Person\" link is present, matching the other Plan: triggers' exact visual/interaction pattern."
+  - "Given a click on \"Plan: Cluster Photos by Person\", when the background job runs, then real staged person-cluster proposals appear in the Review Queue with working image thumbnails -- no new thumbnail code needed, the existing route already handles it."
+  - "Given the Settings page, when it loads, then semantic_face_cluster_threshold is shown as a DISTINCT field from semantic_cluster_threshold, with its own current value and its own POST route, mirroring set_chat_options/the phase-1 settings route's validation discipline exactly."
+  - "Given an out-of-range face-cluster threshold value, when submitted, then the route rejects it with 400 and does not persist."
+
+steps:
+  - id: research
+    description: Re-confirm phase 1's semantic_cluster_threshold settings route/field implementation (once it exists) as the exact template this story's face-cluster-threshold field mirrors.
+    agent: researcher
+  - id: implement
+    description: |
+      Add /plan/cluster-photos route + nav link. Add semantic_face_cluster_threshold to
+      Config (load/save/config_to_dict) + a Settings field + POST /settings/semantic-face-options
+      route.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Route-level tests for the new trigger (job kicks off, real person-cluster entries staged with real thumbnails) and the new settings field's persistence/validation.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm semantic_face_cluster_threshold and semantic_cluster_threshold are genuinely never conflated anywhere in routes.py/config.py -- two distinct fields end to end, not one field reused across two different metric spaces.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: .pHive/epics/document-topic-clustering/stories/semantic-ui-and-settings.yaml
+      purpose: "The phase-1 sibling story this one directly mirrors -- same trigger pattern, same settings-field pattern, applied to a second, distinct threshold."
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "is_image_entry / the thumbnail route -- confirmed already source-agnostic, needs zero changes for this story."
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/routes.py
+    change: New /plan/cluster-photos route; new POST /settings/semantic-face-options route.
+  - file: src/cleanup_tools/ui/templates/base.html
+    change: New nav link.
+  - file: src/cleanup_tools/ui/templates/settings.html
+    change: New semantic_face_cluster_threshold field.
+  - file: src/cleanup_tools/config.py
+    change: Add semantic_face_cluster_threshold field + load/save/config_to_dict support.
+
+design_decisions:
+  - decision: semantic_face_cluster_threshold is a separate Config field from semantic_cluster_threshold, not a shared/reused one.
+    rationale: "Face-embedding and text-embedding cosine similarity are different metric spaces with different meaningful ranges -- sharing one field would be a real correctness trap disguised as a naming nicety. Design discussion §6."
+
+risks:
+  - severity: low
+    description: A reviewer might not immediately understand why there are two separate similarity-threshold settings.
+    mitigation: Settings field help text explains the distinction explicitly, matching this session's established "never leave a control unexplained" UI convention.
+
+references:
+  - path: .pHive/epics/photo-face-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §6: what IS new: a second "Plan: Cluster Photos by Person" trigger... and a SEPARATE
+      semantic_face_cluster_threshold Settings field.
+
+metric:
+  applies: false
+  justification: UI-surface story whose value is the same underlying pipeline capability face-pipeline-and-single-identity-staging already measures.
+
+manual_verdict:
+  scenario_ref: null
+  verdict: pass
+  timestamp: "2026-08-17T07:10:00Z"
+  agent: developer
+  notes: |
+    Mirrors document-topic-clustering's own story 4 pattern closely. Manually verified via
+    Playwright: both nav links present ("Plan: Cluster Documents" and "Plan: Cluster Photos
+    by Person"), Settings > Semantic Clustering pane shows both independent threshold fields
+    with correct defaults (0.75 document / 0.6 face), no console errors. No side effects on
+    the real ~/.config/cleanup-tools/config.yaml confirmed after the manual check.
+    18 new tests (config round-trip + independence guard, route-level trigger/settings
+    tests with a monkeypatched detector). 753 passed, 1 skipped, full suite.

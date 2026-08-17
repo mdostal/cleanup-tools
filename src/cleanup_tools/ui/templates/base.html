@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-ui-mode="{{ ui_mode }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -131,7 +131,39 @@
     --focus-ring: 0 0 0 3px var(--accent-soft);
   }
 
+  /* A real type scale, shared across all three themes (only the
+     font-FAMILY/tracking differs per theme -- the size/weight
+     relationships between "headline," "section title," "body," and
+     "meta" text stay constant). Direct answer to a design-review
+     finding: text throughout the app previously sat at one or two
+     registers regardless of importance, so nothing told the eye what to
+     look at first. Applied to h1/h2/h3 and .meta below; call sites that
+     need a number to read as a literal headline (item counts, status
+     summary) use --text-headline directly, same as .branch-count. */
+  :root {
+    --text-headline: 1.9rem;
+    --text-3xl: 1.85rem;
+    --text-2xl: 1.35rem;
+    --text-xl: 1.05rem;
+    --text-base: 1rem;
+    --text-sm: 0.88rem;
+    --text-xs: 0.76rem;
+  }
+
   * { box-sizing: border-box; }
+
+  /* Visually hidden but still announced by screen readers -- e.g. the
+     full path alongside a short_path()-shortened label where there's no
+     room (or no sensible place) for a visible disclosure control. */
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
   body {
     font-family: var(--font-body);
@@ -180,7 +212,21 @@
     text-decoration: none;
     color: var(--ink);
   }
-  h1, h2 { font-family: var(--font-display); letter-spacing: var(--tracking-display); margin-top: 0; }
+  h1, h2, h3 { font-family: var(--font-display); letter-spacing: var(--tracking-display); margin-top: 0; }
+  h1 { font-size: var(--text-3xl); font-weight: 800; }
+  h2 { font-size: var(--text-2xl); font-weight: 700; }
+  h3 { font-size: var(--text-xl); font-weight: 700; }
+  /* Global .meta base: every scoped .meta rule elsewhere in this file
+     only overrides color/margin, never size -- so "this is secondary,
+     supporting text" reads consistently the same size everywhere it
+     appears, from the kickoff bar's helper copy to a bucket row's
+     "N MB" suffix. */
+  .meta { font-size: var(--text-sm); }
+  /* Subordinate detail appended to an h1/h2 (e.g. "(42 pending)") --
+     explicitly smaller and lighter than its heading, not just
+     un-bolded at the same size, so it reads as supporting information
+     rather than a second headline competing with the first. */
+  .heading-detail { font-size: var(--text-sm); font-weight: 400; color: var(--ink-soft); }
   hr { border: none; border-top: var(--hr-width) var(--hr-style) var(--line-strong); margin: 1rem 0 1.5rem; }
 
   .theme-switcher {
@@ -231,7 +277,7 @@
   }
   .status-summary-item strong {
     font-family: var(--font-mono);
-    font-size: 1.9rem;
+    font-size: var(--text-headline);
     font-weight: 700;
     color: var(--ink);
     line-height: 1;
@@ -292,6 +338,91 @@
   .group-card h3 { margin: 0 0 0.4rem; font-family: var(--font-mono); font-size: 0.95rem; color: var(--ink); }
   .group-card .meta { color: var(--ink-soft); margin: 0 0 0.5rem; }
 
+  /* Dashboard's collapsible location -> bucket tree (see
+     _group_entries_hierarchical). One .location-branch <details> per
+     configured location, each holding a .bucket-row per bucket -- kept
+     visually distinct from .group-card (the flat legacy grouping still
+     used for the chart) via a left accent rail instead of a full card
+     border, so the tree reads as a nested hierarchy rather than a second
+     grid of cards. */
+  .location-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .location-branch {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    padding: 0.85rem 1.1rem;
+  }
+  .location-branch summary {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    list-style: revert;
+  }
+  .location-branch-title {
+    font-family: var(--font-mono);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  /* Item counts promoted to headline numbers -- direct answer to the
+     design-review finding that every fact on the dashboard read at the
+     same visual weight regardless of importance. A count is the thing a
+     user scans for first when triaging a branch/bucket, so it's now the
+     biggest thing in the row, not folded into the same .meta text as
+     "MB" and punctuation. */
+  .branch-count {
+    font-family: var(--font-mono);
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: var(--accent);
+  }
+  .branch-count-sm { font-size: 1.05rem; }
+  .full-path-hint {
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+    margin: 0 0 0.6rem;
+  }
+  .full-path-hint code { font-family: var(--font-mono); word-break: break-all; }
+  .bucket-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-top: 0.75rem;
+    padding-left: 1.2rem;
+    border-left: 1px solid var(--line);
+  }
+  .bucket-row {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: 0.6rem 0.85rem;
+  }
+  .bucket-row-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .bucket-label { font-family: var(--font-mono); font-size: 0.88rem; color: var(--ink); }
+  .bucket-row-badges { margin-top: 0.35rem; }
+  .bucket-row-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .bucket-row-actions button {
+    font-size: 0.78rem;
+    padding: 0.3rem 0.7rem;
+  }
+
   /* Settings > App icon: a selectable card per bundled icon choice,
      reusing .group-grid's layout. A thicker border (rather than a new
      color token) marks the hovered/selectable affordance so this still
@@ -320,6 +451,105 @@
     color: var(--accent);
     margin-top: 0.4rem;
   }
+
+  /* Settings shell: Raycast/Obsidian-style sidebar of sections (see
+     settings.html + static/settings-shell.js). All panes render
+     server-side in one response; the JS only toggles .settings-pane
+     visibility, so this is pure layout CSS, no JS-driven classes beyond
+     .active on the current sidebar link. */
+  .settings-shell {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+  }
+  .settings-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex-shrink: 0;
+    width: 180px;
+    position: sticky;
+    top: 1rem;
+  }
+  .settings-sidebar a {
+    display: block;
+    padding: 0.45rem 0.7rem;
+    border-radius: var(--radius-card);
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+  }
+  .settings-sidebar a:hover { background: var(--surface-2); color: var(--ink); }
+  .settings-sidebar a.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .settings-panes { flex: 1; min-width: 0; }
+  .settings-pane h2 { margin-top: 0; }
+  .settings-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+  }
+  .settings-table th, .settings-table td {
+    text-align: left;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.88rem;
+  }
+  .settings-table th { color: var(--ink-soft); font-weight: 600; font-size: 0.78rem; }
+  .settings-table input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+  }
+  .settings-table-readonly td { color: var(--ink-soft); font-family: var(--font-mono); }
+  .settings-list { list-style: none; margin: 0.5rem 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+  .settings-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: 0.5rem 0.75rem;
+  }
+  .settings-list code { font-size: 0.85rem; word-break: break-all; }
+  .settings-json {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: 1rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--ink);
+  }
+  .settings-add-form {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 0.75rem;
+  }
+
+  /* Bare gear-icon Settings nav link (Option A) -- no label/pill, kept
+     visually distinct from the Dashboard/Review Queue text links via
+     padding/vertical-align rather than a second color token. */
+  .nav-link-icon {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem !important;
+  }
+  /* Pushes this nav item (and everything after it, e.g. the theme
+     switcher) to the far right of the bar -- flexbox auto-margin, not a
+     fixed width, so it still collapses sensibly on narrow viewports. */
+  .nav-trailing { margin-left: auto; }
 
   /* Chip/pill styling for every .badge -- real padding, a bit of
      font-weight and letter-spacing, and a background/foreground color pair
@@ -394,6 +624,102 @@
     font-family: var(--font-ui);
   }
   button:hover { border-color: var(--accent); color: var(--accent); }
+  button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+  /* Action-intent buttons (Approve/Reject/Undo, at any scale -- a single
+     entry or a whole bucket/group). Direct answer to this project's UI
+     design review: two independent personas (a safety-focused archivist
+     and an accessibility reviewer) separately flagged the SAME bug --
+     every action button rendered as an identical thin outline pill,
+     visually indistinguishable from a plain status badge or a neutral
+     utility button. Three distinct risk levels now get three distinct,
+     unmistakable treatments, consistent everywhere this attribute is
+     used (entry cards, bucket-row actions, bulk-action bar, history
+     rows) -- never per-template one-off styling. */
+  button[data-intent="primary"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--surface);
+    font-weight: 700;
+  }
+  button[data-intent="primary"]:hover { background: var(--accent); color: var(--surface); filter: brightness(1.08); }
+  button[data-intent="secondary"] {
+    background: transparent;
+    border: 1.5px solid var(--line-strong);
+    color: var(--ink);
+    font-weight: 600;
+  }
+  button[data-intent="secondary"]:hover { border-color: var(--pending); color: var(--pending); }
+  button[data-intent="ghost"] {
+    background: transparent;
+    border: 1.5px dashed var(--line-strong);
+    color: var(--ink-soft);
+  }
+  button[data-intent="ghost"]:hover { border-color: var(--ink-soft); color: var(--ink); }
+
+  /* Status: icon + text, always -- never color alone. Direct answer to
+     the accessibility review finding that a bare colored pill (or worse,
+     a colored dot/stripe with no text, as in the old chart legend) gives
+     a screen reader or a color-blind viewer nothing to go on. The SVG
+     icon is decorative (aria-hidden) because the adjacent text already
+     names the status -- the icon is reinforcement, not the only signal. */
+  .status-icon { display: inline-block; vertical-align: -0.15em; margin-right: 0.3rem; }
+
+  /* Path disclosure: short_path()'s companion UI -- native <details>/
+     <summary> so the full path is reachable by keyboard/focus, not only
+     mouse hover (a specific, repeated ask across the design review). */
+  .path-disclosure { display: inline-block; }
+  .path-disclosure summary {
+    cursor: pointer;
+    list-style: none;
+    font-family: var(--font-mono);
+  }
+  .path-disclosure summary::-webkit-details-marker { display: none; }
+  .path-disclosure summary:hover, .path-disclosure summary:focus-visible { color: var(--accent); }
+  .path-disclosure .full-path {
+    display: block;
+    margin-top: 0.15rem;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    word-break: break-all;
+  }
+
+  /* Guided mode (config.ui_mode): plain-sentence entry summary + a
+     collapsed-by-default technical-details disclosure (queue.html). The
+     bucket icon is always paired with the sentence's own bucket-name
+     text -- reinforcement, never the only signal, same principle as the
+     status icons. */
+  .guided-summary {
+    font-size: var(--text-base);
+    line-height: 1.55;
+  }
+  .bucket-icon { margin-right: 0.3rem; }
+  .guided-tech-details summary {
+    cursor: pointer;
+    color: var(--ink-soft);
+    font-size: var(--text-sm);
+  }
+  .guided-tech-details .entry-path { margin: 0.3rem 0 0; }
+
+  /* Settings > General's interaction-mode radio picker. */
+  .ui-mode-picker { display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start; }
+  .ui-mode-option {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.65rem 0.9rem;
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius-card);
+    cursor: pointer;
+    width: 100%;
+    max-width: 480px;
+  }
+  .ui-mode-option:has(input:checked),
+  .ui-mode-option.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .ui-mode-option input { margin-right: 0.4rem; }
+  .ui-mode-option-label { font-weight: 700; }
+
   .flash { border: 1px solid var(--line); border-radius: var(--radius-card); padding: 0.75rem 1rem; margin-bottom: 1rem; background: var(--surface); }
   .flash.error { border-color: var(--pending); color: var(--pending); background: var(--pending-soft); }
 
@@ -514,6 +840,26 @@
     font-family: var(--font-ui);
   }
   .kickoff-option input { accent-color: var(--accent); }
+  /* Location subset picker, dashboard.html's optional #kickoff-form
+     fieldset -- a plain unstyled <fieldset>/<legend> would look like a
+     stray box; this makes it read as one grouped control alongside the
+     plan-kind checkboxes rather than a separate, disconnected section. */
+  .kickoff-locations {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem 1rem;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius-card);
+    padding: 0.5rem 0.9rem;
+    margin: 0;
+  }
+  .kickoff-locations legend {
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    padding: 0 0.3rem;
+  }
   .kickoff-panel {
     margin-top: 0.85rem;
     display: flex;
@@ -526,14 +872,152 @@
   .kickoff-row-done { color: var(--good); }
   .kickoff-row-error { color: var(--pending); }
   .kickoff-summary { color: var(--ink); font-weight: 600; }
+
+  /* /history: one row per status_history record, reverse-chronological
+     (see routes.py's _history_rows). Kept visually close to .entry-card
+     (same background/border/radius/shadow tokens) since it's the same
+     "one queue-derived thing per row" shape, just read-oriented instead
+     of action-oriented. */
+  .history-row {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    padding: 0.85rem 1.1rem;
+    margin-bottom: 0.6rem;
+  }
+  .history-row-main {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .history-row-what { font-family: var(--font-ui); }
+  .history-row-what code { font-size: 0.85rem; }
+  .history-row-timestamp { margin-left: auto; font-family: var(--font-mono); font-size: 0.78rem; }
+  .history-executed-note {
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+    font-style: italic;
+    margin: 0.5rem 0 0;
+  }
+
+  /* -------------------------------------------------------------------
+   * Chat page (chat.html/chat.js): a scrolling transcript of message
+   * bubbles plus a fixed-height input row, matching this app's existing
+   * card/surface language (var(--surface-2)/var(--accent)) rather than
+   * a generic chat-widget look.
+   * ------------------------------------------------------------------- */
+  .chat-transcript {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    max-height: 55vh;
+    overflow-y: auto;
+    padding: 0.75rem;
+    margin: 1rem 0;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--surface-1);
+  }
+  .chat-bubble {
+    max-width: 75%;
+    padding: 0.55rem 0.8rem;
+    border-radius: 0.65rem;
+    font-size: var(--text-sm);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .chat-bubble-user {
+    align-self: flex-end;
+    background: var(--accent);
+    color: var(--accent-ink, #fff);
+  }
+  .chat-bubble-assistant {
+    align-self: flex-start;
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+  .chat-bubble-error { border: 1px solid var(--danger, #b3261e); }
+  .chat-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+  }
+  .chat-form textarea {
+    flex: 1;
+    resize: vertical;
+    font: inherit;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    background: var(--surface-1);
+    color: var(--ink);
+  }
+  .chat-status-error { color: var(--danger, #b3261e); }
+  .chat-proposal-actions {
+    align-self: stretch;
+    max-width: 100%;
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  html[data-ui-mode="console"] .chat-transcript { max-height: 65vh; padding: 0.5rem; }
+  html[data-ui-mode="console"] .chat-bubble { font-size: 0.85rem; padding: 0.45rem 0.65rem; }
+
+  /* -------------------------------------------------------------------
+   * Console mode: a density/copy-style preference (config.ui_mode),
+   * orthogonal to the Ledger/Sonar/Tide color theme -- see
+   * config.Config.ui_mode's docstring. Built entirely as a CSS overlay
+   * keyed off [data-ui-mode="console"] on <html> (see app.py's context
+   * processor): every row-shaped surface (entry cards, bucket rows,
+   * history rows) gets tighter padding/gaps and a monospace-forward
+   * treatment for data, so triaging hundreds of entries in one sitting
+   * needs less scrolling per item -- same markup, same data, no
+   * separate "console" templates to keep in sync with the standard
+   * ones. Per direct design-review feedback, status TEXT stays
+   * sans-serif even here (all-monospace was flagged as harder to scan,
+   * not easier) -- only genuinely tabular data (paths, counts, sizes)
+   * goes monospace.
+   * ------------------------------------------------------------------- */
+  html[data-ui-mode="console"] .entry-card,
+  html[data-ui-mode="console"] .bucket-row,
+  html[data-ui-mode="console"] .history-row {
+    padding: 0.55rem 0.75rem;
+  }
+  html[data-ui-mode="console"] .entry-card { gap: 0.6rem; }
+  html[data-ui-mode="console"] .location-tree,
+  html[data-ui-mode="console"] .bucket-list { gap: 0.35rem; }
+  html[data-ui-mode="console"] .entry-path,
+  html[data-ui-mode="console"] .path-disclosure summary,
+  html[data-ui-mode="console"] .path-disclosure .full-path {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+  html[data-ui-mode="console"] .entry-actions,
+  html[data-ui-mode="console"] .bucket-row-actions {
+    margin-top: 0.4rem;
+  }
+  html[data-ui-mode="console"] .entry-actions button,
+  html[data-ui-mode="console"] .bucket-row-actions button,
+  html[data-ui-mode="console"] .history-row button {
+    padding: 0.28rem 0.6rem;
+    font-size: 0.8rem;
+  }
+  html[data-ui-mode="console"] .branch-count { font-size: 1.1rem; }
+  html[data-ui-mode="console"] .branch-count-sm { font-size: 0.95rem; }
 </style>
 </head>
 <body>
 <nav>
   <!-- "Current page" indicator: request.endpoint (Flask injects `request`
        into every template's context by default, no routes.py change
-       needed) tells us which of these two is the actual page being
-       viewed. Only Dashboard/Review Queue ever get .nav-link +
+       needed) tells us which of these is the actual page being viewed.
+       Only Dashboard/Review Queue/History ever get .nav-link +
        aria-current="page" -- the Plan: links below are one-shot actions
        that redirect back to the dashboard, not pages you "are on", so they
        deliberately never carry this treatment (and never show a stuck
@@ -549,10 +1033,15 @@
     {% if request.endpoint == 'ui.queue_view' %}aria-current="page"{% endif %}
   >Review Queue</a>
   <a
-    href="{{ url_for('ui.settings') }}"
+    href="{{ url_for('ui.history_view') }}"
     class="nav-link"
-    {% if request.endpoint == 'ui.settings' %}aria-current="page"{% endif %}
-  >Settings</a>
+    {% if request.endpoint == 'ui.history_view' %}aria-current="page"{% endif %}
+  >History</a>
+  <a
+    href="{{ url_for('ui.chat_view') }}"
+    class="nav-link"
+    {% if request.endpoint == 'ui.chat_view' %}aria-current="page"{% endif %}
+  >Chat</a>
   <a
     href="{{ url_for('ui.plan_sort') }}"
     class="plan-trigger-link"
@@ -574,6 +1063,22 @@
     data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
     data-dashboard-url="{{ url_for('ui.dashboard') }}"
   >Plan: Corral Screenshots</a>
+  <a
+    href="{{ url_for('ui.plan_cluster_documents') }}"
+    class="plan-trigger-link"
+    data-plan-kind="cluster-documents"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+    title="Group documents by topic, entirely local -- no network calls"
+  >Plan: Cluster Documents</a>
+  <a
+    href="{{ url_for('ui.plan_cluster_photos') }}"
+    class="plan-trigger-link"
+    data-plan-kind="cluster-photos"
+    data-status-url-template="{{ url_for('ui.job_status', job_id='__JOB_ID__') }}"
+    data-dashboard-url="{{ url_for('ui.dashboard') }}"
+    title="Group photos by person, entirely local -- no network calls; only single-identity photos are proposed"
+  >Plan: Cluster Photos by Person</a>
   <form method="post" action="{{ url_for('ui.propose_ai') }}">
     <button type="submit" title="Ask the configured AI provider to bucket ambiguous ('other') files">Propose with AI</button>
   </form>
@@ -583,6 +1088,29 @@
        role="status"/aria-live so screen readers announce updates without
        the page navigating away. -->
   <span id="plan-status" class="plan-status" role="status" aria-live="polite"></span>
+
+  <!-- Trailing right-aligned group: gear icon + theme switcher, pushed to
+       the far right of the bar via .nav-trailing's margin-left: auto
+       (flexbox auto-margin -- pushes this element and everything after it
+       to the end), so Settings reads as a persistent, separated control
+       rather than another item competing with the page tabs/plan actions
+       on the left. Bare gear icon, no label, no pill (Option A from the
+       design-options artifact -- product-owner-confirmed). Cmd+, opens it
+       from anywhere (see static/settings-shortcut.js), matching the
+       macOS convention. -->
+  <a
+    href="{{ url_for('ui.settings') }}"
+    class="nav-link nav-link-icon nav-trailing"
+    id="settings-nav-link"
+    title="Settings (&#8984;,)"
+    aria-label="Settings"
+    {% if request.endpoint == 'ui.settings' %}aria-current="page"{% endif %}
+  >
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+  </a>
 
   <!-- Theme settings control -- wired up by static/theme.js, which keeps
        this <select> in sync with the active data-theme (including on
@@ -612,6 +1140,9 @@
 <script src="{{ url_for('static', filename='plan-trigger.js') }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}"></script>
 <script src="{{ url_for('static', filename='settings.js') }}"></script>
+<script src="{{ url_for('static', filename='settings-shell.js') }}"></script>
+<script src="{{ url_for('static', filename='settings-shortcut.js') }}"></script>
+<script src="{{ url_for('static', filename='confirm-actions.js') }}"></script>
 <script src="{{ url_for('static', filename='update-checker.js') }}"></script>
 </body>
 </html>

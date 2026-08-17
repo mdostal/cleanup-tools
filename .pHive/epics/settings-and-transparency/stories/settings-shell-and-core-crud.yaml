@@ -1,0 +1,121 @@
+id: settings-shell-and-core-crud
+epic: settings-and-transparency
+title: Gear icon + settings sidebar shell + bucket-rules/search-roots/master-paths CRUD
+status: pending
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  Replace the flat-text "Settings" nav link with a bare gear icon (Option A from the
+  design-options review -- no label, no pill wrapper; product-owner-confirmed), bound to
+  Cmd+, when running in the Tauri shell. Restructure Settings into a Raycast/Obsidian-
+  style sidebar of sections (General / App Icon / Bucket Rules / Search Roots &
+  Locations / Master Paths / AI Provider) replacing today's single scrolling page --
+  the existing icon-picker becomes one pane, functionally unchanged. Add full CRUD for
+  bucket rules (add/edit/remove/reorder via up/down buttons -- no drag-and-drop),
+  search roots (add/remove), and master paths (add/remove, backed_up toggle with
+  explicit warning copy on true->false, since it controls reclaim's delete-refusal).
+
+acceptance_criteria:
+  - "Given any page, when the user looks at the nav, then Settings is a bare gear icon distinct from Dashboard/Review Queue's text links, not a peer-level text item."
+  - "Given the Settings page, when it loads, then a sidebar of sections (General/App Icon/Bucket Rules/Search Roots/Master Paths/AI Provider) replaces today's single flat page."
+  - "Given the Bucket Rules pane, when a user reorders rules via up/down buttons, then the persisted order changes and first-match-wins behavior follows the new order on the next sort run."
+  - "Given the Master Paths pane, when a user flips backed_up from true to false, then explicit warning copy is shown (not a generic checkbox) making clear this removes reclaim's delete-refusal for that path."
+  - "Given the Search Roots pane, when a user adds or removes a path, then Config.search_roots updates and is reflected in the next sort/reclaim/corral-screenshots run."
+
+steps:
+  - id: research
+    description: Confirm the exact BucketRule/MasterPath dataclass shapes and load_config/save_config's tolerant-parsing conventions to follow for the new CRUD routes.
+    agent: researcher
+  - id: implement
+    description: |
+      Gear icon in base.html's nav (Cmd+, binding). New settings-shell sidebar template
+      wrapping the existing icon-picker pane plus three new CRUD panes. New routes per
+      section mirroring /settings/icon's existing pattern.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Route-level tests per new CRUD endpoint (mirroring existing /settings/icon tests), plus a reorder-then-sort integration test proving first-match-wins actually follows the new order.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review the master_paths backed_up-toggle copy specifically for clarity -- this is safety-critical config, not a generic setting.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/config.py
+      purpose: BucketRule/MasterPath dataclasses, load_config/save_config -- already handle all the data this story exposes in the UI, no schema change needed.
+    - path: src/cleanup_tools/ui/routes.py
+      purpose: "/settings and /settings/icon (819-866) are the exact pattern every new CRUD route in this story follows."
+    - path: src/cleanup_tools/ui/templates/settings.html
+      purpose: Becomes one pane (App Icon) within the new sidebar shell rather than the whole page.
+
+files_to_modify:
+  - file: src/cleanup_tools/ui/templates/base.html
+    change: Replace the text Settings nav link with a bare gear icon; Cmd+, binding.
+  - file: src/cleanup_tools/ui/routes.py
+    change: New CRUD routes for bucket rules, search roots, master paths.
+  - file: src/cleanup_tools/ui/templates/
+    change: New settings-shell sidebar template; existing settings.html content becomes its App Icon pane.
+
+design_decisions:
+  - decision: "Gear icon: bare icon, no label, no pill (Option A)."
+    rationale: Direct product-owner confirmation after reviewing 3 options in the design-options artifact.
+  - decision: Reorder via up/down buttons, not drag-and-drop.
+    rationale: "No drag-and-drop exists anywhere in this codebase today; up/down buttons are trivial to get right, drag is real new implementation risk for a first version (design discussion open question 2, resolved toward the lower-risk option)."
+
+risks:
+  - severity: high
+    description: Bucket-rule reordering is easy to get subtly wrong in a UI -- first-match-wins means an off-by-one reorder bug silently changes sort behavior for every future file, not a cosmetic glitch.
+    mitigation: Explicit reorder-then-sort integration test (not just a UI-state test) proving the persisted order actually drives resolve_bucket's behavior correctly.
+  - severity: medium
+    description: master_paths.backed_up read as "just another checkbox" undersells what it protects.
+    mitigation: Explicit warning copy on true->false, reviewed specifically for clarity, not just functional correctness.
+
+references:
+  - path: .pHive/epics/settings-and-transparency/docs/design-discussion.md
+    relevant_excerpt: |
+      Master Paths -- path + backed_up toggle, with explicit, unambiguous copy on what
+      flipping backed_up actually changes.
+  - path: https://claude.ai/code/artifact/6409df8f-310d-43c2-b68e-dedea4cd4779
+    relevant_excerpt: "Design-options artifact -- gear icon Option A and the settings sidebar shell mockup, both product-owner-approved before this story was written."
+
+manual_verdict:
+  scenario_ref: .pHive/test-scenarios/settings-shell-and-core-crud-manual.yaml
+  verdict: pass
+  timestamp: "2026-08-15T17:25:00Z"
+  agent: claude-sonnet-5 (execute skill, direct Playwright walkthrough -- no
+    formal scenario file was ever authored at scenario_ref, so this verdict
+    is recorded ad hoc)
+  notes: |
+    Ran the real approvals UI against a scratch HOME. Verified via
+    Playwright: (1) the sidebar shell renders all 6 sections and
+    deep-links correctly via #hash on a genuine full page load; (2) a
+    real bug was caught and fixed during this pass -- settings-shell.js
+    originally only wired pane-switching to click events + a manual
+    history.replaceState, which never fires on a fragment-only navigation
+    (e.g. typing a #hash URL directly, or Back/Forward) -- landing on
+    such a URL left the PREVIOUS pane visible instead of the requested
+    one. Fixed by switching to a single `hashchange`-driven show()
+    (native <a href="#pane-id"> anchors already fire that event on
+    click, so the click-specific handler was removed entirely, not just
+    patched) -- re-verified the exact failing scenario afterward and it
+    now works; (3) added a master path via the real form, confirmed the
+    add-then-redirect flow lands back on the right pane with the new row
+    visible; (4) clicked "Mark backed up" and confirmed the native
+    confirm() dialog fires with the exact required warning copy ("This
+    REMOVES reclaim's delete-refusal for this path -- reclaim will be
+    allowed to delete things under it"), accepted it, and confirmed the
+    row's status flipped to "Backed up" with the button relabeling to
+    "Mark NOT backed up". Bucket-rule/search-root CRUD and the
+    reorder-then-sort integration property were verified via the
+    automated test suite (523 passed) rather than repeated manually,
+    since the route-level tests already exercise those exact POSTs.

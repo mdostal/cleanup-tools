@@ -45,6 +45,19 @@
  *    state (matching the individual-link flow's own "reload once done"
  *    convention, just after N jobs instead of 1).
  *
+ *    If the kickoff bar also renders a location picker (dashboard.html's
+ *    `.kickoff-location-checkbox` inputs, present whenever
+ *    `configured_locations` is non-empty), every checked location is
+ *    appended as a repeated `?dirs=` query param on each plan URL --
+ *    scoping that run to exactly the selected subset (see
+ *    `_stage_sort_plan`'s `dirs` param and `/plan/sort`'s `?dirs=` docs in
+ *    routes.py). All locations start checked, so leaving the picker alone
+ *    reproduces the previous "scan every configured location" behavior
+ *    byte-for-byte. Unchecking every location blocks the whole submit
+ *    (mirroring the "select at least one plan" guard below) rather than
+ *    silently falling back to the full default set, which would look like
+ *    the picker was simply ignored.
+ *
  * Deliberately vanilla JS with no build step or dependency, consistent with
  * keyboard.js/theme.js.
  */
@@ -175,6 +188,22 @@
   //    independently, report a combined result.
   // ---------------------------------------------------------------------
 
+  // Appends `?dirs=` (repeated) for every entry in `locations` to `url`.
+  // `url` is always a bare path with no existing query string (every
+  // plan-url data attribute is a plain url_for() route), so this never
+  // needs to merge with pre-existing query params.
+  function withDirsParams(url, locations) {
+    if (!locations.length) {
+      return url;
+    }
+    var params = locations
+      .map(function (loc) {
+        return "dirs=" + encodeURIComponent(loc);
+      })
+      .join("&");
+    return url + "?" + params;
+  }
+
   function initKickoffBar() {
     var form = document.getElementById("kickoff-form");
     if (!form) {
@@ -193,6 +222,25 @@
       );
       if (!checked.length) {
         panel.textContent = "Select at least one plan to run.";
+        return;
+      }
+
+      // Location picker is optional -- only rendered when
+      // configured_locations is non-empty (see dashboard.html). Every
+      // location starts checked, so an untouched picker scopes to
+      // everything, same as before the picker existed; unchecking every
+      // location blocks the submit outright rather than silently falling
+      // back to "everything" (see this function's header comment).
+      var allLocationCheckboxes = Array.prototype.slice.call(
+        form.querySelectorAll(".kickoff-location-checkbox")
+      );
+      var selectedLocations = Array.prototype.slice
+        .call(form.querySelectorAll(".kickoff-location-checkbox:checked"))
+        .map(function (cb) {
+          return cb.value;
+        });
+      if (allLocationCheckboxes.length && !selectedLocations.length) {
+        panel.textContent = "Select at least one location to run against.";
         return;
       }
 
@@ -227,7 +275,9 @@
         row.textContent = kind + ": starting...";
         panel.appendChild(row);
 
-        fetch(checkbox.dataset.planUrl, { headers: { Accept: "application/json" } })
+        var planUrl = withDirsParams(checkbox.dataset.planUrl, selectedLocations);
+
+        fetch(planUrl, { headers: { Accept: "application/json" } })
           .then(function (resp) {
             if (!resp.ok) {
               throw new Error("HTTP " + resp.status);
