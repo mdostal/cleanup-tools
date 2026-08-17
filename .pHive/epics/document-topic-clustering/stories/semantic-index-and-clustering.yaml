@@ -1,7 +1,7 @@
 id: semantic-index-and-clustering
 epic: document-topic-clustering
 title: Local content-hash-keyed vector index + threshold/union-find clustering + local label/slug heuristic
-status: pending
+status: done
 complexity: medium
 methodology: classic
 depends_on: [semantic-extraction-and-embedding]
