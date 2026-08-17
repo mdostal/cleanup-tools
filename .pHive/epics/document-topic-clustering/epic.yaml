@@ -1,0 +1,72 @@
+name: document-topic-clustering
+title: Local document-by-topic clustering, staged into the existing approval queue (semantic-clustering phase 1)
+description: |
+  Phase 1 of the semantic-desktop-organization research vision (.pHive/research/semantic-desktop-organization.md):
+  documents-by-topic only, entirely local, zero network calls, landing every proposal in
+  the SAME approval queue every other pipeline uses via queue.stage_entries() -- never a
+  parallel state store, never a new approval flow. Extracts text locally (Apple
+  Vision/PDFKit via PyObjC), embeds locally (Apple NLContextualEmbedding via PyObjC),
+  clusters locally (cosine-similarity threshold + union-find, no HDBSCAN/scikit-learn), and
+  stages a real "cluster:<location>:<slug>" group_key proposal for a human to review and
+  approve through the existing dashboard tree / Review Queue -- no new page.
+
+  Explicitly OUT OF SCOPE for this epic (per the research brief's own §5 phasing
+  recommendation -- deferred to future, separately-scoped epics, not silently folded in):
+  - Photo/face clustering (InsightFace/ArcFace/HDBSCAN over face embeddings) -- phase 2.
+  - Pet identification -- no mature approach exists per the research, regardless of phase.
+  - propose_cluster_label (the research brief's optional AI-provider extension for
+    cloud-assisted cluster naming) -- a separate, later, explicitly-gated decision. This
+    epic's cluster labeling is a local word-frequency heuristic only.
+  - Network/shared-drive scope -- a separate go/no-go decision per the brief's §3b.
+  - Handwriting/degraded-scan OCR cloud fallback -- a separate, later, explicitly-gated
+    feature.
+  - Retroactively auditing/fixing survey.py/dedupe.py's pre-existing iCloud-placeholder
+    force-download risk -- noticed (design discussion §2.6), not fixed here; this epic only
+    guards its OWN new content-reading pipeline against that specific failure mode.
+  - Cross-platform (Arch) support for this feature -- this epic ships macOS-only via
+    PyObjC, matching OSAdapter.set_screenshot_save_location's existing
+    NotImplementedError-on-unsupported-platform precedent. A bundled ONNX/Tesseract
+    cross-platform path is a separate, explicitly-scoped follow-up epic if ever needed.
+target_codebase: /Users/mdostal/Documents/work/cleanup-tools
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [backend, macos-native, local-ml, ui, flask, no-bundler-frontend, packaging]
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning:
+    macos-native: "First PyObjC/Apple-framework dependency in the codebase -- a genuinely new platform-capability tier beyond the existing OSAdapter subprocess/xattr calls."
+    local-ml: "First local embedding/clustering subsystem -- explicitly local-only (no network call anywhere in this epic), a deliberate contrast with the chat epic's network-calling AI provider."
+    packaging: "PyObjC-under-PyInstaller is unverified in this project's build pipeline -- a real, load-bearing packaging risk this epic must close out with a real verification pass, not an assumption."
+  confidence: medium
+  gate_decisions:
+    grill: ran, round 1, 4 findings resolved before user review
+    collaborative_review: solo-orchestrator self-review (no separate spawned personas this run)
+    dependency_footprint: "Apple-native (PyObjC) only, phase 1 -- explicit, justified decision in design-discussion.md §2.3, not a silent default."
+
+stories:
+  - id: semantic-extraction-and-embedding
+    title: Local text extraction (PDFKit/Vision) + local embedding (NLContextualEmbedding) via PyObjC
+    complexity: high
+    depends_on: []
+  - id: semantic-index-and-clustering
+    title: Local content-hash-keyed vector index + threshold/union-find clustering + local label/slug heuristic
+    complexity: medium
+    depends_on: [semantic-extraction-and-embedding]
+  - id: semantic-pipeline-and-queue-integration
+    title: Pipeline orchestration (recursive scan + iCloud guard + dest-collision handling) + queue.py "cluster" pipeline
+    complexity: high
+    depends_on: [semantic-index-and-clustering]
+  - id: semantic-ui-and-settings
+    title: "\"Plan: Cluster Documents\" trigger + queue disclosure snippet + semantic_cluster_threshold setting"
+    complexity: medium
+    depends_on: [semantic-pipeline-and-queue-integration]
+  - id: semantic-packaging-and-verification
+    title: PyInstaller packaging for the new PyObjC dependency group + frozen-build manual verification
+    complexity: medium
+    depends_on: [semantic-ui-and-settings]

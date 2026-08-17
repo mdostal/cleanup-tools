@@ -1,0 +1,114 @@
+id: semantic-extraction-and-embedding
+epic: document-topic-clustering
+title: Local text extraction (PDFKit/Vision) + local embedding (NLContextualEmbedding) via PyObjC
+status: pending
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  The platform-specific foundation layer: given a real file path, produce real extracted
+  text and a real embedding vector, entirely locally via Apple's NaturalLanguage/Vision/
+  Quartz(PDFKit) frameworks through PyObjC -- zero network calls, zero bundled model
+  weights. Mirrors the OSAdapter ABC+factory pattern: a NotImplementedError on any
+  non-macOS adapter, matching OSAdapter.set_screenshot_save_location's existing precedent
+  exactly, rather than a silent degradation.
+
+  The FIRST concrete step is a go/no-go spike: confirm pyobjc-framework-NaturalLanguage,
+  pyobjc-framework-Vision, and pyobjc-framework-Quartz actually import and successfully
+  call their target APIs in this dev environment (none are installed yet as of planning
+  time -- confirmed via `pip index versions` during planning, which only proves the
+  packages exist on PyPI, not that they work here). This is a real risk signal for the
+  epic's whole dependency-footprint decision (design discussion §2.3), not a formality.
+
+acceptance_criteria:
+  - "Given a plain .txt/.md file, when extract_text() is called, then it returns the file's real content as a string."
+  - "Given a .pdf with a real text layer, when extract_text() is called, then it returns that text via PDFKit -- no OCR invoked."
+  - "Given a .pdf with an empty/near-empty text layer (a scanned document), when extract_text() is called, then it falls back to Vision OCR per-page and returns the OCR'd text."
+  - "Given a screenshot/scanned image file, when extract_text() is called, then it returns Vision-OCR'd text."
+  - "Given a file extract_text() can't meaningfully handle (unsupported type, corrupt file, OCR failure), when it's called, then it returns None -- never raises."
+  - "Given a real supported file, when get_embedder(adapter).embed(text) is called on macOS, then it returns a real, non-degenerate embedding vector via NLContextualEmbedding."
+  - "Given a non-macOS adapter, when get_embedder(adapter) or extract_text() is called, then it raises NotImplementedError, matching OSAdapter.set_screenshot_save_location's existing precedent -- never a silent no-op or degraded fallback."
+
+steps:
+  - id: research
+    description: |
+      Spike: install pyobjc-framework-NaturalLanguage/Vision/Quartz in a scratch venv,
+      confirm each imports and its target API (NLContextualEmbedding, VNRecognizeTextRequest,
+      PDFDocument) can actually be called successfully on this machine. Re-confirm the exact
+      PyObjC calling conventions (these APIs are typically synchronous-with-completion-handler
+      or delegate-based in ObjC -- confirm the Python-side blocking pattern PyObjC exposes).
+      This is the epic's real go/no-go gate -- if this spike fails, escalate to the user
+      before writing any further code in this epic.
+    agent: researcher
+  - id: implement
+    description: |
+      Add src/cleanup_tools/semantic/__init__.py, embeddings.py (TextEmbedder ABC +
+      AppleTextEmbedder + get_embedder(adapter) factory), extract.py (extract_text()).
+      NotImplementedError on non-macOS, mirroring adapters/base.py's factory pattern.
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Tests against real files on this machine (txt/md/pdf-with-text-layer/scanned-image) --
+      this session's established "no real network calls in tests" discipline extends here as
+      "no test depends on a MOCKED PyObjC call returning fabricated results as if they were
+      real" -- these tests exercise the REAL frameworks (skippable/xfail on non-macOS CI via
+      a platform marker, never mocked into false confidence). Also test the NotImplementedError
+      path via a fake non-macOS adapter (this part CAN and should be tested without a real Mac).
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Confirm extract_text() genuinely never raises (audit every PyObjC call site for a broad except around translated ObjC exceptions, not just Python ones) and that NotImplementedError is raised BEFORE any PyObjC import is attempted on a non-macOS path (an import-time crash on Arch would be worse than a clean NotImplementedError).
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/adapters/base.py
+      purpose: "OSAdapter's ABC+factory pattern and set_screenshot_save_location's NotImplementedError-on-unsupported-platform precedent -- the exact shape this story's get_embedder()/extract_text() follow."
+    - path: src/cleanup_tools/queue.py
+      purpose: "build_plan_snapshot's 'never raise, always return a fallback shape' contract -- extract_text() follows the same discipline (return None, don't raise)."
+
+files_to_modify:
+  - file: src/cleanup_tools/semantic/__init__.py
+    change: New package.
+  - file: src/cleanup_tools/semantic/embeddings.py
+    change: New -- TextEmbedder ABC, AppleTextEmbedder, get_embedder(adapter) factory.
+  - file: src/cleanup_tools/semantic/extract.py
+    change: New -- extract_text(path) -> str | None.
+  - file: pyproject.toml
+    change: Add a new `semantic` optional-dependencies group (pyobjc-framework-NaturalLanguage/Vision/Quartz) -- see semantic-packaging-and-verification for the full packaging story; this story only needs the group to exist for local dev installs.
+
+design_decisions:
+  - decision: Apple-native (PyObjC) only, phase 1 -- no cross-platform ONNX/Tesseract fallback.
+    rationale: "Zero bundle-size cost on the actual desktop target; sidesteps the research brief's flagged HF_HUB_OFFLINE unreliability gotcha entirely since no HF-ecosystem loader is in the request path. See design discussion §2.3."
+  - decision: PDFKit text layer first, Vision OCR only as a fallback for empty/near-empty layers.
+    rationale: Most real-world PDFs (invoices, statements, reports) have a real text layer; OCR is slower and lossier, reserved for genuinely scanned documents.
+
+risks:
+  - severity: high
+    description: PyObjC frameworks might not import or behave as expected in this specific environment/Python version -- this is the epic's single biggest go/no-go risk.
+    mitigation: The research step's spike runs BEFORE any implementation code is written, specifically to surface this early.
+  - severity: medium
+    description: PyObjC-translated ObjC exceptions might not all subclass a common Python exception type extract_text() can broadly catch.
+    mitigation: Review step explicitly audits every PyObjC call site's exception handling, not just a top-level try/except.
+
+references:
+  - path: .pHive/epics/document-topic-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §2.3: Apple-native only, phase 1 -- verified pyobjc-framework-NaturalLanguage/Vision/
+      Quartz exist on PyPI (12.2.2 latest) during planning; NOT installed/verified working
+      in this dev environment yet -- that verification is this story's first concrete step.
+
+metric:
+  applies: false
+  justification: Foundation library story with no independently observable user-facing surface yet -- its value is realized by semantic-pipeline-and-queue-integration's real staged proposals.
+
+manual_verdict:
+  scenario_ref: null

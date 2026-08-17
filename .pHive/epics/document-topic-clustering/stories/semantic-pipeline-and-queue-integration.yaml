@@ -1,0 +1,119 @@
+id: semantic-pipeline-and-queue-integration
+epic: document-topic-clustering
+title: Pipeline orchestration (recursive scan + iCloud guard + dest-collision handling) + queue.py "cluster" pipeline
+status: pending
+complexity: high
+methodology: classic
+depends_on: [semantic-index-and-clustering]
+
+description: |
+  Wires extraction/embedding (semantic-extraction-and-embedding) and index/clustering
+  (semantic-index-and-clustering) together into one real, callable pipeline that produces
+  real, correctly-shaped, reviewable QueueEntry proposals in the ACTUAL queue -- this is the
+  epic's headline capability, provable end-to-end before any UI trigger exists.
+
+  Three load-bearing correctness properties, all resolved explicitly in the design
+  discussion after this epic's grill pass:
+  1. The scan is RECURSIVE (grill-H1) -- documents live nested in folders, unlike sort's
+     shallow Downloads-clutter scan.
+  2. A recursive scan under a flat _clusters/<slug>/ dest creates real filename collisions
+     that sort._plan's shallow, single-namespace scan never had to handle -- disambiguated
+     deterministically before staging (grill-T1).
+  3. Before any file's content is read, its iCloud-materialization status is checked
+     (NSURLUbiquitousItemDownloadingStatusKey via PyObjC) and skipped if not already
+     resident -- this epic's FIRST content-reading pipeline must not introduce the exact
+     force-download failure mode the research brief already named (design discussion §2.6).
+
+acceptance_criteria:
+  - "Given a location with documents nested in subfolders, when the pipeline scans it, then it finds and processes files at any depth, not just the top level."
+  - "Given a protected path under a configured location, when the pipeline scans it, then queue.is_protected_path refuses it structurally, identical to every other staging path in this app -- never merely flagged."
+  - "Given an un-materialized iCloud placeholder file, when the pipeline encounters it, then it is skipped WITHOUT ever triggering a download -- verified by asserting no read/stat call that would force materialization occurs on that specific path."
+  - "Given two files with the same name in different subfolders that cluster together, when both are staged, then their computed dest paths are distinct (collision-disambiguated) and neither silently overwrites the other."
+  - "Given a real cluster of 3+ similar documents, when the pipeline runs, then queue.stage_entries() is called with real QueueEntry objects (action=move, source=local:cluster, group_key=f'cluster:{location}:{slug}') and the entries actually land in the real queue file."
+  - "Given a queue containing cluster-sourced entries, when queue.parse_group_key/group_entries_hierarchical process them, then the 'cluster' pipeline prefix is recognized (same 3-segment scheme as sort/reclaim), landing in the correct location->bucket branch of the dashboard tree -- not silently falling into the 'other' catch-all."
+
+steps:
+  - id: research
+    description: Re-confirm queue.is_protected_path's exact signature (queue.py, relocated there this session) and queue.stage_entries()'s dedup-on-src contract, so this story reuses both unmodified rather than reimplementing equivalent checks.
+    agent: researcher
+  - id: implement
+    description: |
+      Add src/cleanup_tools/semantic/pipeline.py (recursive scan, iCloud guard, extract+embed+index
+      per file via the prior two stories, cluster, dest-collision disambiguation, stage via
+      queue.stage_entries). Extend queue.parse_group_key and queue.group_entries_hierarchical
+      to recognize a "cluster" pipeline prefix identically to "sort"/"reclaim"/"corral-screenshots".
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: |
+      Real fixture folders with nested subdirectories, name collisions, a fake/mocked iCloud-
+      placeholder path, and a monkeypatched embedder (avoiding real PyObjC calls in this story's
+      own tests -- semantic-extraction-and-embedding's story already covers real-framework
+      testing). Dedicated tests for each of the three load-bearing properties in the description
+      above, independently.
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Specifically verify no code path can call queue.stage_entries() from this pipeline without the protected-path AND iCloud-materialization guards having run first -- mirrors chat-propose-and-approve's own "never a working write without both guards" review discipline from the prior epic.
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch.
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/cleanup-tools
+  key_files:
+    - path: src/cleanup_tools/queue.py
+      purpose: "is_protected_path, stage_entries, parse_group_key, group_entries_hierarchical -- all relocated here this session specifically so non-ui.routes packages (chat/, now semantic/) can reuse them without a circular import."
+    - path: src/cleanup_tools/chat/tools.py
+      purpose: "propose_moves -- the most recent precedent for 'construct a QueueEntry from computed src/dest/group_key, guard before staging, never call-then-discard' in this codebase."
+    - path: src/cleanup_tools/config.py
+      purpose: "configured_locations -- the same location resolution every other pipeline uses; this story's scan must never disagree with what the dashboard/settings already show as configured."
+
+files_to_modify:
+  - file: src/cleanup_tools/semantic/pipeline.py
+    change: New -- orchestrates extract/embed/index/cluster/stage.
+  - file: src/cleanup_tools/queue.py
+    change: Extend parse_group_key/group_entries_hierarchical to recognize the "cluster" pipeline prefix.
+
+design_decisions:
+  - decision: Recursive scan, not shallow.
+    rationale: "Documents worth topic-clustering live nested in folders, unlike sort's flat Downloads-clutter target. Grill-H1."
+  - decision: Filename collisions under the flat _clusters/<slug>/ dest are disambiguated with a suffix derived from the file's original parent directory, never silently overwritten.
+    rationale: "Grill-T1 -- a direct, necessary consequence of choosing recursive scanning."
+  - decision: iCloud-placeholder guard is fixed in THIS epic's own new code path only, not retroactively applied to survey.py/dedupe.py.
+    rationale: "This is the first content-reading pipeline in the codebase; writing it with a KNOWN failure mode already named in the research brief would be a straightforward regression, but auditing/fixing prior pipelines is genuinely separate scope. Design discussion §2.6."
+
+risks:
+  - severity: high
+    description: A bug in the iCloud-materialization check could either (a) still force-download placeholders (defeats the whole point) or (b) skip real, materialized files by mistake (silently undercounts documents).
+    mitigation: Dedicated test for each direction of this failure independently, not just a single happy-path check.
+  - severity: medium
+    description: Dest-collision disambiguation could itself collide (two different original parent dirs producing the same suffix) at real scale.
+    mitigation: Suffix derivation uses enough of the original relative path to make this practically negligible at personal-library scale; queue.stage_entries()'s own src-based dedup is the final backstop regardless.
+
+references:
+  - path: .pHive/epics/document-topic-clustering/docs/design-discussion.md
+    relevant_excerpt: |
+      §2.1: clustering is just a location-aware bucket, one more time -- action=move,
+      dest=<location>/_clusters/<slug>/<filename>, group_key=f"cluster:{location}:{slug}",
+      staged via the SAME queue.stage_entries() every other pipeline uses.
+
+metric:
+  applies: true
+  name: semantic.icloud_force_download_count
+  direction: down
+  unit: count
+  baseline: "N/A (feature doesn't exist yet)"
+  target: "0, always -- this is a correctness invariant, not a trend to improve over time"
+  window: every test run, permanently
+  source:
+    kind: events
+    ref: this story's dedicated iCloud-placeholder guard tests
+  verify_at: test
+  owner: tester
+
+manual_verdict:
+  scenario_ref: null

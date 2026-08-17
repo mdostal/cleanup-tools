@@ -65,3 +65,5 @@ src-tauri/resources/cleanup-ui-onedir/
 !.pHive/epics/settings-and-transparency/**
 !.pHive/epics/chat-agent-plan-builder/
 !.pHive/epics/chat-agent-plan-builder/**
+!.pHive/epics/document-topic-clustering/
+!.pHive/epics/document-topic-clustering/**
